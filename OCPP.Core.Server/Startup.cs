@@ -91,6 +91,7 @@ namespace OCPP.Core.Server
             bool dbMigrate = Configuration.GetValue<bool>("AutoMigrateDB", true);
             if (dbMigrate)
             {
+                // Apply migrations
                 dbContext.Database.Migrate();
             }
 
