@@ -169,6 +169,7 @@
 
             _websocket.onmessage = function (msg) {
                 c++;
+                debugger;
                 var ddata = (JSON.parse(msg.data));
 
                 if(c==1){
@@ -176,6 +177,8 @@
                     sessionStorage.setItem("Configuration",hb_interval);
                     startHB(hb_interval*1000);
                 }
+
+                debugger;
 
                 if (ddata[0] === 3) {
                     la = getLastAction();
@@ -200,6 +203,7 @@
                     }
                     logMsg("Response: " + JSON.stringify(ddata[2]));
                 } else if ((JSON.parse(msg.data))[0] === 4) {
+                    debugger;
                     logMsg("Data exchange failed - JSON is not accepted!");
                 } else if ((JSON.parse(msg.data))[0] === 2) {
                     logMsg((JSON.parse(msg.data))[2]);
@@ -219,7 +223,19 @@
 
                             var stop_id = (JSON.parse(msg.data)[3].transactionId);
 
-                            stopTransaction(stop_id);
+                            // Find which connector has this transaction ID
+                            var connectorId = null;
+                            if (sessionStorage.getItem('TransactionId1') == stop_id) {
+                                connectorId = 1;
+                            } else if (sessionStorage.getItem('TransactionId2') == stop_id) {
+                                connectorId = 2;
+                            }
+                            
+                            if (connectorId) {
+                                stopTransaction(connectorId, stop_id);
+                            } else {
+                                logMsg("Error: Transaction ID " + stop_id + " not found");
+                            }
                             break;
                         case "RemoteStartTransaction":
                             //Need to get idTag, connectorId (map - ddata[3])
