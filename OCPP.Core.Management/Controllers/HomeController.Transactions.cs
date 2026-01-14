@@ -138,5 +138,127 @@ namespace OCPP.Core.Management.Controllers
 
             return View(tlvm);
         }
+
+        [Authorize]
+        public IActionResult GetLatestTransactions(string chargePointId, int connectorId, string timespan)
+        {
+            Logger.LogTrace("GetLatestTransactions: Loading transactions for chargepoint='{0}' / connector={1}", chargePointId, connectorId);
+
+            try
+            {
+                int days = 30;
+                if (timespan == "2")
+                {
+                    days = 90;
+                }
+                else if (timespan == "3")
+                {
+                    days = 365;
+                }
+
+                if (!string.IsNullOrEmpty(chargePointId))
+                {
+                    var transactions = (from t in DbContext.Transactions
+                                       join startCT in DbContext.ChargeTags on t.StartTagId equals startCT.TagId into ft_tmp
+                                       from startCT in ft_tmp.DefaultIfEmpty()
+                                       join stopCT in DbContext.ChargeTags on t.StopTagId equals stopCT.TagId into ft
+                                       from stopCT in ft.DefaultIfEmpty()
+                                       where (t.ChargePointId == chargePointId &&
+                                                  t.ConnectorId == connectorId &&
+                                                  t.StartTime >= DateTime.UtcNow.AddDays(-1 * days))
+                                       select new
+                                       {
+                                           transactionId = t.TransactionId,
+                                           chargePointId = t.ChargePointId,
+                                           connectorId = t.ConnectorId,
+                                           startTagId = t.StartTagId,
+                                           startTagName = startCT.TagName,
+                                           startTime = t.StartTime,
+                                           meterStart = t.MeterStart,
+                                           stopTagId = t.StopTagId,
+                                           stopTagName = stopCT.TagName,
+                                           stopTime = t.StopTime,
+                                           meterStop = t.MeterStop
+                                       })
+                                       .OrderByDescending(t => t.transactionId)
+                                       .AsNoTracking()
+                                       .ToList();
+
+                    return Json(new { transactions });
+                }
+
+                return Json(new { transactions = new List<object>() });
+            }
+            catch (Exception exp)
+            {
+                Logger.LogError(exp, "GetLatestTransactions: Error loading transactions");
+                return StatusCode(500, "Error loading transactions");
+            }
+        }
+
+        [Authorize]
+        public IActionResult Export(string Id, int ConnectorId)
+        {
+            Logger.LogTrace("Export: Exporting transactions for chargepoint='{0}' / connector={1}", Id, ConnectorId);
+
+            try
+            {
+                string ts = Request.Query["t"];
+                int days = 30;
+                if (ts == "2")
+                {
+                    days = 90;
+                }
+                else if (ts == "3")
+                {
+                    days = 365;
+                }
+
+                if (!string.IsNullOrEmpty(Id))
+                {
+                    var transactions = (from t in DbContext.Transactions
+                                       join startCT in DbContext.ChargeTags on t.StartTagId equals startCT.TagId into ft_tmp
+                                       from startCT in ft_tmp.DefaultIfEmpty()
+                                       join stopCT in DbContext.ChargeTags on t.StopTagId equals stopCT.TagId into ft
+                                       from stopCT in ft.DefaultIfEmpty()
+                                       where (t.ChargePointId == Id &&
+                                                  t.ConnectorId == ConnectorId &&
+                                                  t.StartTime >= DateTime.UtcNow.AddDays(-1 * days))
+                                       select new
+                                       {
+                                           TransactionId = t.TransactionId,
+                                           ChargePointId = t.ChargePointId,
+                                           ConnectorId = t.ConnectorId,
+                                           StartTagId = t.StartTagId,
+                                           StartTagName = startCT.TagName,
+                                           StartTime = t.StartTime,
+                                           MeterStart = t.MeterStart,
+                                           StopTagId = t.StopTagId,
+                                           StopTagName = stopCT.TagName,
+                                           StopTime = t.StopTime,
+                                           MeterStop = t.MeterStop
+                                       })
+                                       .OrderByDescending(t => t.TransactionId)
+                                       .AsNoTracking()
+                                       .ToList();
+
+                    var csv = "TransactionId,ChargePointId,ConnectorId,StartTagId,StartTagName,StartTime,MeterStart,StopTagId,StopTagName,StopTime,MeterStop\n";
+                    foreach (var transaction in transactions)
+                    {
+                        csv += $"{transaction.TransactionId},{transaction.ChargePointId},{transaction.ConnectorId},{transaction.StartTagId},{transaction.StartTagName},{transaction.StartTime},{transaction.MeterStart},{transaction.StopTagId},{transaction.StopTagName},{transaction.StopTime},{transaction.MeterStop}\n";
+                    }
+
+                    var fileName = $"transactions_{Id}_{ConnectorId}_{DateTime.UtcNow:yyyyMMddHHmmss}.csv";
+                    return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", fileName);
+                }
+
+                return StatusCode(404, "No transactions found to export");
+            }
+            catch (Exception exp)
+            {
+                Logger.LogError(exp, "Export: Error exporting transactions");
+                return StatusCode(500, "Error exporting transactions");
+            }
+        }
     }
 }
