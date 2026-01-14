@@ -165,4 +165,13 @@
   <data name="StartTransactionError" xml:space="preserve">
     <value>Es ist ein Fehler aufgetreten.</value>
   </data>
+  <data name="StopTransactionAccepted" xml:space="preserve">
+    <value>Die Ladestation hat die Anfrage akzeptiert.</value>
+  </data>
+  <data name="StopTransactionRejected" xml:space="preserve">
+    <value>Die Ladestation hat die Anfrage abgelehnt.</value>
+  </data>
+  <data name="StopTransactionError" xml:space="preserve">
+    <value>Es ist ein Fehler aufgetreten.</value>
+  </data>
 </root>

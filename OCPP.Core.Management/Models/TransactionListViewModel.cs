@@ -41,5 +41,6 @@ namespace OCPP.Core.Management.Models
 
         public int Timespan { get; set; }
 
+        public List<ChargeTag> ChargeTags { get; set; }
     }
 }

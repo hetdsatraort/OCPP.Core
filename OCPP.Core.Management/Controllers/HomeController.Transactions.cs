@@ -77,6 +77,9 @@ namespace OCPP.Core.Management.Controllers
                 Logger.LogTrace("Transactions: Loading charge points connectors...");
                 tlvm.ConnectorStatuses = DbContext.ConnectorStatuses.ToList<ConnectorStatus>();
 
+                Logger.LogTrace("Transactions: Loading charge tags...");
+                tlvm.ChargeTags = DbContext.ChargeTags.Where(ct => ct.Blocked != true).OrderBy(ct => ct.TagName).ToList<ChargeTag>();
+
                 // Count connectors for every charge point (=> naming scheme)
                 Dictionary<string, int> dictConnectorCount = new Dictionary<string, int>();
                 foreach (ConnectorStatus cs in tlvm.ConnectorStatuses)

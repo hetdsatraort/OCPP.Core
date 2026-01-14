@@ -165,4 +165,49 @@
   <data name="Title" xml:space="preserve">
     <value>Management</value>
   </data>
+  <data name="RemoteStart" xml:space="preserve">
+    <value>Fernstart</value>
+  </data>
+  <data name="RemoteStop" xml:space="preserve">
+    <value>Fernstopp</value>
+  </data>
+  <data name="TitleRemoteStart" xml:space="preserve">
+    <value>Fernstart der Transaktion</value>
+  </data>
+  <data name="TitleRemoteStop" xml:space="preserve">
+    <value>Fernstopp der Transaktion</value>
+  </data>
+  <data name="SelectIdTag" xml:space="preserve">
+    <value>RFID-Karte auswählen:</value>
+  </data>
+  <data name="Start" xml:space="preserve">
+    <value>Starten</value>
+  </data>
+  <data name="Stop" xml:space="preserve">
+    <value>Stoppen</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Abbrechen</value>
+  </data>
+  <data name="Close" xml:space="preserve">
+    <value>Schließen</value>
+  </data>
+  <data name="PleaseSelectIdTag" xml:space="preserve">
+    <value>Bitte wählen Sie eine RFID-Karte aus</value>
+  </data>
+  <data name="ExecutingRemoteStart" xml:space="preserve">
+    <value>Fernstart wird ausgeführt...</value>
+  </data>
+  <data name="ExecutingRemoteStop" xml:space="preserve">
+    <value>Fernstopp wird ausgeführt...</value>
+  </data>
+  <data name="ErrorRemoteStart" xml:space="preserve">
+    <value>Ein Fehler ist beim Starten der Transaktion aufgetreten</value>
+  </data>
+  <data name="ErrorRemoteStop" xml:space="preserve">
+    <value>Ein Fehler ist beim Stoppen der Transaktion aufgetreten</value>
+  </data>
+  <data name="DialogRemoteStop" xml:space="preserve">
+    <value>Möchten Sie die aktuelle Ladetransaktion wirklich stoppen?</value>
+  </data>
 </root>

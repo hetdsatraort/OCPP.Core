@@ -165,4 +165,13 @@
   <data name="StartTransactionError" xml:space="preserve">
     <value>An error has occurred.</value>
   </data>
+  <data name="StopTransactionAccepted" xml:space="preserve">
+    <value>The charging station has confirmed the request.</value>
+  </data>
+  <data name="StopTransactionRejected" xml:space="preserve">
+    <value>The charging station has rejected the request.</value>
+  </data>
+  <data name="StopTransactionError" xml:space="preserve">
+    <value>An error has occurred.</value>
+  </data>
 </root>
