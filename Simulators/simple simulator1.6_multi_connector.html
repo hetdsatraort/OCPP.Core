@@ -327,7 +327,7 @@
         transaction_id == false ? ssid = sessionStorage.getItem('TransactionId'+connectorId) : ssid = transaction_id;
         connector_locked = false;
         logMsg("Connector"+connectorId+" status changed to: " + connector_locked);
-		setConnectionStatus(true);
+		setTransactionStatus(connectorId, false);
         var stpT = JSON.stringify([2, id, "StopTransaction",{
             "transactionId": parseInt(ssid),
             "idTag": $("#TAG").val(),
