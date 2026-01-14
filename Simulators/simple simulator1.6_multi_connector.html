@@ -45,6 +45,8 @@
 <h1>Simple OCPP 1.6 Chargebox Simulator</h1>
 <select style="display:none;"><option value="">OCPP-J1.6</option></select>
 <label>Central Station</label><input id="CP" type="text" class="FullLine" placeholder="Id Station" value="ws://localhost:8081/OCPP/Test1234" />
+<label>Username (optional)</label><input id="USERNAME" type="text" class="FullLine" placeholder="Username" value=""/>
+<label>Password (optional)</label><input id="PASSWORD" type="password" class="FullLine" placeholder="Password" value=""/>
 <label>Tag</label><input id="TAG" type="text" class="FullLine" placeholder="Tag" value="B4A63CDF"/>
 <h2>Actions</h2>
 <button id="connect">Connect</button>
@@ -151,12 +153,26 @@
     function wsConnect() {
         var wsurl = $('select').val();
         var CP = $('#CP').val();
+        var username = $('#USERNAME').val();
+        var password = $('#PASSWORD').val();
+
+        // Build WebSocket URL with optional Basic Auth
+        var fullUrl = CP;
+        if (username && password) {
+            // Extract protocol and rest of URL
+            var urlParts = CP.match(/(ws:\/\/|wss:\/\/)(.+)/);
+            if (urlParts) {
+                // Insert credentials: ws://username:password@host:port/path
+                fullUrl = urlParts[1] + username + ':' + password + '@' + urlParts[2];
+                logMsg('Connecting with authentication as user: ' + username);
+            }
+        }
 
         if (_websocket) {
 			setConnectionStatus(false);
             _websocket.close(3001);
         } else {
-            _websocket = new WebSocket(wsurl + "" + CP, ["ocpp1.6", "ocpp1.5"]);
+            _websocket = new WebSocket(fullUrl, ["ocpp1.6", "ocpp1.5"]);
             _websocket.onopen = function (authorizationData) {
 
                 sessionStorage.setItem('LastAction', "BootNotification");
