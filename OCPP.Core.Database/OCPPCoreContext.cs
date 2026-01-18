@@ -481,6 +481,102 @@ namespace OCPP.Core.Database
 
                 entity.HasIndex(e => e.Token);
             });
+            modelBuilder.Entity<EVCDTO.RefreshToken>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.Token)
+                    .IsRequired()
+                    .HasMaxLength(500);
+
+                entity.Property(e => e.CreatedByIp).HasMaxLength(50);
+
+                entity.Property(e => e.RevokedByIp).HasMaxLength(50);
+
+                entity.Property(e => e.ReplacedByToken).HasMaxLength(500);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_RefreshToken_Users");
+
+                entity.HasIndex(e => e.Token);
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargerTypeMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerType)
+                    .IsRequired()
+                    .HasMaxLength(100);
+
+                entity.Property(e => e.ChargerTypeImage).HasMaxLength(50);
+
+                entity.Property(e => e.Additional_Info_1).HasMaxLength(200);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.ChargerType);
+            });
+
+            modelBuilder.Entity<EVCDTO.BatteryTypeMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.BatteryType)
+                    .IsRequired()
+                    .HasMaxLength(100);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.BatteryType);
+            });
+
+            modelBuilder.Entity<EVCDTO.BatteryCapacityMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.BatteryCapcacity)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.BatteryCapcacityUnit).HasMaxLength(20);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.BatteryCapcacity);
+            });
+
+            modelBuilder.Entity<EVCDTO.CarManufacturerMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ManufacturerName)
+                    .IsRequired()
+                    .HasMaxLength(100);
+
+                entity.Property(e => e.ManufacturerLogoImage).HasMaxLength(50);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.ManufacturerName);
+            });
 
             OnModelCreatingPartial(modelBuilder);
         }

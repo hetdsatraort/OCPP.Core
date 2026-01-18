@@ -32,6 +32,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.OpenApi.Models;
 using OCPP.Core.Database;
 
 namespace OCPP.Core.Management
@@ -77,6 +78,58 @@ namespace OCPP.Core.Management
 
             services.AddScoped<IUserManager, UserManager>();
             services.AddDistributedMemoryCache();
+            services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new OpenApiInfo
+                {
+                    Title = "OCPP.Core Management API",
+                    Version = "v1",
+                    Description = "API for managing OCPP charging infrastructure, sessions, and users",
+                    Contact = new OpenApiContact
+                    {
+                        Name = "OCPP.Core",
+                        Url = new Uri("https://github.com/dallmann-consulting/OCPP.Core")
+                    },
+                    License = new OpenApiLicense
+                    {
+                        Name = "GPL-3.0",
+                        Url = new Uri("https://www.gnu.org/licenses/gpl-3.0.html")
+                    }
+                });
+
+                // Add JWT Authentication to Swagger
+                c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+                {
+                    Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+                    Name = "Authorization",
+                    In = ParameterLocation.Header,
+                    Type = SecuritySchemeType.ApiKey,
+                    Scheme = "Bearer"
+                });
+
+                c.AddSecurityRequirement(new OpenApiSecurityRequirement
+                {
+                    {
+                        new OpenApiSecurityScheme
+                        {
+                            Reference = new OpenApiReference
+                            {
+                                Type = ReferenceType.SecurityScheme,
+                                Id = "Bearer"
+                            }
+                        },
+                        Array.Empty<string>()
+                    }
+                });
+
+                // Optional: Include XML comments if available
+                // var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+                // var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+                // if (File.Exists(xmlPath))
+                // {
+                //     c.IncludeXmlComments(xmlPath);
+                // }
+            });
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -94,6 +147,15 @@ namespace OCPP.Core.Management
             app.UseStaticFiles();
 
             app.UseCors("AllowAll");
+
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "OCPP.Core Management API v1");
+                c.RoutePrefix = "swagger"; // Access at: https://localhost:port/swagger
+                c.DocumentTitle = "OCPP.Core API Documentation";
+                c.DisplayRequestDuration();
+            });
 
             app.UseAuthentication();
             app.UseRouting();
