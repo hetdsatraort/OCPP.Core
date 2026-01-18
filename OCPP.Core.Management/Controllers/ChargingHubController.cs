@@ -440,17 +440,22 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Verify ChargePoint exists
+                // Check if ChargePoint exists, if not create it
                 var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == request.ChargingPointId);
                 if (chargePoint == null)
                 {
-                    return NotFound(new ChargingStationResponseDto
+                    // Create new ChargePoint in OCPP layer
+                    chargePoint = new ChargePoint
                     {
-                        Success = false,
-                        Message = "Charge point not found"
-                    });
+                        ChargePointId = request.ChargingPointId,
+                        Name = $"Station {request.ChargingPointId}",
+                        Comment = "Created via Management API"
+                    };
+                    _dbContext.ChargePoints.Add(chargePoint);
+                    _logger.LogInformation($"ChargePoint created: {request.ChargingPointId}");
                 }
 
+                // Create ChargingStation in Management layer
                 var station = new Database.EVCDTO.ChargingStation
                 {
                     RecId = Guid.NewGuid().ToString(),
@@ -564,9 +569,20 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Soft delete
                 station.Active = 0;
                 station.UpdatedOn = DateTime.UtcNow;
+
+                // CASCADE: Soft delete all associated connectors
+                var connectors = await _dbContext.ConnectorStatuses
+                    .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
+                    .ToListAsync();
+
+                foreach (var connector in connectors)
+                {
+                    connector.Active = 0;
+                    connector.LastStatusTime = DateTime.UtcNow;
+                }
+
                 await _dbContext.SaveChangesAsync();
 
                 _logger.LogInformation($"Charging station deleted: {stationId}");
@@ -879,7 +895,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var chargers = await _dbContext.ConnectorStatuses
-                    .Where(c => c.ChargePointId == station.ChargingPointId)
+                    .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
                     .ToListAsync();
 
                 var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId);
