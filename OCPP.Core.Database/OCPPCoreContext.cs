@@ -39,6 +39,17 @@ namespace OCPP.Core.Database
         public virtual DbSet<ConnectorStatus> ConnectorStatuses { get; set; }
         public virtual DbSet<MessageLog> MessageLogs { get; set; }
         public virtual DbSet<Transaction> Transactions { get; set; }
+        
+        public virtual DbSet<EVCDTO.Users> Users { get; set; }
+        public virtual DbSet<EVCDTO.ChargingHub> ChargingHubs { get; set; }
+        public virtual DbSet<EVCDTO.ChargingHubReview> ChargingHubReviews { get; set; }
+        public virtual DbSet<EVCDTO.ChargingSession> ChargingSessions { get; set; }
+        public virtual DbSet<EVCDTO.ChargingStation> ChargingStations { get; set; }
+        public virtual DbSet<EVCDTO.EVModelMaster> EVModelMasters { get; set; }
+        public virtual DbSet<EVCDTO.PaymentHistory> PaymentHistories { get; set; }
+        public virtual DbSet<EVCDTO.UserVehicle> UserVehicles { get; set; }
+        public virtual DbSet<EVCDTO.WalletTransactionLog> WalletTransactionLogs { get; set; }
+        public virtual DbSet<EVCDTO.FileMaster> FileMasters { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -129,6 +140,310 @@ namespace OCPP.Core.Database
                     .HasConstraintName("FK_Transactions_ChargePoint");
 
                 entity.HasIndex(e => new { e.ChargePointId, e.ConnectorId });
+            });
+
+            modelBuilder.Entity<EVCDTO.Users>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.FirstName).HasMaxLength(100);
+
+                entity.Property(e => e.LastName).HasMaxLength(100);
+
+                entity.Property(e => e.EMailID).HasMaxLength(200);
+
+                entity.Property(e => e.PhoneNumber).HasMaxLength(20);
+
+                entity.Property(e => e.CountryCode).HasMaxLength(10);
+
+                entity.Property(e => e.Password).HasMaxLength(200);
+
+                entity.Property(e => e.ProfileImageID).HasMaxLength(50);
+
+                entity.Property(e => e.AddressLine1).HasMaxLength(200);
+
+                entity.Property(e => e.AddressLine2).HasMaxLength(200);
+
+                entity.Property(e => e.AddressLine3).HasMaxLength(200);
+
+                entity.Property(e => e.State).HasMaxLength(100);
+
+                entity.Property(e => e.City).HasMaxLength(100);
+
+                entity.Property(e => e.PinCode).HasMaxLength(20);
+
+                entity.Property(e => e.ProfileCompleted).HasMaxLength(10);
+
+                entity.Property(e => e.LastLogin).HasMaxLength(50);
+
+                entity.Property(e => e.UserRole).HasMaxLength(50);
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargingHub>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.AddressLine1).HasMaxLength(200);
+
+                entity.Property(e => e.AddressLine2).HasMaxLength(200);
+
+                entity.Property(e => e.AddressLine3).HasMaxLength(200);
+
+                entity.Property(e => e.ChargingHubImage).HasMaxLength(50);
+
+                entity.Property(e => e.City).HasMaxLength(100);
+
+                entity.Property(e => e.State).HasMaxLength(100);
+
+                entity.Property(e => e.Pincode).HasMaxLength(20);
+
+                entity.Property(e => e.Latitude).HasMaxLength(50);
+
+                entity.Property(e => e.Longitude).HasMaxLength(50);
+
+                entity.Property(e => e.TypeATariff).HasMaxLength(50);
+
+                entity.Property(e => e.TypeBTariff).HasMaxLength(50);
+
+                entity.Property(e => e.Amenities).HasMaxLength(500);
+
+                entity.Property(e => e.AdditionalInfo1).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo2).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo3).HasMaxLength(200);
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargingHubReview>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingHubId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingStationId).HasMaxLength(50);
+
+                entity.Property(e => e.Description).HasMaxLength(1000);
+
+                entity.Property(e => e.ReviewImage1).HasMaxLength(50);
+
+                entity.Property(e => e.ReviewImage2).HasMaxLength(50);
+
+                entity.Property(e => e.ReviewImage3).HasMaxLength(50);
+
+                entity.Property(e => e.ReviewImage4).HasMaxLength(50);
+
+                entity.HasOne<EVCDTO.ChargingHub>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingHubId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingHubReview_ChargingHub");
+
+                entity.HasOne<EVCDTO.ChargingStation>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingStationId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingHubReview_ChargingStation");
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargingSession>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingGunId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingStationID).HasMaxLength(50);
+
+                entity.Property(e => e.StartMeterReading).HasMaxLength(50);
+
+                entity.Property(e => e.EndMeterReading).HasMaxLength(50);
+
+                entity.Property(e => e.EnergyTransmitted).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingSpeed).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingTariff).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingTotalFee).HasMaxLength(50);
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargingStation>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingPointId).HasMaxLength(100);
+
+                entity.Property(e => e.ChargingHubId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingStationImage).HasMaxLength(50);
+
+                entity.HasOne<ChargePoint>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingPointId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingStation_ChargePoint");
+
+                entity.HasOne<EVCDTO.ChargingHub>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingHubId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingStation_ChargingHub");
+            });
+
+            modelBuilder.Entity<EVCDTO.EVModelMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ModelName).HasMaxLength(100);
+
+                entity.Property(e => e.ManufacturerId).HasMaxLength(50);
+
+                entity.Property(e => e.Variant).HasMaxLength(100);
+
+                entity.Property(e => e.BatterytypeId).HasMaxLength(50);
+
+                entity.Property(e => e.BatteryCapacityId).HasMaxLength(50);
+
+                entity.Property(e => e.CarModelImage).HasMaxLength(50);
+
+                entity.Property(e => e.TypeASupport).HasMaxLength(10);
+
+                entity.Property(e => e.TypeBSupport).HasMaxLength(10);
+
+                entity.Property(e => e.ChadeMOSupport).HasMaxLength(10);
+
+                entity.Property(e => e.CCSSupport).HasMaxLength(10);
+            });
+
+            modelBuilder.Entity<EVCDTO.PaymentHistory>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.TransactionType).HasMaxLength(50);
+
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingStationId).HasMaxLength(50);
+
+                entity.Property(e => e.PaymentMethod).HasMaxLength(50);
+
+                entity.Property(e => e.AdditionalInfo1).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo2).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo3).HasMaxLength(200);
+
+                entity.Property(e => e.OrderId).HasMaxLength(100);
+
+                entity.Property(e => e.PaymentId).HasMaxLength(100);
+
+                entity.Property(e => e.UserRemarks).HasMaxLength(500);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_PaymentHistory_Users");
+
+                entity.HasOne<EVCDTO.ChargingStation>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingStationId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_PaymentHistory_ChargingStation");
+            });
+
+            modelBuilder.Entity<EVCDTO.UserVehicle>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.EVManufacturerID).HasMaxLength(50);
+
+                entity.Property(e => e.CarModelID).HasMaxLength(50);
+
+                entity.Property(e => e.CarModelVariant).HasMaxLength(100);
+
+                entity.Property(e => e.CarRegistrationNumber).HasMaxLength(50);
+
+                entity.Property(e => e.BatteryTypeId).HasMaxLength(50);
+
+                entity.Property(e => e.BatteryCapacityId).HasMaxLength(50);
+            });
+
+            modelBuilder.Entity<EVCDTO.WalletTransactionLog>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.PreviousCreditBalance).HasMaxLength(50);
+
+                entity.Property(e => e.CurrentCreditBalance).HasMaxLength(50);
+
+                entity.Property(e => e.TransactionType).HasMaxLength(50);
+
+                entity.Property(e => e.PaymentRecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingSessionId).HasMaxLength(50);
+
+                entity.Property(e => e.AdditionalInfo1).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo2).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo3).HasMaxLength(200);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_WalletTransactionLog_Users");
+
+                entity.HasOne<EVCDTO.ChargingSession>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingSessionId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_WalletTransactionLog_ChargingSession");
+            });
+
+            modelBuilder.Entity<EVCDTO.FileMaster>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.FileName).HasMaxLength(200);
+
+                entity.Property(e => e.FileType).HasMaxLength(50);
+
+                entity.Property(e => e.FileURL).HasMaxLength(500);
+
+                entity.Property(e => e.Remarks).HasMaxLength(500);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_FileMaster_Users");
             });
 
             OnModelCreatingPartial(modelBuilder);
