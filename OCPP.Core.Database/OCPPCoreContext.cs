@@ -446,6 +446,35 @@ namespace OCPP.Core.Database
                     .HasConstraintName("FK_FileMaster_Users");
             });
 
+            modelBuilder.Entity<EVCDTO.RefreshToken>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.Token)
+                    .IsRequired()
+                    .HasMaxLength(500);
+
+                entity.Property(e => e.CreatedByIp).HasMaxLength(50);
+
+                entity.Property(e => e.RevokedByIp).HasMaxLength(50);
+
+                entity.Property(e => e.ReplacedByToken).HasMaxLength(500);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_RefreshToken_Users");
+
+                entity.HasIndex(e => e.Token);
+            });
+
             OnModelCreatingPartial(modelBuilder);
         }
 

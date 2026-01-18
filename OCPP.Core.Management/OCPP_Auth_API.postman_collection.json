@@ -1,0 +1,158 @@
+{
+  "info": {
+    "name": "OCPP.Core User Authentication API",
+    "description": "JWT-based authentication API for OCPP.Core Management",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Register User",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"eMailID\": \"john.doe@example.com\",\n  \"phoneNumber\": \"1234567890\",\n  \"countryCode\": \"+1\",\n  \"password\": \"Test123456\",\n  \"confirmPassword\": \"Test123456\",\n  \"addressLine1\": \"123 Main St\",\n  \"city\": \"New York\",\n  \"state\": \"NY\",\n  \"pinCode\": \"10001\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/user/register",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "register"]
+        }
+      }
+    },
+    {
+      "name": "2. Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Cookies are automatically saved by Postman"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"emailOrPhone\": \"john.doe@example.com\",\n  \"password\": \"Test123456\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/user/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "login"]
+        }
+      }
+    },
+    {
+      "name": "3. Get Profile",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/profile",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "profile"]
+        }
+      }
+    },
+    {
+      "name": "4. Update Profile",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Smith\",\n  \"phoneNumber\": \"0987654321\",\n  \"city\": \"Los Angeles\",\n  \"state\": \"CA\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/user/profile-update",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "profile-update"]
+        }
+      }
+    },
+    {
+      "name": "5. Reset Password",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"emailOrPhone\": \"john.doe@example.com\",\n  \"oldPassword\": \"Test123456\",\n  \"newPassword\": \"NewTest123456\",\n  \"confirmPassword\": \"NewTest123456\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/user/reset-password",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "reset-password"]
+        }
+      }
+    },
+    {
+      "name": "6. Refresh Token",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/refresh-token",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "refresh-token"]
+        }
+      }
+    },
+    {
+      "name": "7. Logout",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/logout",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "logout"]
+        }
+      }
+    },
+    {
+      "name": "8. Delete User Account",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/user-delete",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "user-delete"]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8082",
+      "type": "string"
+    }
+  ]
+}

@@ -93,6 +93,8 @@ namespace OCPP.Core.Management
 
             app.UseStaticFiles();
 
+            app.UseCors("AllowAll");
+
             app.UseAuthentication();
             app.UseRouting();
             app.UseAuthorization();
