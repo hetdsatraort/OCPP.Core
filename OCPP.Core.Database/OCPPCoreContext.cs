@@ -51,6 +51,10 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.WalletTransactionLog> WalletTransactionLogs { get; set; }
         public virtual DbSet<EVCDTO.FileMaster> FileMasters { get; set; }
         public virtual DbSet<EVCDTO.RefreshToken> RefreshTokens { get; set; }
+        public virtual DbSet<EVCDTO.ChargerTypeMaster> ChargerTypeMasters { get; set; }
+        public virtual DbSet<EVCDTO.BatteryTypeMaster> BatteryTypeMasters { get; set; }
+        public virtual DbSet<EVCDTO.BatteryCapacityMaster> BatteryCapacityMasters { get; set; }
+        public virtual DbSet<EVCDTO.CarManufacturerMaster> CarManufacturerMasters { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
