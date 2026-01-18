@@ -7,6 +7,8 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public string ChargingGunId { get; set; }
         public string ChargingStationId { get; set; }
         public string UserId { get; set; }
+        public string ChargeTagId { get; set; }
+        public int ConnectorId { get; set; }
         public string StartMeterReading { get; set; }
         public string ChargingTariff { get; set; }
     }
@@ -15,6 +17,12 @@ namespace OCPP.Core.Management.Models.ChargingSession
     {
         public string SessionId { get; set; }
         public string EndMeterReading { get; set; }
+    }
+
+    public class UnlockConnectorRequestDto
+    {
+        public string ChargingStationId { get; set; }
+        public int ConnectorId { get; set; }
     }
 
     public class ChargingSessionDto
