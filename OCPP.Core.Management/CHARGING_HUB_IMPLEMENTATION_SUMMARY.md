@@ -107,7 +107,7 @@
 
 - JWT authentication on write operations
 - IP tracking for audit trails
-- Soft deletes maintain data integrity
+- **All entities use soft delete (Active = 0)** - including Chargers/Connectors
 - Ready for role-based authorization
 - Public read access for discovery
 

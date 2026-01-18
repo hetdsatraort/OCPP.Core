@@ -97,6 +97,8 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.ConnectorName).HasMaxLength(100);
 
                 entity.Property(e => e.LastStatus).HasMaxLength(100);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
             });
 
             modelBuilder.Entity<MessageLog>(entity =>

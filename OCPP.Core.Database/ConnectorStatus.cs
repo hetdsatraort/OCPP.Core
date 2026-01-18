@@ -32,6 +32,7 @@ namespace OCPP.Core.Database
         public DateTime? LastStatusTime { get; set; }
         public double? LastMeter { get; set; }
         public DateTime? LastMeterTime { get; set; }
+        public int Active { get; set; }
         public virtual ChargePoint ChargePoint { get; set; }
 
         public override string ToString()

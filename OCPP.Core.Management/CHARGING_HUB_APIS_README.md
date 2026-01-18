@@ -360,6 +360,8 @@ ChargingHub (Location with multiple stations)
 
 **Example:** `DELETE /api/charginghub/chargers-delete/CP001/1`
 
+**Note:** Performs soft delete (sets Active = 0)
+
 ### 15. Get Charger List (per Station)
 **Endpoint:** `GET /api/charginghub/charger-list/{stationId}`
 

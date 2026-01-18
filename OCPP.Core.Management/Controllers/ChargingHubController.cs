@@ -649,7 +649,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get chargers (connectors)
                 var chargers = await _dbContext.ConnectorStatuses
-                    .Where(c => c.ChargePointId == station.ChargingPointId)
+                    .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
                     .ToListAsync();
 
                 var chargerDtos = chargers.Select(c => MapToChargerDto(c, station.RecId, chargePoint?.Name)).ToList();
@@ -704,9 +704,9 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Check if connector already exists
+                // Check if connector already exists (active only)
                 var existing = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId);
+                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId && c.Active == 1);
 
                 if (existing != null)
                 {
@@ -722,7 +722,8 @@ namespace OCPP.Core.Management.Controllers
                     ChargePointId = request.ChargePointId,
                     ConnectorId = request.ConnectorId,
                     ConnectorName = request.ConnectorName,
-                    LastStatus = "Available"
+                    LastStatus = "Available",
+                    Active = 1
                 };
 
                 _dbContext.ConnectorStatuses.Add(charger);
@@ -770,7 +771,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId);
+                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId && c.Active == 1);
 
                 if (charger == null)
                 {
@@ -814,7 +815,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
-        /// Delete charger/gun (connector)
+        /// Delete charger/gun (connector) - Soft delete
         /// </summary>
         [HttpDelete("chargers-delete/{chargePointId}/{connectorId}")]
         [Authorize]
@@ -823,7 +824,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId);
+                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId && c.Active == 1);
 
                 if (charger == null)
                 {
@@ -834,10 +835,12 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                _dbContext.ConnectorStatuses.Remove(charger);
+                // Soft delete
+                charger.Active = 0;
+                charger.LastStatusTime = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charger deleted: {chargePointId}:{connectorId}");
+                _logger.LogInformation($"Charger deleted (soft): {chargePointId}:{connectorId}");
 
                 return Ok(new ChargerResponseDto
                 {
@@ -912,7 +915,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId);
+                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId && c.Active == 1);
 
                 if (charger == null)
                 {
