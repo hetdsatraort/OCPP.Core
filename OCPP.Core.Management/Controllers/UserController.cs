@@ -578,6 +578,551 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// Add credits to user wallet
+        /// </summary>
+        [HttpPost("add-wallet-credits")]
+        [Authorize]
+        public async Task<IActionResult> AddWalletCredits([FromBody] AddWalletCreditsRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Check if user exists
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == request.UserId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found"
+                    });
+                }
+
+                // Get current balance
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == request.UserId)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                decimal previousBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
+                {
+                    previousBalance = lastBalance;
+                }
+
+                decimal newBalance = previousBalance + request.Amount;
+
+                // Create transaction log
+                var walletLog = new WalletTransactionLog
+                {
+                    RecId = Guid.NewGuid().ToString(),
+                    UserId = request.UserId,
+                    PreviousCreditBalance = previousBalance.ToString("F2"),
+                    CurrentCreditBalance = newBalance.ToString("F2"),
+                    TransactionType = request.TransactionType,
+                    PaymentRecId = request.PaymentRecId,
+                    AdditionalInfo1 = request.AdditionalInfo1,
+                    AdditionalInfo2 = request.AdditionalInfo2,
+                    AdditionalInfo3 = request.AdditionalInfo3,
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                _dbContext.WalletTransactionLogs.Add(walletLog);
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Wallet credits added for user: {request.UserId}, Amount: {request.Amount}");
+
+                return Ok(new WalletResponseDto
+                {
+                    Success = true,
+                    Message = "Credits added successfully",
+                    Wallet = new WalletDto
+                    {
+                        UserId = request.UserId,
+                        CurrentBalance = newBalance
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding wallet credits");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while adding credits"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Add user vehicle
+        /// </summary>
+        [HttpPost("user-vehicle-add")]
+        [Authorize]
+        public async Task<IActionResult> AddUserVehicle([FromBody] UserVehicleRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Get user ID from token
+                var userId = User.FindFirst("userId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                // Check if user exists
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found"
+                    });
+                }
+
+                // Check if registration number already exists
+                var existingVehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.CarRegistrationNumber == request.CarRegistrationNumber && v.Active == 1);
+
+                if (existingVehicle != null)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Vehicle with this registration number already exists"
+                    });
+                }
+
+                // If this is set as default, unset other defaults
+                if (request.DefaultConfig == 1)
+                {
+                    var userVehicles = await _dbContext.UserVehicles
+                        .Where(v => v.UserId == userId && v.Active == 1)
+                        .ToListAsync();
+
+                    foreach (var v in userVehicles)
+                    {
+                        v.DefaultConfig = 0;
+                        v.UpdatedOn = DateTime.UtcNow;
+                    }
+                }
+
+                var vehicle = new UserVehicle
+                {
+                    RecId = Guid.NewGuid().ToString(),
+                    UserId = userId,
+                    EVManufacturerID = request.EVManufacturerID,
+                    CarModelID = request.CarModelID,
+                    CarModelVariant = request.CarModelVariant,
+                    CarRegistrationNumber = request.CarRegistrationNumber,
+                    DefaultConfig = request.DefaultConfig,
+                    BatteryTypeId = request.BatteryTypeId,
+                    BatteryCapacityId = request.BatteryCapacityId,
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                _dbContext.UserVehicles.Add(vehicle);
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Vehicle added for user: {userId}");
+
+                return Ok(new UserVehicleResponseDto
+                {
+                    Success = true,
+                    Message = "Vehicle added successfully",
+                    Vehicle = MapToUserVehicleDto(vehicle)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding user vehicle");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while adding vehicle"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Update user vehicle
+        /// </summary>
+        [HttpPut("user-vehicle-update")]
+        [Authorize]
+        public async Task<IActionResult> UpdateUserVehicle([FromBody] UserVehicleUpdateDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Get user ID from token
+                var userId = User.FindFirst("userId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var vehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.RecId == request.RecId && v.UserId == userId && v.Active == 1);
+
+                if (vehicle == null)
+                {
+                    return NotFound(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Vehicle not found"
+                    });
+                }
+
+                // If this is being set as default, unset other defaults
+                if (request.DefaultConfig == 1 && vehicle.DefaultConfig != 1)
+                {
+                    var userVehicles = await _dbContext.UserVehicles
+                        .Where(v => v.UserId == userId && v.RecId != request.RecId && v.Active == 1)
+                        .ToListAsync();
+
+                    foreach (var v in userVehicles)
+                    {
+                        v.DefaultConfig = 0;
+                        v.UpdatedOn = DateTime.UtcNow;
+                    }
+                }
+
+                // Update vehicle properties
+                if (!string.IsNullOrEmpty(request.EVManufacturerID))
+                    vehicle.EVManufacturerID = request.EVManufacturerID;
+                if (!string.IsNullOrEmpty(request.CarModelID))
+                    vehicle.CarModelID = request.CarModelID;
+                if (!string.IsNullOrEmpty(request.CarModelVariant))
+                    vehicle.CarModelVariant = request.CarModelVariant;
+                if (!string.IsNullOrEmpty(request.CarRegistrationNumber))
+                    vehicle.CarRegistrationNumber = request.CarRegistrationNumber;
+                vehicle.DefaultConfig = request.DefaultConfig;
+                if (!string.IsNullOrEmpty(request.BatteryTypeId))
+                    vehicle.BatteryTypeId = request.BatteryTypeId;
+                if (!string.IsNullOrEmpty(request.BatteryCapacityId))
+                    vehicle.BatteryCapacityId = request.BatteryCapacityId;
+
+                vehicle.UpdatedOn = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Vehicle updated: {request.RecId}");
+
+                return Ok(new UserVehicleResponseDto
+                {
+                    Success = true,
+                    Message = "Vehicle updated successfully",
+                    Vehicle = MapToUserVehicleDto(vehicle)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating user vehicle");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while updating vehicle"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Delete user vehicle
+        /// </summary>
+        [HttpDelete("user-vehicle-delete/{vehicleId}")]
+        [Authorize]
+        public async Task<IActionResult> DeleteUserVehicle(string vehicleId)
+        {
+            try
+            {
+                // Get user ID from token
+                var userId = User.FindFirst("userId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var vehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.RecId == vehicleId && v.UserId == userId && v.Active == 1);
+
+                if (vehicle == null)
+                {
+                    return NotFound(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Vehicle not found"
+                    });
+                }
+
+                // Soft delete
+                vehicle.Active = 0;
+                vehicle.UpdatedOn = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Vehicle deleted: {vehicleId}");
+
+                return Ok(new AuthResponseDto
+                {
+                    Success = true,
+                    Message = "Vehicle deleted successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting user vehicle");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while deleting vehicle"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get list of all users (Admin endpoint)
+        /// </summary>
+        [HttpGet("user-list")]
+        [Authorize]
+        public async Task<IActionResult> GetUserList([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        {
+            try
+            {
+                // Optional: Add role check for admin
+                var users = await _dbContext.Users
+                    .Where(u => u.Active == 1)
+                    .OrderByDescending(u => u.CreatedOn)
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var totalCount = await _dbContext.Users.CountAsync(u => u.Active == 1);
+
+                return Ok(new UserListResponseDto
+                {
+                    Success = true,
+                    Message = "Users retrieved successfully",
+                    Users = users.Select(MapToUserDto).ToList(),
+                    TotalCount = totalCount
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving user list");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving users"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get user details with wallet and vehicles
+        /// </summary>
+        [HttpGet("user-details/{userId}")]
+        [Authorize]
+        public async Task<IActionResult> GetUserDetails(string userId)
+        {
+            try
+            {
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found"
+                    });
+                }
+
+                // Get wallet details
+                var walletTransactions = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .Take(10)
+                    .ToListAsync();
+
+                var lastTransaction = walletTransactions.FirstOrDefault();
+                decimal currentBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
+                {
+                    currentBalance = balance;
+                }
+
+                var wallet = new WalletDto
+                {
+                    UserId = userId,
+                    CurrentBalance = currentBalance,
+                    RecentTransactions = walletTransactions.Select(MapToWalletTransactionDto).ToList()
+                };
+
+                // Get vehicles
+                var vehicles = await _dbContext.UserVehicles
+                    .Where(v => v.UserId == userId && v.Active == 1)
+                    .ToListAsync();
+
+                return Ok(new UserDetailsResponseDto
+                {
+                    Success = true,
+                    Message = "User details retrieved successfully",
+                    User = MapToUserDto(user),
+                    Wallet = wallet,
+                    Vehicles = vehicles.Select(MapToUserVehicleDto).ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving user details");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving user details"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get wallet details for current user
+        /// </summary>
+        [HttpGet("wallet-details")]
+        [Authorize]
+        public async Task<IActionResult> GetWalletDetails()
+        {
+            try
+            {
+                var userId = User.FindFirst("userId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var walletTransactions = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .Take(20)
+                    .ToListAsync();
+
+                var lastTransaction = walletTransactions.FirstOrDefault();
+                decimal currentBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
+                {
+                    currentBalance = balance;
+                }
+
+                var wallet = new WalletDto
+                {
+                    UserId = userId,
+                    CurrentBalance = currentBalance,
+                    RecentTransactions = walletTransactions.Select(MapToWalletTransactionDto).ToList()
+                };
+
+                return Ok(new WalletResponseDto
+                {
+                    Success = true,
+                    Message = "Wallet details retrieved successfully",
+                    Wallet = wallet
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving wallet details");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving wallet details"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get user vehicle list for current user
+        /// </summary>
+        [HttpGet("user-vehicle-list")]
+        [Authorize]
+        public async Task<IActionResult> GetUserVehicleList()
+        {
+            try
+            {
+                var userId = User.FindFirst("userId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var vehicles = await _dbContext.UserVehicles
+                    .Where(v => v.UserId == userId && v.Active == 1)
+                    .OrderByDescending(v => v.DefaultConfig)
+                    .ThenByDescending(v => v.CreatedOn)
+                    .ToListAsync();
+
+                return Ok(new UserVehicleListResponseDto
+                {
+                    Success = true,
+                    Message = "Vehicles retrieved successfully",
+                    Vehicles = vehicles.Select(MapToUserVehicleDto).ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving user vehicles");
+                return StatusCode(500, new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving vehicles"
+                });
+            }
+        }
+
         #region Helper Methods
 
         private string HashPassword(string password)
@@ -647,6 +1192,41 @@ namespace OCPP.Core.Management.Controllers
                 ProfileCompleted = user.ProfileCompleted,
                 UserRole = user.UserRole,
                 CreatedOn = user.CreatedOn
+            };
+        }
+
+        private UserVehicleDto MapToUserVehicleDto(UserVehicle vehicle)
+        {
+            return new UserVehicleDto
+            {
+                RecId = vehicle.RecId,
+                UserId = vehicle.UserId,
+                EVManufacturerID = vehicle.EVManufacturerID,
+                CarModelID = vehicle.CarModelID,
+                CarModelVariant = vehicle.CarModelVariant,
+                CarRegistrationNumber = vehicle.CarRegistrationNumber,
+                DefaultConfig = vehicle.DefaultConfig,
+                BatteryTypeId = vehicle.BatteryTypeId,
+                BatteryCapacityId = vehicle.BatteryCapacityId,
+                CreatedOn = vehicle.CreatedOn,
+                UpdatedOn = vehicle.UpdatedOn
+            };
+        }
+
+        private WalletTransactionDto MapToWalletTransactionDto(WalletTransactionLog transaction)
+        {
+            return new WalletTransactionDto
+            {
+                RecId = transaction.RecId,
+                PreviousCreditBalance = transaction.PreviousCreditBalance,
+                CurrentCreditBalance = transaction.CurrentCreditBalance,
+                TransactionType = transaction.TransactionType,
+                PaymentRecId = transaction.PaymentRecId,
+                ChargingSessionId = transaction.ChargingSessionId,
+                AdditionalInfo1 = transaction.AdditionalInfo1,
+                AdditionalInfo2 = transaction.AdditionalInfo2,
+                AdditionalInfo3 = transaction.AdditionalInfo3,
+                CreatedOn = transaction.CreatedOn
             };
         }
 
