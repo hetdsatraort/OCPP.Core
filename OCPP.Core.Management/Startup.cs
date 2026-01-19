@@ -34,6 +34,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi.Models;
 using OCPP.Core.Database;
+using OCPP.Core.Management.Services;
 
 namespace OCPP.Core.Management
 {
@@ -75,7 +76,8 @@ namespace OCPP.Core.Management
             {
                 options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
             });
-
+            
+            services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
             services.AddDistributedMemoryCache();
             services.AddSwaggerGen(c =>
