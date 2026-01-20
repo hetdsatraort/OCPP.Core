@@ -66,6 +66,18 @@ namespace OCPP.Core.Server
         {
             services.AddOCPPDbContext(Configuration);
             services.AddControllers();
+            services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAngularApp", builder =>
+                {
+                    builder.WithOrigins("http://localhost:4200") // Angular dev server
+                           .AllowCredentials()                    // Important for cookies
+                           .AllowAnyHeader()
+                           .AllowAnyMethod()
+                           .SetIsOriginAllowed(origin => true);   // For development
+                });
+            });
+
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
