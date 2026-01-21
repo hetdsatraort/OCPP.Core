@@ -6,6 +6,9 @@ namespace OCPP.Core.Management.Models.ChargingHub
     public class ChargingHubRequestDto
     {
         [Required]
+        public string ChargingHubName { get; set; }
+
+        [Required]
         public string AddressLine1 { get; set; }
         
         public string AddressLine2 { get; set; }

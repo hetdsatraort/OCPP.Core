@@ -48,6 +48,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = new Database.EVCDTO.ChargingHub
                 {
                     RecId = Guid.NewGuid().ToString(),
+                    ChargingHubName = request.ChargingHubName,
                     AddressLine1 = request.AddressLine1,
                     AddressLine2 = request.AddressLine2,
                     AddressLine3 = request.AddressLine3,
@@ -122,6 +123,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 // Update properties
+                hub.ChargingHubName = request.ChargingHubName;
                 hub.AddressLine1 = request.AddressLine1;
                 hub.AddressLine2 = request.AddressLine2;
                 hub.AddressLine3 = request.AddressLine3;
@@ -1247,6 +1249,7 @@ namespace OCPP.Core.Management.Controllers
             return new ChargingHubDto
             {
                 RecId = hub.RecId,
+                ChargingHubName = hub.ChargingHubName,
                 AddressLine1 = hub.AddressLine1,
                 AddressLine2 = hub.AddressLine2,
                 AddressLine3 = hub.AddressLine3,

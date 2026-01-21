@@ -194,6 +194,8 @@ namespace OCPP.Core.Database
 
                 entity.Property(e => e.RecId).HasMaxLength(50);
 
+                entity.Property(e => e.ChargingHubName).HasMaxLength(200);
+
                 entity.Property(e => e.AddressLine1).HasMaxLength(200);
 
                 entity.Property(e => e.AddressLine2).HasMaxLength(200);

@@ -9,6 +9,7 @@ namespace OCPP.Core.Database.EVCDTO
     public class ChargingHub
     {
         public string RecId { get; set; }
+        public string ChargingHubName { get; set; }
         public string AddressLine1 { get; set; }
         public string AddressLine2 { get; set; }
         public string AddressLine3 { get; set; }
