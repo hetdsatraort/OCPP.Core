@@ -21,8 +21,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
@@ -32,6 +34,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using OCPP.Core.Database;
 using OCPP.Core.Management.Services;
@@ -76,7 +79,7 @@ namespace OCPP.Core.Management
             {
                 options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
             });
-            
+
             services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
             services.AddDistributedMemoryCache();
@@ -148,7 +151,7 @@ namespace OCPP.Core.Management
 
             app.UseStaticFiles();
 
-            app.UseCors("AllowAll");
+            app.UseCors("AllowAngularApp");
 
             app.UseSwagger();
             app.UseSwaggerUI(c =>
