@@ -21,10 +21,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
@@ -34,7 +32,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using OCPP.Core.Database;
 using OCPP.Core.Management.Services;
@@ -58,98 +55,14 @@ namespace OCPP.Core.Management
 
             services.AddControllersWithViews();
 
-            // Configure dual authentication: Cookie for management panel, JWT for API
-            services.AddAuthentication(options =>
-            {
-                // Default scheme for management panel (web pages)
-                options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-                options.DefaultChallengeScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            })
-            .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
-            {
-                options.LoginPath = "/Account/Login";
-                options.LogoutPath = "/Account/Logout";
-                options.AccessDeniedPath = "/Account/AccessDenied";
-                options.ExpireTimeSpan = TimeSpan.FromHours(8);
-                options.SlidingExpiration = true;
-                
-                options.Events.OnRedirectToLogin = context =>
-                {
-                    // For API requests, return 401 instead of redirecting
-                    if (context.Request.Path.StartsWithSegments("/api"))
+            services.AddAuthentication(
+                CookieAuthenticationDefaults.AuthenticationScheme)
+                .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme,
+                    options =>
                     {
-                        context.Response.StatusCode = 401;
-                        return Task.CompletedTask;
-                    }
-                    context.Response.Redirect(context.RedirectUri);
-                    return Task.CompletedTask;
-                };
-                
-                options.Events.OnRedirectToAccessDenied = context =>
-                {
-                    // For API requests, return 403 instead of redirecting
-                    if (context.Request.Path.StartsWithSegments("/api"))
-                    {
-                        context.Response.StatusCode = 403;
-                        return Task.CompletedTask;
-                    }
-                    context.Response.Redirect(context.RedirectUri);
-                    return Task.CompletedTask;
-                };
-            })
-            .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
-            {
-                var jwtSettings = Configuration.GetSection("JwtSettings");
-                var secretKey = jwtSettings["Secret"];
-                
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = jwtSettings["Issuer"],
-                    ValidAudience = jwtSettings["Audience"],
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-                    ClockSkew = TimeSpan.Zero
-                };
-                
-                options.Events = new JwtBearerEvents
-                {
-                    OnAuthenticationFailed = context =>
-                    {
-                        if (context.Exception.GetType() == typeof(SecurityTokenExpiredException))
-                        {
-                            context.Response.Headers.Add("Token-Expired", "true");
-                        }
-                        return Task.CompletedTask;
-                    }
-                };
-            });
-
-            // Add authorization policies
-            services.AddAuthorization(options =>
-            {
-                // Default policy uses Cookie authentication (for management panel)
-                options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-                    .RequireAuthenticatedUser()
-                    .AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme)
-                    .Build();
-                
-                // API policy uses JWT Bearer authentication (for mobile/web API calls)
-                options.AddPolicy("ApiPolicy", new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-                    .RequireAuthenticatedUser()
-                    .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
-                    .Build());
-                
-                // Combined policy allows both (useful for endpoints accessible from both)
-                options.AddPolicy("CombinedPolicy", new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-                    .RequireAuthenticatedUser()
-                    .AddAuthenticationSchemes(
-                        CookieAuthenticationDefaults.AuthenticationScheme,
-                        JwtBearerDefaults.AuthenticationScheme)
-                    .Build());
-            });
+                        options.LoginPath = "/Account/Login";
+                        options.LogoutPath = "/Account/Logout";
+                    });
 
             services.AddLocalization(opts => { opts.ResourcesPath = "Resources"; });
             services.AddMvc()
@@ -158,34 +71,15 @@ namespace OCPP.Core.Management
                     opts => { opts.ResourcesPath = "Resources"; })
                 .AddDataAnnotationsLocalization();
 
-            //// authentication 
-            //services.AddAuthentication(options =>
-            //{
-            //    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            //});
-
+            // authentication 
+            services.AddAuthentication(options =>
+            {
+                options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            });
+            
             services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
             services.AddDistributedMemoryCache();
-            
-            // Configure CORS for external API calls
-            services.AddCors(options =>
-            {
-                options.AddPolicy("AllowAll", builder =>
-                {
-                    builder
-                        .WithOrigins(
-                            "http://localhost:4200",
-                            "https://localhost:4200",
-                            "http://localhost:8100", // Ionic dev
-                            "https://localhost:8100"
-                        )
-                        .AllowAnyMethod()
-                        .AllowAnyHeader()
-                        .AllowCredentials(); // Important for cookies and JWT
-                });
-            });
-            
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo

@@ -37,7 +37,7 @@ namespace OCPP.Core.Management.Controllers
         /// Start a new charging session
         /// </summary>
         [HttpPost("start-charging-session")]
-        [Authorize(Policy = "ApiPolicy")]
+        [Authorize]
         public async Task<IActionResult> StartChargingSession([FromBody] StartChargingSessionRequestDto request)
         {
             try
@@ -153,7 +153,7 @@ namespace OCPP.Core.Management.Controllers
         /// End an active charging session
         /// </summary>
         [HttpPost("end-charging-session")]
-        [Authorize(Policy = "ApiPolicy")]
+        [Authorize]
         public async Task<IActionResult> EndChargingSession([FromBody] EndChargingSessionRequestDto request)
         {
             try
@@ -336,7 +336,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get charging session details
         /// </summary>
         [HttpGet("charging-session-details/{sessionId}")]
-        [Authorize(Policy = "ApiPolicy")]
+        [Authorize]
         public async Task<IActionResult> GetChargingSessionDetails(string sessionId)
         {
             try
@@ -375,7 +375,7 @@ namespace OCPP.Core.Management.Controllers
         /// Unlock a charging connector
         /// </summary>
         [HttpPost("unlock-connector")]
-        [Authorize(Policy = "ApiPolicy")]
+        [Authorize]
         public async Task<IActionResult> UnlockConnector([FromBody] UnlockConnectorRequestDto request)
         {
             try
@@ -459,7 +459,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get all charging sessions (with optional filters)
         /// </summary>
         [HttpGet("charging-sessions")]
-        [Authorize(Policy = "ApiPolicy")]
+        [Authorize]
         public async Task<IActionResult> GetChargingSessions(
             [FromQuery] string stationId = null,
             [FromQuery] string status = null,
