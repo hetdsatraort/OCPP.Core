@@ -1140,26 +1140,19 @@ namespace OCPP.Core.Management.Controllers
 
         private void SetTokenCookies(string accessToken, string refreshToken)
         {
-            var cookieOptions = new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = true,
-                SameSite = SameSiteMode.Strict
-            };
-
             Response.Cookies.Append("accessToken", accessToken, new CookieOptions
             {
                 HttpOnly = true,
-                Secure = true,
-                SameSite = SameSiteMode.Strict,
+                Secure = false, // Set to true in production with HTTPS
+                SameSite = SameSiteMode.Lax, // Changed from Strict to Lax for better API compatibility
                 Expires = DateTimeOffset.UtcNow.AddMinutes(15)
             });
 
             Response.Cookies.Append("refreshToken", refreshToken, new CookieOptions
             {
                 HttpOnly = true,
-                Secure = true,
-                SameSite = SameSiteMode.Strict,
+                Secure = false, // Set to true in production with HTTPS
+                SameSite = SameSiteMode.Lax, // Changed from Strict to Lax for better API compatibility
                 Expires = DateTimeOffset.UtcNow.AddDays(7)
             });
         }

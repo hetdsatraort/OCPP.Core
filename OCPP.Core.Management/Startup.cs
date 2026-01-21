@@ -23,7 +23,6 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -58,14 +57,18 @@ namespace OCPP.Core.Management
 
             services.AddControllersWithViews();
 
-            services.AddAuthentication(
-                CookieAuthenticationDefaults.AuthenticationScheme)
-                .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme,
-                    options =>
-                    {
-                        options.LoginPath = "/Account/Login";
-                        options.LogoutPath = "/Account/Logout";
-                    });
+            // Configure CORS for API access
+            services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAngularApp", builder =>
+                {
+                    builder.WithOrigins("http://localhost:4200", "https://localhost:4200")
+                           .AllowCredentials()
+                           .AllowAnyHeader()
+                           .AllowAnyMethod()
+                           .SetIsOriginAllowed(origin => true); // For development
+                });
+            });
 
             services.AddLocalization(opts => { opts.ResourcesPath = "Resources"; });
             services.AddMvc()
@@ -74,15 +77,85 @@ namespace OCPP.Core.Management
                     opts => { opts.ResourcesPath = "Resources"; })
                 .AddDataAnnotationsLocalization();
 
-            // authentication 
+            // JWT Authentication Configuration
+            var jwtSecret = Configuration["JwtSettings:Secret"] ?? "YourSuperSecretKeyThatIsAtLeast32CharactersLong!";
+            var jwtIssuer = Configuration["JwtSettings:Issuer"] ?? "OCPPCore";
+            var jwtAudience = Configuration["JwtSettings:Audience"] ?? "OCPPCoreUsers";
+            var key = Encoding.ASCII.GetBytes(jwtSecret);
+
             services.AddAuthentication(options =>
             {
-                options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(options =>
+            {
+                options.RequireHttpsMetadata = false; // Set to true in production
+                options.SaveToken = true;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(key),
+                    ValidateIssuer = true,
+                    ValidIssuer = jwtIssuer,
+                    ValidateAudience = true,
+                    ValidAudience = jwtAudience,
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                };
+
+                // Support token from both cookie (for admin panel) and Authorization header (for API)
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        // First check Authorization header
+                        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+                        if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            context.Token = authHeader.Substring("Bearer ".Length).Trim();
+                        }
+                        // If no Authorization header, check cookie (for admin panel)
+                        else if (context.Request.Cookies.ContainsKey("accessToken"))
+                        {
+                            context.Token = context.Request.Cookies["accessToken"];
+                        }
+                        return Task.CompletedTask;
+                    },
+                    OnAuthenticationFailed = context =>
+                    {
+                        if (context.Exception.GetType() == typeof(SecurityTokenExpiredException))
+                        {
+                            context.Response.Headers.Add("Token-Expired", "true");
+                        }
+                        return Task.CompletedTask;
+                    },
+                    OnChallenge = context =>
+                    {
+                        // For web pages, redirect to login
+                        if (context.Request.Path.StartsWithSegments("/Home") || 
+                            context.Request.Path.StartsWithSegments("/ChargePoint") ||
+                            !context.Request.Path.StartsWithSegments("/api"))
+                        {
+                            context.HandleResponse();
+                            context.Response.Redirect("/Account/Login");
+                        }
+                        return Task.CompletedTask;
+                    }
+                };
+            });
+
+            services.AddAuthorization(options =>
+            {
+                options.AddPolicy("AdminOnly", policy => policy.RequireRole("Administrator", "Admin"));
+                options.AddPolicy("UserOrAdmin", policy => policy.RequireRole("User", "Administrator", "Admin"));
             });
 
             services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
             services.AddDistributedMemoryCache();
+            
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo
@@ -126,14 +199,6 @@ namespace OCPP.Core.Management
                         Array.Empty<string>()
                     }
                 });
-
-                // Optional: Include XML comments if available
-                // var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
-                // var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-                // if (File.Exists(xmlPath))
-                // {
-                //     c.IncludeXmlComments(xmlPath);
-                // }
             });
         }
 
@@ -157,7 +222,7 @@ namespace OCPP.Core.Management
             app.UseSwaggerUI(c =>
             {
                 c.SwaggerEndpoint("/swagger/v1/swagger.json", "OCPP.Core Management API v1");
-                c.RoutePrefix = "swagger"; // Access at: https://localhost:port/swagger
+                c.RoutePrefix = "swagger";
                 c.DocumentTitle = "OCPP.Core API Documentation";
                 c.DisplayRequestDuration();
             });
