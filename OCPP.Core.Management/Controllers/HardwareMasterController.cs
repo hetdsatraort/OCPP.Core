@@ -29,7 +29,7 @@ namespace OCPP.Core.Management.Controllers
         #region Charger Type Management
 
         [HttpPost("charger-type-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddChargerType([FromBody] ChargerTypeRequestDto request)
         {
             try
@@ -78,7 +78,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpPut("charger-type-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateChargerType([FromBody] ChargerTypeUpdateDto request)
         {
             try
@@ -133,7 +133,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpDelete("charger-type-delete/{recId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteChargerType(string recId)
         {
             try
@@ -208,7 +208,7 @@ namespace OCPP.Core.Management.Controllers
         #region Battery Type Management
 
         [HttpPost("battery-type-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddBatteryType([FromBody] BatteryTypeRequestDto request)
         {
             try
@@ -255,7 +255,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpPut("battery-type-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateBatteryType([FromBody] BatteryTypeUpdateDto request)
         {
             try
@@ -308,7 +308,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpDelete("battery-type-delete/{recId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteBatteryType(string recId)
         {
             try
@@ -383,7 +383,7 @@ namespace OCPP.Core.Management.Controllers
         #region Battery Capacity Management
 
         [HttpPost("battery-capacity-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddBatteryCapacity([FromBody] BatteryCapacityRequestDto request)
         {
             try
@@ -431,7 +431,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpPut("battery-capacity-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateBatteryCapacity([FromBody] BatteryCapacityUpdateDto request)
         {
             try
@@ -485,7 +485,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpDelete("battery-capacity-delete/{recId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteBatteryCapacity(string recId)
         {
             try
@@ -560,7 +560,7 @@ namespace OCPP.Core.Management.Controllers
         #region Car Manufacturer Management
 
         [HttpPost("car-manufacturer-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddCarManufacturer([FromBody] CarManufacturerRequestDto request)
         {
             try
@@ -608,7 +608,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpPut("car-manufacturer-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateCarManufacturer([FromBody] CarManufacturerUpdateDto request)
         {
             try
@@ -662,7 +662,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpDelete("car-manufacturer-delete/{recId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteCarManufacturer(string recId)
         {
             try
@@ -772,7 +772,7 @@ namespace OCPP.Core.Management.Controllers
         #region EV Model Management
 
         [HttpPost("ev-model-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddEVModel([FromBody] EVModelRequestDto request)
         {
             try
@@ -828,7 +828,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpPut("ev-model-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateEVModel([FromBody] EVModelUpdateDto request)
         {
             try
@@ -890,7 +890,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         [HttpDelete("ev-model-delete/{recId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteEVModel(string recId)
         {
             try

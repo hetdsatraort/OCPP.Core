@@ -183,7 +183,7 @@ namespace OCPP.Core.Management.Controllers
         /// User logout endpoint
         /// </summary>
         [HttpPost("logout")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> Logout()
         {
             try
@@ -230,7 +230,7 @@ namespace OCPP.Core.Management.Controllers
         /// Reset password endpoint
         /// </summary>
         [HttpPost("reset-password")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequestDto request)
         {
             try
@@ -299,7 +299,7 @@ namespace OCPP.Core.Management.Controllers
         /// Update user profile endpoint
         /// </summary>
         [HttpPut("profile-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequestDto request)
         {
             try
@@ -387,7 +387,7 @@ namespace OCPP.Core.Management.Controllers
         /// Delete user account endpoint
         /// </summary>
         [HttpDelete("user-delete")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteUser()
         {
             try
@@ -535,7 +535,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get current user profile
         /// </summary>
         [HttpGet("profile")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> GetProfile()
         {
             try
@@ -582,7 +582,7 @@ namespace OCPP.Core.Management.Controllers
         /// Add credits to user wallet
         /// </summary>
         [HttpPost("add-wallet-credits")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddWalletCredits([FromBody] AddWalletCreditsRequestDto request)
         {
             try
@@ -669,7 +669,7 @@ namespace OCPP.Core.Management.Controllers
         /// Add user vehicle
         /// </summary>
         [HttpPost("user-vehicle-add")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> AddUserVehicle([FromBody] UserVehicleRequestDto request)
         {
             try
@@ -775,7 +775,7 @@ namespace OCPP.Core.Management.Controllers
         /// Update user vehicle
         /// </summary>
         [HttpPut("user-vehicle-update")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> UpdateUserVehicle([FromBody] UserVehicleUpdateDto request)
         {
             try
@@ -868,7 +868,7 @@ namespace OCPP.Core.Management.Controllers
         /// Delete user vehicle
         /// </summary>
         [HttpDelete("user-vehicle-delete/{vehicleId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> DeleteUserVehicle(string vehicleId)
         {
             try
@@ -924,7 +924,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get list of all users (Admin endpoint)
         /// </summary>
         [HttpGet("user-list")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> GetUserList([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
             try
@@ -962,7 +962,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get user details with wallet and vehicles
         /// </summary>
         [HttpGet("user-details/{userId}")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> GetUserDetails(string userId)
         {
             try
@@ -1027,7 +1027,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get wallet details for current user
         /// </summary>
         [HttpGet("wallet-details")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> GetWalletDetails()
         {
             try
@@ -1084,7 +1084,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get user vehicle list for current user
         /// </summary>
         [HttpGet("user-vehicle-list")]
-        [Authorize]
+        [Authorize(Policy = "ApiPolicy")]
         public async Task<IActionResult> GetUserVehicleList()
         {
             try
