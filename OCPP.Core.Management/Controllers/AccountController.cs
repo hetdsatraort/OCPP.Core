@@ -126,12 +126,10 @@ namespace OCPP.Core.Management.Controllers
                         var refreshToken = _jwtService.GenerateRefreshToken(GetIpAddress());
                         refreshToken.UserId = authenticatedUser.RecId;
 
-                        // Save refresh token to database
-                        DbContext.RefreshTokens.Add(refreshToken);
-                        
-                        // Update last login for database users
-                        if (dbUser != null)
+                        if(dbUser != null)
                         {
+                            // Save refresh token to database
+                            DbContext.RefreshTokens.Add(refreshToken);
                             dbUser.LastLogin = DateTime.UtcNow.ToString("o");
                             dbUser.UpdatedOn = DateTime.UtcNow;
                         }
