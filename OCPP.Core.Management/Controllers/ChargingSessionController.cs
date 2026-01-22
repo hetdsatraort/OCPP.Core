@@ -45,7 +45,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -72,7 +72,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "User not found or inactive"
@@ -85,7 +85,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargingStation == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found or inactive"
@@ -98,7 +98,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargePoint == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charge point not found"
@@ -113,7 +113,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (existingSession != null)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging gun is already in use"
@@ -128,7 +128,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (!ocppResult.Success)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = ocppResult.Message
@@ -170,7 +170,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error starting charging session");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while starting the charging session"
@@ -189,7 +189,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -201,7 +201,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (session == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging session not found or already ended"
@@ -210,7 +210,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (session.EndTime != DateTime.MinValue)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging session already ended"
@@ -221,7 +221,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "User not found or inactive"
@@ -234,7 +234,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargingStation == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found"
@@ -246,7 +246,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargePoint == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charge point not found"
@@ -321,7 +321,7 @@ namespace OCPP.Core.Management.Controllers
                     session.UpdatedOn = DateTime.UtcNow;
                     await _dbContext.SaveChangesAsync();
 
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = $"Insufficient wallet balance. Required: {totalFee:F2}, Available: {previousBalance:F2}. Please recharge your wallet.",
@@ -374,7 +374,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error ending charging session");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while ending the charging session"
@@ -425,7 +425,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging gun status");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging gun status"
@@ -447,7 +447,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (session == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging session not found"
@@ -464,7 +464,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging session details");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging session details"
@@ -483,7 +483,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -496,7 +496,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargingStation == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found or inactive"
@@ -509,7 +509,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargePoint == null)
                 {
-                    return NotFound(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "Charge point not found"
@@ -523,7 +523,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (!ocppResult.Success)
                 {
-                    return BadRequest(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = ocppResult.Message
@@ -548,7 +548,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error unlocking connector");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while unlocking the connector"
@@ -618,7 +618,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging sessions");
-                return StatusCode(500, new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging sessions"

@@ -17,7 +17,6 @@ namespace OCPP.Core.Management.Models.Auth
         [StringLength(200)]
         public string EMailID { get; set; }
 
-        [Required(ErrorMessage = "Phone number is required")]
         [StringLength(20)]
         public string PhoneNumber { get; set; }
 

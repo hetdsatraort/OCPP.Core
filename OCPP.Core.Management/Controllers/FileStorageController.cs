@@ -28,7 +28,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>File ID if successful</returns>
         [HttpPost("upload")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] string remarks = null)
         {
@@ -37,7 +36,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new { success = false, message = "User not authenticated" });
+                    return Ok(new { success = false, message = "User not authenticated" });
                 }
 
                 var result = await _fileStorageService.UploadFileAsync(file, userId, remarks);
@@ -52,11 +51,11 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                return BadRequest(new { success = false, message = result.Message });
+                return Ok(new { success = false, message = result.Message });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = $"Internal server error: {ex.Message}" });
+                return Ok( new { success = false, message = $"Internal server error: {ex.Message}" });
             }
         }
 
@@ -80,11 +79,11 @@ namespace OCPP.Core.Management.Controllers
                     return File(result.FileContent, result.ContentType, result.FileName);
                 }
 
-                return NotFound(new { success = false, message = result.Message });
+                return Ok(new { success = false, message = result.Message });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = $"Internal server error: {ex.Message}" });
+                return Ok(new { success = false, message = $"Internal server error: {ex.Message}" });
             }
         }
 
@@ -123,11 +122,11 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                return NotFound(new { success = false, message = result.Message });
+                return Ok(new { success = false, message = result.Message });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = $"Internal server error: {ex.Message}" });
+                return Ok(new { success = false, message = $"Internal server error: {ex.Message}" });
             }
         }
 
@@ -148,7 +147,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new { success = false, message = "User not authenticated" });
+                    return Ok(new { success = false, message = "User not authenticated" });
                 }
 
                 var result = await _fileStorageService.DeleteFileAsync(fileId, userId);
@@ -160,14 +159,14 @@ namespace OCPP.Core.Management.Controllers
 
                 if (result.Message.Contains("Unauthorized"))
                 {
-                    return StatusCode(403, new { success = false, message = result.Message });
+                    return Ok(new { success = false, message = result.Message });
                 }
 
-                return NotFound(new { success = false, message = result.Message });
+                return Ok(new { success = false, message = result.Message });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = $"Internal server error: {ex.Message}" });
+                return Ok(new { success = false, message = $"Internal server error: {ex.Message}" });
             }
         }
 
@@ -189,7 +188,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new { success = false, message = "User not authenticated" });
+                    return Ok(new { success = false, message = "User not authenticated" });
                 }
 
                 var result = await _fileStorageService.UpdateFileRemarksAsync(fileId, userId, request.Remarks);
@@ -201,14 +200,14 @@ namespace OCPP.Core.Management.Controllers
 
                 if (result.Message.Contains("Unauthorized"))
                 {
-                    return StatusCode(403, new { success = false, message = result.Message });
+                    return Ok(new { success = false, message = result.Message });
                 }
 
-                return NotFound(new { success = false, message = result.Message });
+                return Ok(new { success = false, message = result.Message });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = $"Internal server error: {ex.Message}" });
+                return Ok(new { success = false, message = $"Internal server error: {ex.Message}" });
             }
         }
     }

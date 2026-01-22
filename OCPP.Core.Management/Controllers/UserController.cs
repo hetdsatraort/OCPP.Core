@@ -44,7 +44,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -57,7 +57,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (existingUser != null)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User with this email or phone number already exists"
@@ -102,7 +102,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during user registration");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during registration"
@@ -121,7 +121,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -171,7 +171,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during login");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during login"
@@ -218,7 +218,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during logout");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during logout"
@@ -237,7 +237,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -252,7 +252,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (user == null || !VerifyPassword(request.OldPassword, user.Password))
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid credentials"
@@ -287,7 +287,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during password reset");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during password reset"
@@ -306,7 +306,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -327,7 +327,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -375,7 +375,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during profile update");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during profile update"
@@ -406,7 +406,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -445,7 +445,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during account deletion");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during account deletion"
@@ -523,7 +523,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during token refresh");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred during token refresh"
@@ -553,7 +553,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -570,7 +570,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving profile");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving profile"
@@ -589,7 +589,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -600,7 +600,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == request.UserId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -657,7 +657,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding wallet credits");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding credits"
@@ -676,7 +676,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -698,7 +698,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -711,7 +711,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (existingVehicle != null)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Vehicle with this registration number already exists"
@@ -763,7 +763,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding user vehicle");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding vehicle"
@@ -782,7 +782,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -805,7 +805,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (vehicle == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Vehicle not found"
@@ -856,7 +856,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating user vehicle");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating vehicle"
@@ -889,7 +889,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (vehicle == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Vehicle not found"
@@ -912,7 +912,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting user vehicle");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting vehicle"
@@ -950,7 +950,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving user list");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving users"
@@ -970,7 +970,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
                 if (user == null)
                 {
-                    return NotFound(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found"
@@ -1015,7 +1015,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving user details");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving user details"
@@ -1072,7 +1072,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving wallet details");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving wallet details"
@@ -1115,7 +1115,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving user vehicles");
-                return StatusCode(500, new AuthResponseDto
+                return Ok(new AuthResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving vehicles"

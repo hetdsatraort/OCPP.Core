@@ -38,7 +38,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -86,7 +86,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding charging hub");
-                return StatusCode(500, new ChargingHubResponseDto
+                return Ok(new ChargingHubResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding charging hub"
@@ -105,7 +105,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -115,7 +115,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == request.RecId && h.Active == 1);
                 if (hub == null)
                 {
-                    return NotFound(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Charging hub not found"
@@ -157,7 +157,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating charging hub");
-                return StatusCode(500, new ChargingHubResponseDto
+                return Ok(new ChargingHubResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating charging hub"
@@ -177,7 +177,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == hubId && h.Active == 1);
                 if (hub == null)
                 {
-                    return NotFound(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Charging hub not found"
@@ -212,7 +212,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting charging hub");
-                return StatusCode(500, new ChargingHubResponseDto
+                return Ok(new ChargingHubResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting charging hub"
@@ -266,7 +266,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging hub list");
-                return StatusCode(500, new ChargingHubResponseDto
+                return Ok(new ChargingHubResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging hubs"
@@ -328,7 +328,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging hub details");
-                return StatusCode(500, new ChargingHubResponseDto
+                return Ok(new ChargingHubResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging hub details"
@@ -347,7 +347,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingHubListResponseDto
+                    return Ok(new ChargingHubListResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -401,7 +401,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error searching charging hubs by location");
-                return StatusCode(500, new ChargingHubListResponseDto
+                return Ok(new ChargingHubListResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while searching charging hubs"
@@ -424,7 +424,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -435,7 +435,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == request.ChargingHubId && h.Active == 1);
                 if (hub == null)
                 {
-                    return NotFound(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Charging hub not found"
@@ -485,7 +485,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding charging station");
-                return StatusCode(500, new ChargingStationResponseDto
+                return Ok(new ChargingStationResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding charging station"
@@ -504,7 +504,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -514,7 +514,7 @@ namespace OCPP.Core.Management.Controllers
                 var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.RecId == request.RecId && s.Active == 1);
                 if (station == null)
                 {
-                    return NotFound(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found"
@@ -544,7 +544,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating charging station");
-                return StatusCode(500, new ChargingStationResponseDto
+                return Ok(new ChargingStationResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating charging station"
@@ -564,7 +564,7 @@ namespace OCPP.Core.Management.Controllers
                 var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.RecId == stationId && s.Active == 1);
                 if (station == null)
                 {
-                    return NotFound(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found"
@@ -598,7 +598,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting charging station");
-                return StatusCode(500, new ChargingStationResponseDto
+                return Ok(new ChargingStationResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting charging station"
@@ -636,7 +636,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging station list");
-                return StatusCode(500, new ChargingStationResponseDto
+                return Ok(new ChargingStationResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging stations"
@@ -656,7 +656,7 @@ namespace OCPP.Core.Management.Controllers
                 var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.RecId == stationId && s.Active == 1);
                 if (station == null)
                 {
-                    return NotFound(new ChargingStationResponseDto
+                    return Ok(new ChargingStationResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found"
@@ -692,7 +692,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging station details");
-                return StatusCode(500, new ChargingStationResponseDto
+                return Ok(new ChargingStationResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging station details"
@@ -715,7 +715,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -728,7 +728,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (existing != null)
                 {
-                    return BadRequest(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Charger with this connector ID already exists for this charge point"
@@ -762,7 +762,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding charger");
-                return StatusCode(500, new ChargerResponseDto
+                return Ok(new ChargerResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding charger"
@@ -781,7 +781,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -793,7 +793,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (charger == null)
                 {
-                    return NotFound(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Charger not found"
@@ -824,7 +824,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating charger");
-                return StatusCode(500, new ChargerResponseDto
+                return Ok(new ChargerResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating charger"
@@ -846,7 +846,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (charger == null)
                 {
-                    return NotFound(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Charger not found"
@@ -869,7 +869,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting charger");
-                return StatusCode(500, new ChargerResponseDto
+                return Ok(new ChargerResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting charger"
@@ -889,7 +889,7 @@ namespace OCPP.Core.Management.Controllers
                 var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.RecId == stationId && s.Active == 1);
                 if (station == null)
                 {
-                    return NotFound(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Charging station not found"
@@ -915,7 +915,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charger list");
-                return StatusCode(500, new ChargerResponseDto
+                return Ok(new ChargerResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving chargers"
@@ -937,7 +937,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (charger == null)
                 {
-                    return NotFound(new ChargerResponseDto
+                    return Ok(new ChargerResponseDto
                     {
                         Success = false,
                         Message = "Charger not found"
@@ -957,7 +957,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charger details");
-                return StatusCode(500, new ChargerResponseDto
+                return Ok(new ChargerResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charger details"
@@ -1028,7 +1028,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding hub review");
-                return StatusCode(500, new ReviewResponseDto
+                return Ok(new ReviewResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding review"
@@ -1047,7 +1047,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -1056,7 +1056,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (string.IsNullOrEmpty(request.ChargingStationId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "ChargingStationId is required"
@@ -1095,7 +1095,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding station review");
-                return StatusCode(500, new ReviewResponseDto
+                return Ok(new ReviewResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding review"
@@ -1114,7 +1114,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -1124,7 +1124,7 @@ namespace OCPP.Core.Management.Controllers
                 var review = await _dbContext.ChargingHubReviews.FirstOrDefaultAsync(r => r.RecId == request.RecId && r.Active == 1);
                 if (review == null)
                 {
-                    return NotFound(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "Review not found"
@@ -1153,7 +1153,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating review");
-                return StatusCode(500, new ReviewResponseDto
+                return Ok(new ReviewResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating review"
@@ -1173,7 +1173,7 @@ namespace OCPP.Core.Management.Controllers
                 var review = await _dbContext.ChargingHubReviews.FirstOrDefaultAsync(r => r.RecId == reviewId && r.Active == 1);
                 if (review == null)
                 {
-                    return NotFound(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "Review not found"
@@ -1195,7 +1195,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting review");
-                return StatusCode(500, new ReviewResponseDto
+                return Ok(new ReviewResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting review"
@@ -1232,7 +1232,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving hub reviews");
-                return StatusCode(500, new ReviewResponseDto
+                return Ok(new ReviewResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving reviews"

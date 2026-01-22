@@ -36,7 +36,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -69,7 +69,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding charger type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding charger type"
@@ -85,7 +85,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -97,7 +97,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargerType == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Charger type not found"
@@ -124,7 +124,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating charger type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating charger type"
@@ -143,7 +143,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (chargerType == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Charger type not found"
@@ -165,7 +165,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting charger type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting charger type"
@@ -195,7 +195,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charger type list");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charger types"
@@ -215,7 +215,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -246,7 +246,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding battery type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding battery type"
@@ -262,7 +262,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -274,7 +274,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (batteryType == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Battery type not found"
@@ -299,7 +299,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating battery type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating battery type"
@@ -318,7 +318,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (batteryType == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Battery type not found"
@@ -340,7 +340,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting battery type");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting battery type"
@@ -370,7 +370,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving battery type list");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving battery types"
@@ -390,7 +390,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -422,7 +422,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding battery capacity");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding battery capacity"
@@ -438,7 +438,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -450,7 +450,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (batteryCapacity == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Battery capacity not found"
@@ -476,7 +476,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating battery capacity");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating battery capacity"
@@ -495,7 +495,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (batteryCapacity == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Battery capacity not found"
@@ -517,7 +517,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting battery capacity");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting battery capacity"
@@ -547,7 +547,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving battery capacity list");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving battery capacities"
@@ -567,7 +567,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -599,7 +599,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding car manufacturer");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding car manufacturer"
@@ -615,7 +615,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -627,7 +627,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (manufacturer == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Car manufacturer not found"
@@ -653,7 +653,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating car manufacturer");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating car manufacturer"
@@ -672,7 +672,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (manufacturer == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Car manufacturer not found"
@@ -694,7 +694,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting car manufacturer");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting car manufacturer"
@@ -724,7 +724,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving car manufacturer list");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving car manufacturers"
@@ -742,7 +742,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (manufacturer == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Car manufacturer not found"
@@ -759,7 +759,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving car manufacturer details");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving car manufacturer details"
@@ -779,7 +779,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -819,7 +819,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error adding EV model");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while adding EV model"
@@ -835,7 +835,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -847,7 +847,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (evModel == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "EV model not found"
@@ -881,7 +881,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error updating EV model");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while updating EV model"
@@ -900,7 +900,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (evModel == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "EV model not found"
@@ -922,7 +922,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error deleting EV model");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while deleting EV model"
@@ -956,7 +956,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving EV model list");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving EV models"
@@ -990,7 +990,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving EV model list by manufacturer");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving EV models"
@@ -1008,7 +1008,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (evModel == null)
                 {
-                    return NotFound(new HardwareMasterResponseDto
+                    return Ok(new HardwareMasterResponseDto
                     {
                         Success = false,
                         Message = "EV model not found"
@@ -1025,7 +1025,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving EV model details");
-                return StatusCode(500, new HardwareMasterResponseDto
+                return Ok(new HardwareMasterResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving EV model details"
