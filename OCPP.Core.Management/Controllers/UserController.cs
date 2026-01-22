@@ -1144,16 +1144,16 @@ namespace OCPP.Core.Management.Controllers
             Response.Cookies.Append("accessToken", accessToken, new CookieOptions
             {
                 HttpOnly = true,
-                Secure = false, // Set to true in production with HTTPS
-                SameSite = SameSiteMode.Lax, // Changed from Strict to Lax for better API compatibility
-                Expires = DateTimeOffset.UtcNow.AddMinutes(15)
+                Secure = true, // Set to true in production with HTTPS
+                SameSite = SameSiteMode.None, // Changed from Strict to Lax for better API compatibility
+                Expires = DateTimeOffset.UtcNow.AddMinutes(150)
             });
 
             Response.Cookies.Append("refreshToken", refreshToken, new CookieOptions
             {
                 HttpOnly = true,
-                Secure = false, // Set to true in production with HTTPS
-                SameSite = SameSiteMode.Lax, // Changed from Strict to Lax for better API compatibility
+                Secure = true, // Set to true in production with HTTPS
+                SameSite = SameSiteMode.None, // Changed from Strict to Lax for better API compatibility
                 Expires = DateTimeOffset.UtcNow.AddDays(7)
             });
         }

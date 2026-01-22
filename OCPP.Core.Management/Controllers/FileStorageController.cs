@@ -28,7 +28,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>File ID if successful</returns>
         [HttpPost("upload")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] string remarks = null)
         {
             try
@@ -66,8 +65,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>File content</returns>
         [HttpGet("download/{fileId}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> DownloadFile(string fileId)
         {
             try
@@ -94,8 +91,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>File metadata</returns>
         [HttpGet("info/{fileId}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<IActionResult> GetFileInfo(string fileId)
         {
             try
@@ -137,9 +132,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>Success status</returns>
         [HttpDelete("{fileId}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> DeleteFile(string fileId)
         {
             try
@@ -178,9 +170,6 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>Success status</returns>
         [HttpPatch("{fileId}/remarks")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> UpdateFileRemarks(string fileId, [FromBody] UpdateFileRemarksRequest request)
         {
             try

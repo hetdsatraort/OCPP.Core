@@ -223,16 +223,16 @@ namespace OCPP.Core.Management.Controllers
             Response.Cookies.Append("accessToken", accessToken, new Microsoft.AspNetCore.Http.CookieOptions
             {
                 HttpOnly = true,
-                Secure = false, // Set to true in production with HTTPS
-                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
+                Secure = true, // Set to true in production with HTTPS
+                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.None,
                 Expires = DateTimeOffset.UtcNow.AddMinutes(15)
             });
 
             Response.Cookies.Append("refreshToken", refreshToken, new Microsoft.AspNetCore.Http.CookieOptions
             {
                 HttpOnly = true,
-                Secure = false, // Set to true in production with HTTPS
-                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax,
+                Secure = true, // Set to true in production with HTTPS
+                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.None,
                 Expires = DateTimeOffset.UtcNow.AddDays(7)
             });
         }
