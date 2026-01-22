@@ -11,6 +11,7 @@ using System;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -55,7 +56,7 @@ namespace OCPP.Core.Management.Controllers
                 string userId = request.UserId;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    userId = User.FindFirst("userId")?.Value;
+                    userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 }
 
                 if (string.IsNullOrEmpty(userId))
