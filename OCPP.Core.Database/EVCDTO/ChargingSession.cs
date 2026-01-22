@@ -9,6 +9,7 @@ namespace OCPP.Core.Database.EVCDTO
     public class ChargingSession
     {
         public string RecId { get; set; }
+        public string UserId { get; set; }
         public string ChargingGunId { get; set; }
         public string ChargingStationID { get; set; }
         public string StartMeterReading { get; set; }

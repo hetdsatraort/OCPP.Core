@@ -51,6 +51,33 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Get user ID from token or request
+                string userId = request.UserId;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    userId = User.FindFirst("userId")?.Value;
+                }
+
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Unauthorized(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "User not authenticated"
+                    });
+                }
+
+                // Verify user exists and is active
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found or inactive"
+                    });
+                }
+
                 // Verify charging station exists
                 var chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(cs => cs.RecId == request.ChargingStationId && cs.Active == 1);
@@ -111,6 +138,7 @@ namespace OCPP.Core.Management.Controllers
                 var session = new Database.EVCDTO.ChargingSession
                 {
                     RecId = Guid.NewGuid().ToString(),
+                    UserId = userId,
                     ChargingGunId = request.ChargingGunId,
                     ChargingStationID = request.ChargingStationId,
                     StartMeterReading = request.StartMeterReading,
@@ -129,7 +157,7 @@ namespace OCPP.Core.Management.Controllers
                 _dbContext.ChargingSessions.Add(session);
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charging session started: {session.RecId} at station {request.ChargingStationId}");
+                _logger.LogInformation($"Charging session started: {session.RecId} for user {userId} at station {request.ChargingStationId}");
 
                 return Ok(new ChargingSessionResponseDto
                 {
@@ -188,6 +216,17 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Verify user exists
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found or inactive"
+                    });
+                }
+
                 // Get charging station and charge point details
                 var chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
@@ -235,7 +274,9 @@ namespace OCPP.Core.Management.Controllers
                 session.EndTime = DateTime.UtcNow;
                 session.EndMeterReading = request.EndMeterReading;
 
-                // Calculate energy transmitted
+                decimal totalFee = 0;
+
+                // Calculate energy transmitted and total fee
                 if (double.TryParse(session.StartMeterReading, out double startReading) &&
                     double.TryParse(request.EndMeterReading, out double endReading))
                 {
@@ -245,7 +286,7 @@ namespace OCPP.Core.Management.Controllers
                     // Calculate total fee based on tariff and energy
                     if (double.TryParse(session.ChargingTariff, out double tariff))
                     {
-                        double totalFee = energyTransmitted * tariff;
+                        totalFee = (decimal)(energyTransmitted * tariff);
                         session.ChargingTotalFee = totalFee.ToString("F2");
                     }
 
@@ -258,16 +299,75 @@ namespace OCPP.Core.Management.Controllers
                     }
                 }
 
+                // Get current wallet balance
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == session.UserId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                decimal previousBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
+                {
+                    previousBalance = lastBalance;
+                }
+
+                // Check if user has sufficient balance
+                if (previousBalance < totalFee)
+                {
+                    _logger.LogWarning($"Insufficient wallet balance for user {session.UserId}. Required: {totalFee}, Available: {previousBalance}");
+                    
+                    // Still update the session but mark it with a warning
+                    session.UpdatedOn = DateTime.UtcNow;
+                    await _dbContext.SaveChangesAsync();
+
+                    return BadRequest(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = $"Insufficient wallet balance. Required: {totalFee:F2}, Available: {previousBalance:F2}. Please recharge your wallet.",
+                        Data = await MapToChargingSessionDto(session)
+                    });
+                }
+
+                decimal newBalance = previousBalance - totalFee;
+
+                // Create wallet transaction log for charging payment
+                var walletTransaction = new Database.EVCDTO.WalletTransactionLog
+                {
+                    RecId = Guid.NewGuid().ToString(),
+                    UserId = session.UserId,
+                    PreviousCreditBalance = previousBalance.ToString("F2"),
+                    CurrentCreditBalance = newBalance.ToString("F2"),
+                    TransactionType = "Debit",
+                    ChargingSessionId = session.RecId,
+                    AdditionalInfo1 = $"Charging session at {chargingStation.ChargingPointId}",
+                    AdditionalInfo2 = $"Energy: {session.EnergyTransmitted} kWh, Rate: {session.ChargingTariff}",
+                    AdditionalInfo3 = $"Duration: {(session.EndTime - session.StartTime).TotalMinutes:F0} minutes",
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                _dbContext.WalletTransactionLogs.Add(walletTransaction);
                 session.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charging session ended: {session.RecId}");
+                _logger.LogInformation($"Charging session ended: {session.RecId}. Fee: {totalFee:F2} debited from wallet. New balance: {newBalance:F2}");
 
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = $"Charging session ended successfully. OCPP Status: {ocppResult.Message}",
-                    Data = await MapToChargingSessionDto(session)
+                    Message = $"Charging session ended successfully. Amount {totalFee:F2} debited from wallet. OCPP Status: {ocppResult.Message}",
+                    Data = new
+                    {
+                        Session = await MapToChargingSessionDto(session),
+                        WalletTransaction = new
+                        {
+                            TransactionId = walletTransaction.RecId,
+                            PreviousBalance = previousBalance,
+                            AmountDebited = totalFee,
+                            NewBalance = newBalance
+                        }
+                    }
                 });
             }
             catch (Exception ex)
