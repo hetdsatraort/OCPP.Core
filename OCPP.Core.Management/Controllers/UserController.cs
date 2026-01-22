@@ -9,6 +9,7 @@ using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Services;
 using System;
 using System.Linq;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -314,7 +315,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 // Get user ID from token
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -393,7 +394,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 // Get user ID from token
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -540,7 +541,7 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -684,7 +685,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 // Get user ID from token
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -790,7 +791,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 // Get user ID from token
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -874,7 +875,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 // Get user ID from token
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -1032,7 +1033,7 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
@@ -1089,7 +1090,7 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var userId = User.FindFirst("userId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Unauthorized(new AuthResponseDto
