@@ -1,0 +1,130 @@
+{
+  "info": {
+    "name": "OCPP File Storage API",
+    "description": "API collection for testing file upload, download, and management functionality",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Upload File",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": []
+            },
+            {
+              "key": "remarks",
+              "value": "Test file upload",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/FileStorage/upload",
+          "host": ["{{base_url}}"],
+          "path": ["api", "FileStorage", "upload"]
+        },
+        "description": "Upload a file to the storage system. File size limit is 10 MB."
+      },
+      "response": []
+    },
+    {
+      "name": "Download File",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/FileStorage/download/{{file_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "FileStorage", "download", "{{file_id}}"]
+        },
+        "description": "Download a file by its ID. Returns the file content with appropriate headers."
+      },
+      "response": []
+    },
+    {
+      "name": "Get File Info",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/FileStorage/info/{{file_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "FileStorage", "info", "{{file_id}}"]
+        },
+        "description": "Get file metadata without downloading the actual file content."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete File",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/FileStorage/{{file_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "FileStorage", "{{file_id}}"]
+        },
+        "description": "Soft delete a file. Only the file owner can delete their files."
+      },
+      "response": []
+    },
+    {
+      "name": "Update File Remarks",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"remarks\": \"Updated remarks text\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/FileStorage/{{file_id}}/remarks",
+          "host": ["{{base_url}}"],
+          "path": ["api", "FileStorage", "{{file_id}}", "remarks"]
+        },
+        "description": "Update the remarks/notes for a file. Only the file owner can update."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://localhost:5001",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "YOUR_JWT_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "file_id",
+      "value": "FILE_ID_FROM_UPLOAD_RESPONSE",
+      "type": "string"
+    }
+  ]
+}

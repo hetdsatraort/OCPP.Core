@@ -13,6 +13,8 @@ namespace OCPP.Core.Database.EVCDTO
         public string FileName { get; set; }
         public string FileType { get; set; }
         public string FileURL { get; set; }
+        public byte[] FileContent { get; set; }
+        public long FileSize { get; set; }
         public string Remarks { get; set; }
         public int Active { get; set; }
         public DateTime CreatedOn { get; set; }

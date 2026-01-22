@@ -154,6 +154,7 @@ namespace OCPP.Core.Management
 
             services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
+            services.AddScoped<IFileStorageService, FileStorageService>();
             services.AddDistributedMemoryCache();
             
             services.AddSwaggerGen(c =>
