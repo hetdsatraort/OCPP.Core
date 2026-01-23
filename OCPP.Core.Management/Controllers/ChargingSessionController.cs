@@ -140,7 +140,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
-                    ChargingGunId = request.ChargingGunId,
+                    ChargingGunId = request.ConnectorId.ToString(),
                     ChargingStationID = request.ChargingStationId,
                     StartMeterReading = request.StartMeterReading,
                     EndMeterReading = "0",
