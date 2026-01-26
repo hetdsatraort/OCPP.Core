@@ -1,0 +1,292 @@
+{
+  "info": {
+    "name": "Charging Hub Comprehensive List API",
+    "description": "API collection for testing comprehensive charging hub listing with stations and chargers",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Find Nearby Hubs with Available Chargers",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"latitude\": 40.7128,\n  \"longitude\": -74.0060,\n  \"radiusKm\": 10,\n  \"hasAvailableChargers\": true,\n  \"sortBy\": \"Distance\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Find charging hubs within 10km radius with at least one available charger, sorted by distance."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Search Hubs by City",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 20,\n  \"city\": \"New York\",\n  \"sortBy\": \"Rating\",\n  \"sortOrder\": \"Desc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Get all hubs in New York, sorted by rating (highest first)."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Search by Text (Hub Name/Address)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"searchTerm\": \"downtown\",\n  \"sortBy\": \"Name\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Search for hubs with 'downtown' in name, city, state, or address."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Filter by State and Charger Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"state\": \"CA\",\n  \"chargerStatus\": \"Available\",\n  \"sortBy\": \"AvailableChargers\",\n  \"sortOrder\": \"Desc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Find hubs in California with available chargers, sorted by number of available chargers."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Get All Hubs (Paginated)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 20,\n  \"sortBy\": \"Name\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Get all hubs with default pagination, sorted alphabetically by name."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Find Hubs by Pincode",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"pincode\": \"10001\",\n  \"sortBy\": \"Rating\",\n  \"sortOrder\": \"Desc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Find all hubs in a specific pincode area."
+      },
+      "response": []
+    },
+    {
+      "name": "7. Sort by Total Chargers",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"sortBy\": \"TotalChargers\",\n  \"sortOrder\": \"Desc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Get hubs sorted by total number of chargers (largest first)."
+      },
+      "response": []
+    },
+    {
+      "name": "8. Location Search with Multiple Filters",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"latitude\": 34.0522,\n  \"longitude\": -118.2437,\n  \"radiusKm\": 25,\n  \"city\": \"Los Angeles\",\n  \"hasAvailableChargers\": true,\n  \"sortBy\": \"Distance\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Complex search: within 25km of LA downtown, in LA city, with available chargers."
+      },
+      "response": []
+    },
+    {
+      "name": "9. Page 2 Results",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 2,\n  \"pageSize\": 10,\n  \"sortBy\": \"Name\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Get second page of results."
+      },
+      "response": []
+    },
+    {
+      "name": "10. Large Page Size",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 50,\n  \"sortBy\": \"Name\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Get larger batch of results (50 hubs per page)."
+      },
+      "response": []
+    },
+    {
+      "name": "11. Filter Charging Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 10,\n  \"chargerStatus\": \"Charging\",\n  \"sortBy\": \"Name\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Find hubs with chargers currently in use (Charging status)."
+      },
+      "response": []
+    },
+    {
+      "name": "12. Wide Radius Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"pageNumber\": 1,\n  \"pageSize\": 20,\n  \"latitude\": 37.7749,\n  \"longitude\": -122.4194,\n  \"radiusKm\": 100,\n  \"sortBy\": \"Distance\",\n  \"sortOrder\": \"Asc\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ChargingHub/comprehensive-list",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ChargingHub", "comprehensive-list"]
+        },
+        "description": "Find all hubs within 100km of San Francisco."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://localhost:5001",
+      "type": "string"
+    }
+  ]
+}
