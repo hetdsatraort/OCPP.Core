@@ -287,7 +287,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == hubId && h.Active == 1);
                 if (hub == null)
                 {
-                    return NotFound(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Charging hub not found"
