@@ -393,6 +393,8 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.BatteryTypeId).HasMaxLength(50);
 
                 entity.Property(e => e.BatteryCapacityId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerTypeId).HasMaxLength(50);
             });
 
             modelBuilder.Entity<EVCDTO.WalletTransactionLog>(entity =>

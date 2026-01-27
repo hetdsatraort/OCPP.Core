@@ -13,6 +13,7 @@ namespace OCPP.Core.Management.Models.Auth
         public int DefaultConfig { get; set; }
         public string BatteryTypeId { get; set; }
         public string BatteryCapacityId { get; set; }
+        public string ChargerTypeId { get; set; }
         public DateTime CreatedOn { get; set; }
         public DateTime UpdatedOn { get; set; }
     }
