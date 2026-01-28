@@ -18,6 +18,8 @@ namespace OCPP.Core.Management.Models.Auth
         public string BatteryTypeId { get; set; }
 
         public string BatteryCapacityId { get; set; }
+
+        public string ChargerTypeId { get; set; }
     }
 
     public class UserVehicleUpdateDto : UserVehicleRequestDto

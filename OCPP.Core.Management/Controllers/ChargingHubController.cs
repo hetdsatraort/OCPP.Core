@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Management.Models.ChargingHub;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -286,7 +287,7 @@ namespace OCPP.Core.Management.Controllers
                 var hub = await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == hubId && h.Active == 1);
                 if (hub == null)
                 {
-                    return NotFound(new ChargingHubResponseDto
+                    return Ok(new ChargingHubResponseDto
                     {
                         Success = false,
                         Message = "Charging hub not found"
@@ -967,6 +968,215 @@ namespace OCPP.Core.Management.Controllers
 
         #endregion
 
+        #region Comprehensive Listing API
+
+        /// <summary>
+        /// Get comprehensive list of charging hubs with stations and chargers
+        /// Supports search, filtering, and pagination
+        /// </summary>
+        [HttpPost("comprehensive-list")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetComprehensiveList([FromBody] ChargingHubComprehensiveSearchDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new ChargingHubComprehensiveResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Get all active hubs
+                var hubsQuery = _dbContext.ChargingHubs.Where(h => h.Active == 1);
+
+                // Apply text search filter
+                if (!string.IsNullOrEmpty(request.SearchTerm))
+                {
+                    var searchLower = request.SearchTerm.ToLower();
+                    hubsQuery = hubsQuery.Where(h =>
+                        h.ChargingHubName.ToLower().Contains(searchLower) ||
+                        h.City.ToLower().Contains(searchLower) ||
+                        h.State.ToLower().Contains(searchLower) ||
+                        h.AddressLine1.ToLower().Contains(searchLower)
+                    );
+                }
+
+                // Apply city filter
+                if (!string.IsNullOrEmpty(request.City))
+                {
+                    hubsQuery = hubsQuery.Where(h => h.City.ToLower() == request.City.ToLower());
+                }
+
+                // Apply state filter
+                if (!string.IsNullOrEmpty(request.State))
+                {
+                    hubsQuery = hubsQuery.Where(h => h.State.ToLower() == request.State.ToLower());
+                }
+
+                // Apply pincode filter
+                if (!string.IsNullOrEmpty(request.Pincode))
+                {
+                    hubsQuery = hubsQuery.Where(h => h.Pincode == request.Pincode);
+                }
+
+                var allHubs = await hubsQuery.ToListAsync();
+
+                // Build comprehensive hub list with stations and chargers
+                var hubList = new List<ChargingHubWithStationsDto>();
+
+                foreach (var hub in allHubs)
+                {
+                    // Calculate distance if location provided
+                    double? distance = null;
+                    if (request.Latitude.HasValue && request.Longitude.HasValue &&
+                        double.TryParse(hub.Latitude, out var hubLat) &&
+                        double.TryParse(hub.Longitude, out var hubLng))
+                    {
+                        distance = CalculateDistance(
+                            request.Latitude.Value,
+                            request.Longitude.Value,
+                            hubLat,
+                            hubLng
+                        );
+
+                        // Filter by radius if specified
+                        if (request.RadiusKm.HasValue && distance > request.RadiusKm.Value)
+                        {
+                            continue;
+                        }
+                    }
+
+                    // Get stations for this hub
+                    var stations = await _dbContext.ChargingStations
+                        .Where(s => s.ChargingHubId == hub.RecId && s.Active == 1)
+                        .ToListAsync();
+
+                    var stationList = new List<ChargingStationWithChargersDto>();
+                    int totalChargers = 0;
+                    int availableChargers = 0;
+
+                    foreach (var station in stations)
+                    {
+                        var chargePoint = await _dbContext.ChargePoints
+                            .FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId);
+
+                        // Get chargers for this station
+                        var chargers = await _dbContext.ConnectorStatuses
+                            .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
+                            .ToListAsync();
+
+                        // Filter by charger status if specified
+                        if (!string.IsNullOrEmpty(request.ChargerStatus))
+                        {
+                            chargers = chargers
+                                .Where(c => c.LastStatus.Equals(request.ChargerStatus, StringComparison.OrdinalIgnoreCase))
+                                .ToList();
+                        }
+
+                        var chargerDtos = chargers.Select(c => MapToChargerDto(c, station.RecId, chargePoint?.Name)).ToList();
+                        int stationAvailable = chargers.Count(c => c.LastStatus.Equals("Available", StringComparison.OrdinalIgnoreCase));
+
+                        totalChargers += chargers.Count;
+                        availableChargers += stationAvailable;
+
+                        stationList.Add(new ChargingStationWithChargersDto
+                        {
+                            RecId = station.RecId,
+                            ChargingPointId = station.ChargingPointId,
+                            ChargePointName = chargePoint?.Name,
+                            ChargingGunCount = station.ChargingGunCount,
+                            ChargingStationImage = station.ChargingStationImage,
+                            TotalChargers = chargers.Count,
+                            AvailableChargers = stationAvailable,
+                            Chargers = chargerDtos
+                        });
+                    }
+
+                    // Apply available chargers filter
+                    if (request.HasAvailableChargers.HasValue && request.HasAvailableChargers.Value)
+                    {
+                        if (availableChargers == 0)
+                        {
+                            continue;
+                        }
+                    }
+
+                    // Get reviews for rating
+                    var reviews = await _dbContext.ChargingHubReviews
+                        .Where(r => r.ChargingHubId == hub.RecId && r.Active == 1)
+                        .ToListAsync();
+
+                    var avgRating = reviews.Any() ? reviews.Average(r => r.Rating) : 0;
+
+                    hubList.Add(new ChargingHubWithStationsDto
+                    {
+                        RecId = hub.RecId,
+                        ChargingHubName = hub.ChargingHubName,
+                        AddressLine1 = hub.AddressLine1,
+                        City = hub.City,
+                        State = hub.State,
+                        Pincode = hub.Pincode,
+                        Latitude = hub.Latitude,
+                        Longitude = hub.Longitude,
+                        ChargingHubImage = hub.ChargingHubImage,
+                        OpeningTime = hub.OpeningTime.ToString(),
+                        ClosingTime = hub.ClosingTime.ToString(),
+                        TypeATariff = hub.TypeATariff,
+                        TypeBTariff = hub.TypeBTariff,
+                        Amenities = hub.Amenities,
+                        DistanceKm = distance.HasValue ? Math.Round(distance.Value, 2) : null,
+                        AverageRating = Math.Round(avgRating, 1),
+                        TotalReviews = reviews.Count,
+                        TotalStations = stations.Count,
+                        TotalChargers = totalChargers,
+                        AvailableChargers = availableChargers,
+                        Stations = stationList
+                    });
+                }
+
+                // Apply sorting
+                hubList = ApplySorting(hubList, request.SortBy, request.SortOrder);
+
+                // Get total count before pagination
+                var totalCount = hubList.Count;
+
+                // Apply pagination
+                var paginatedHubs = hubList
+                    .Skip((request.PageNumber - 1) * request.PageSize)
+                    .Take(request.PageSize)
+                    .ToList();
+
+                var totalPages = (int)Math.Ceiling((double)totalCount / request.PageSize);
+
+                _logger.LogInformation($"Comprehensive list retrieved: {paginatedHubs.Count} hubs (page {request.PageNumber} of {totalPages})");
+
+                return Ok(new ChargingHubComprehensiveResponseDto
+                {
+                    Success = true,
+                    Message = $"Found {totalCount} charging hub(s) matching criteria",
+                    Hubs = paginatedHubs,
+                    TotalCount = totalCount,
+                    PageNumber = request.PageNumber,
+                    PageSize = request.PageSize,
+                    TotalPages = totalPages
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving comprehensive list");
+                return StatusCode(500, new ChargingHubComprehensiveResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving comprehensive list"
+                });
+            }
+        }
+
+        #endregion
+
         #region Review Management
 
         /// <summary>
@@ -1350,6 +1560,44 @@ namespace OCPP.Core.Management.Controllers
         private double ToRadians(double degrees)
         {
             return degrees * (Math.PI / 180);
+        }
+
+        /// <summary>
+        /// Apply sorting to hub list based on criteria
+        /// </summary>
+        private List<ChargingHubWithStationsDto> ApplySorting(
+            List<ChargingHubWithStationsDto> hubs,
+            string sortBy,
+            string sortOrder)
+        {
+            var isDescending = sortOrder?.Equals("Desc", StringComparison.OrdinalIgnoreCase) ?? false;
+
+            return sortBy?.ToLower() switch
+            {
+                "distance" => isDescending
+                    ? hubs.OrderByDescending(h => h.DistanceKm ?? double.MaxValue).ToList()
+                    : hubs.OrderBy(h => h.DistanceKm ?? double.MaxValue).ToList(),
+
+                "name" => isDescending
+                    ? hubs.OrderByDescending(h => h.ChargingHubName).ToList()
+                    : hubs.OrderBy(h => h.ChargingHubName).ToList(),
+
+                "rating" => isDescending
+                    ? hubs.OrderByDescending(h => h.AverageRating).ToList()
+                    : hubs.OrderBy(h => h.AverageRating).ToList(),
+
+                "availablechargers" => isDescending
+                    ? hubs.OrderByDescending(h => h.AvailableChargers).ToList()
+                    : hubs.OrderBy(h => h.AvailableChargers).ToList(),
+
+                "totalchargers" => isDescending
+                    ? hubs.OrderByDescending(h => h.TotalChargers).ToList()
+                    : hubs.OrderBy(h => h.TotalChargers).ToList(),
+
+                _ => isDescending
+                    ? hubs.OrderByDescending(h => h.DistanceKm ?? double.MaxValue).ToList()
+                    : hubs.OrderBy(h => h.DistanceKm ?? double.MaxValue).ToList()
+            };
         }
 
         #endregion

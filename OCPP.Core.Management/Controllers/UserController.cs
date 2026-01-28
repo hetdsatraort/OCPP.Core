@@ -744,6 +744,7 @@ namespace OCPP.Core.Management.Controllers
                     DefaultConfig = request.DefaultConfig,
                     BatteryTypeId = request.BatteryTypeId,
                     BatteryCapacityId = request.BatteryCapacityId,
+                    ChargerTypeId = request.ChargerTypeId,
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
                     UpdatedOn = DateTime.UtcNow
@@ -841,6 +842,8 @@ namespace OCPP.Core.Management.Controllers
                     vehicle.BatteryTypeId = request.BatteryTypeId;
                 if (!string.IsNullOrEmpty(request.BatteryCapacityId))
                     vehicle.BatteryCapacityId = request.BatteryCapacityId;
+                if (!string.IsNullOrEmpty(request.ChargerTypeId))
+                    vehicle.ChargerTypeId = request.ChargerTypeId;
 
                 vehicle.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
@@ -1202,6 +1205,7 @@ namespace OCPP.Core.Management.Controllers
                 DefaultConfig = vehicle.DefaultConfig,
                 BatteryTypeId = vehicle.BatteryTypeId,
                 BatteryCapacityId = vehicle.BatteryCapacityId,
+                ChargerTypeId = vehicle.ChargerTypeId,
                 CreatedOn = vehicle.CreatedOn,
                 UpdatedOn = vehicle.UpdatedOn
             };

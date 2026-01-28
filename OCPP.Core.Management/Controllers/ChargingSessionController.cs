@@ -135,17 +135,33 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Wait briefly for transaction to be recorded in database
+                await Task.Delay(1000);
+
+                // Get the actual OCPP transaction that was just created
+                var ocppTransaction = await _dbContext.Transactions
+                    .Where(t => t.ChargePointId == chargePoint.ChargePointId && 
+                               t.ConnectorId == request.ConnectorId &&
+                               t.StartTagId == request.ChargeTagId)
+                    .OrderByDescending(t => t.TransactionId)
+                    .FirstOrDefaultAsync();
+
+                int? transactionId = ocppTransaction?.TransactionId;
+                double meterStart = ocppTransaction?.MeterStart ?? 0;
+                DateTime startTime = ocppTransaction?.StartTime ?? DateTime.UtcNow;
+
                 // Create new charging session in database
                 var session = new Database.EVCDTO.ChargingSession
                 {
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
+                    TransactionId = transactionId,
                     ChargingGunId = request.ConnectorId.ToString(),
                     ChargingStationID = request.ChargingStationId,
-                    StartMeterReading = request.StartMeterReading,
+                    StartMeterReading = meterStart.ToString("F2"),
                     EndMeterReading = "0",
                     EnergyTransmitted = "0",
-                    StartTime = DateTime.UtcNow,
+                    StartTime = startTime,
                     EndTime = DateTime.MinValue,
                     ChargingSpeed = "0",
                     ChargingTariff = request.ChargingTariff ?? "0",
@@ -158,13 +174,19 @@ namespace OCPP.Core.Management.Controllers
                 _dbContext.ChargingSessions.Add(session);
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charging session started: {session.RecId} for user {userId} at station {request.ChargingStationId}");
+                _logger.LogInformation($"Charging session started: {session.RecId} (Transaction: {transactionId}) for user {userId} at station {request.ChargingStationId}");
 
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
                     Message = $"Charging session started successfully. OCPP Status: {ocppResult.Message}",
-                    Data = await MapToChargingSessionDto(session)
+                    Data = new
+                    {
+                        Session = await MapToChargingSessionDto(session),
+                        TransactionId = transactionId,
+                        MeterStart = meterStart,
+                        Tariff = session.ChargingTariff
+                    }
                 });
             }
             catch (Exception ex)
@@ -253,10 +275,9 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Extract connector ID from charging gun ID (or use a stored value)
-                // Assuming ChargingGunId format is "GUN{ConnectorId}" or similar
-                int connectorId = 1; // Default value
-                if (int.TryParse(session.ChargingGunId.Replace("GUN", ""), out int extractedId))
+                // Extract connector ID from charging gun ID
+                int connectorId = 1;
+                if (int.TryParse(session.ChargingGunId, out int extractedId))
                 {
                     connectorId = extractedId;
                 }
@@ -271,33 +292,80 @@ namespace OCPP.Core.Management.Controllers
                     _logger.LogWarning($"OCPP stop transaction failed: {ocppResult.Message}. Continuing with database update.");
                 }
 
+                // Wait for transaction to be updated in database
+                await Task.Delay(1000);
+
+                // Get actual meter readings from OCPP Transaction table
+                double startReading = 0;
+                double endReading = 0;
+                DateTime actualStartTime = session.StartTime;
+                DateTime actualEndTime = DateTime.UtcNow;
+
+                if (session.TransactionId.HasValue)
+                {
+                    var transaction = await _dbContext.Transactions
+                        .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                    if (transaction != null)
+                    {
+                        startReading = transaction.MeterStart;
+                        endReading = transaction.MeterStop ?? endReading;
+                        actualStartTime = transaction.StartTime;
+                        actualEndTime = transaction.StopTime ?? DateTime.UtcNow;
+
+                        _logger.LogInformation($"Using OCPP transaction data: Start={startReading}, Stop={endReading}");
+                    }
+                    else
+                    {
+                        // Fallback to manual readings if transaction not found
+                        if (double.TryParse(session.StartMeterReading, out double sessionStart))
+                        {
+                            startReading = sessionStart;
+                        }
+                        if (double.TryParse(request.EndMeterReading, out double manualEnd))
+                        {
+                            endReading = manualEnd;
+                        }
+                        _logger.LogWarning($"Transaction {session.TransactionId} not found, using fallback values");
+                    }
+                }
+                else
+                {
+                    // No transaction ID, use manual readings
+                    if (double.TryParse(session.StartMeterReading, out double sessionStart))
+                    {
+                        startReading = sessionStart;
+                    }
+                    if (double.TryParse(request.EndMeterReading, out double manualEnd))
+                    {
+                        endReading = manualEnd;
+                    }
+                    _logger.LogWarning($"No TransactionId found, using manual meter readings");
+                }
+
                 // Update session with end details
-                session.EndTime = DateTime.UtcNow;
-                session.EndMeterReading = request.EndMeterReading;
+                session.EndTime = actualEndTime;
+                session.EndMeterReading = endReading.ToString("F2");
+                session.StartMeterReading = startReading.ToString("F2");
 
                 decimal totalFee = 0;
+                double energyTransmitted = Math.Max(0, endReading - startReading);
 
-                // Calculate energy transmitted and total fee
-                if (double.TryParse(session.StartMeterReading, out double startReading) &&
-                    double.TryParse(request.EndMeterReading, out double endReading))
+                session.EnergyTransmitted = energyTransmitted.ToString("F2");
+
+                // Calculate total fee based on tariff and energy
+                if (double.TryParse(session.ChargingTariff, out double tariff))
                 {
-                    double energyTransmitted = endReading - startReading;
-                    session.EnergyTransmitted = energyTransmitted.ToString("F2");
+                    totalFee = (decimal)(energyTransmitted * tariff);
+                    session.ChargingTotalFee = totalFee.ToString("F2");
+                }
 
-                    // Calculate total fee based on tariff and energy
-                    if (double.TryParse(session.ChargingTariff, out double tariff))
-                    {
-                        totalFee = (decimal)(energyTransmitted * tariff);
-                        session.ChargingTotalFee = totalFee.ToString("F2");
-                    }
-
-                    // Calculate charging speed (kW)
-                    var duration = session.EndTime - session.StartTime;
-                    if (duration.TotalHours > 0)
-                    {
-                        double chargingSpeed = energyTransmitted / duration.TotalHours;
-                        session.ChargingSpeed = chargingSpeed.ToString("F2");
-                    }
+                // Calculate charging speed (kW)
+                var duration = actualEndTime - actualStartTime;
+                if (duration.TotalHours > 0)
+                {
+                    double chargingSpeed = energyTransmitted / duration.TotalHours;
+                    session.ChargingSpeed = chargingSpeed.ToString("F2");
                 }
 
                 // Get current wallet balance
@@ -317,7 +385,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     _logger.LogWarning($"Insufficient wallet balance for user {session.UserId}. Required: {totalFee}, Available: {previousBalance}");
                     
-                    // Still update the session but mark it with a warning
+                    // Still update the session
                     session.UpdatedOn = DateTime.UtcNow;
                     await _dbContext.SaveChangesAsync();
 
@@ -325,7 +393,15 @@ namespace OCPP.Core.Management.Controllers
                     {
                         Success = false,
                         Message = $"Insufficient wallet balance. Required: {totalFee:F2}, Available: {previousBalance:F2}. Please recharge your wallet.",
-                        Data = await MapToChargingSessionDto(session)
+                        Data = new
+                        {
+                            Session = await MapToChargingSessionDto(session),
+                            EnergyConsumed = energyTransmitted,
+                            Cost = totalFee,
+                            MeterStart = startReading,
+                            MeterStop = endReading,
+                            Duration = duration.TotalMinutes
+                        }
                     });
                 }
 
@@ -340,9 +416,9 @@ namespace OCPP.Core.Management.Controllers
                     CurrentCreditBalance = newBalance.ToString("F2"),
                     TransactionType = "Debit",
                     ChargingSessionId = session.RecId,
-                    AdditionalInfo1 = $"Charging session at {chargingStation.ChargingPointId}",
-                    AdditionalInfo2 = $"Energy: {session.EnergyTransmitted} kWh, Rate: {session.ChargingTariff}",
-                    AdditionalInfo3 = $"Duration: {(session.EndTime - session.StartTime).TotalMinutes:F0} minutes",
+                    AdditionalInfo1 = $"Charging at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
+                    AdditionalInfo2 = $"Energy: {energyTransmitted:F2} kWh @ {session.ChargingTariff}/kWh = ${totalFee:F2}",
+                    AdditionalInfo3 = $"Meter: {startReading:F2} → {endReading:F2} | Duration: {duration.TotalMinutes:F0}min",
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
                     UpdatedOn = DateTime.UtcNow
@@ -352,15 +428,22 @@ namespace OCPP.Core.Management.Controllers
                 session.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charging session ended: {session.RecId}. Fee: {totalFee:F2} debited from wallet. New balance: {newBalance:F2}");
+                _logger.LogInformation($"Charging session ended: {session.RecId} (Txn: {session.TransactionId}). Energy: {energyTransmitted:F2}kWh, Fee: ${totalFee:F2}, Balance: ${newBalance:F2}");
 
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = $"Charging session ended successfully. Amount {totalFee:F2} debited from wallet. OCPP Status: {ocppResult.Message}",
+                    Message = $"Charging session ended successfully. ${totalFee:F2} debited. OCPP: {ocppResult.Message}",
                     Data = new
                     {
                         Session = await MapToChargingSessionDto(session),
+                        TransactionId = session.TransactionId,
+                        EnergyConsumed = energyTransmitted,
+                        Cost = totalFee,
+                        MeterStart = startReading,
+                        MeterStop = endReading,
+                        Duration = duration.TotalMinutes,
+                        ChargingSpeed = session.ChargingSpeed,
                         WalletTransaction = new
                         {
                             TransactionId = walletTransaction.RecId,
@@ -434,7 +517,7 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
-        /// Get charging session details
+        /// Get comprehensive charging session details with real-time data for active sessions
         /// </summary>
         [HttpGet("charging-session-details/{sessionId}")]
         [Authorize]
@@ -454,17 +537,129 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                var sessionDto = await MapToChargingSessionDto(session);
+                
+                // Initialize variables for real-time data
+                double meterStart = 0;
+                double meterCurrent = 0;
+                double energyConsumed = 0;
+                double estimatedCost = 0;
+                double chargingSpeed = 0;
+                string status = "Unknown";
+                DateTime actualStartTime = session.StartTime;
+                DateTime? actualEndTime = session.EndTime == DateTime.MinValue ? null : session.EndTime;
+
+                // Get real-time data from OCPP transaction if available
+                if (session.TransactionId.HasValue)
+                {
+                    var transaction = await _dbContext.Transactions
+                        .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                    if (transaction != null)
+                    {
+                        meterStart = transaction.MeterStart;
+                        meterCurrent = transaction.MeterStop ?? transaction.MeterStart;
+                        actualStartTime = transaction.StartTime;
+                        
+                        if (transaction.StopTime.HasValue)
+                        {
+                            actualEndTime = transaction.StopTime.Value;
+                            status = "Completed";
+                        }
+                        else
+                        {
+                            status = session.EndTime == DateTime.MinValue ? "Charging" : "Completed";
+                        }
+
+                        energyConsumed = Math.Max(0, meterCurrent - meterStart);
+
+                        if (double.TryParse(session.ChargingTariff, out double tariff))
+                        {
+                            estimatedCost = energyConsumed * tariff;
+                        }
+
+                        var elapsedTime = (actualEndTime ?? DateTime.UtcNow) - actualStartTime;
+                        if (elapsedTime.TotalHours > 0)
+                        {
+                            chargingSpeed = energyConsumed / elapsedTime.TotalHours;
+                        }
+
+                        if (session.EndTime == DateTime.MinValue)
+                        {
+                            _logger.LogInformation($"Real-time update for session {sessionId}: {energyConsumed:F2} kWh consumed, ${estimatedCost:F2} estimated");
+                        }
+                    }
+                    else
+                    {
+                        // Transaction not found, use session data
+                        if (double.TryParse(session.StartMeterReading, out meterStart))
+                        {
+                            meterCurrent = meterStart;
+                        }
+                        if (double.TryParse(session.EndMeterReading, out double endReading))
+                        {
+                            meterCurrent = endReading;
+                            energyConsumed = Math.Max(0, endReading - meterStart);
+                        }
+                        status = session.EndTime == DateTime.MinValue ? "Pending" : "Completed";
+                    }
+                }
+                else
+                {
+                    // No transaction ID, use session data
+                    if (double.TryParse(session.StartMeterReading, out meterStart))
+                    {
+                        meterCurrent = meterStart;
+                    }
+                    if (double.TryParse(session.EndMeterReading, out double endReading) && endReading > 0)
+                    {
+                        meterCurrent = endReading;
+                        energyConsumed = Math.Max(0, endReading - meterStart);
+                        
+                        if (double.TryParse(session.ChargingTariff, out double tariff))
+                        {
+                            estimatedCost = energyConsumed * tariff;
+                        }
+                    }
+                    status = session.EndTime == DateTime.MinValue ? "Pending" : "Completed";
+                }
+
+                var duration = (actualEndTime ?? DateTime.UtcNow) - actualStartTime;
+                bool isActive = session.EndTime == DateTime.MinValue;
+
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
                     Message = "Charging session details retrieved successfully",
-                    Data = await MapToChargingSessionDto(session)
+                    Data = new
+                    {
+                        Session = sessionDto,
+                        TransactionId = session.TransactionId,
+                        Status = status,
+                        IsActive = isActive,
+                        MeterStart = Math.Round(meterStart, 2),
+                        MeterCurrent = Math.Round(meterCurrent, 2),
+                        EnergyConsumed = Math.Round(energyConsumed, 2),
+                        EstimatedCost = Math.Round(estimatedCost, 2),
+                        ChargingSpeed = Math.Round(chargingSpeed, 2),
+                        Tariff = session.ChargingTariff,
+                        Duration = new
+                        {
+                            TotalMinutes = Math.Round(duration.TotalMinutes, 0),
+                            Hours = duration.Hours,
+                            Minutes = duration.Minutes,
+                            TotalHours = Math.Round(duration.TotalHours, 2)
+                        },
+                        StartTime = actualStartTime,
+                        EndTime = actualEndTime,
+                        LastUpdate = DateTime.UtcNow
+                    }
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving charging session details");
-                return Ok(new ChargingSessionResponseDto
+                return StatusCode(500, new ChargingSessionResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving charging session details"
@@ -516,6 +711,66 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                var stuckSessions = await _dbContext.ChargingSessions
+    .Where(s => s.ChargingGunId == request.ConnectorId.ToString() &&
+               s.ChargingStationID == request.ChargingStationId &&
+               s.Active == 1 &&
+               s.EndTime == DateTime.MinValue)
+    .ToListAsync();
+
+                var cleanedSessions = new System.Collections.Generic.List<string>();
+                var warnings = new System.Collections.Generic.List<string>();
+
+                // Clean up stuck sessions before unlocking
+                if (stuckSessions.Any())
+                {
+                    _logger.LogWarning($"Found {stuckSessions.Count} stuck session(s) for connector {request.ConnectorId} at station {request.ChargingStationId}");
+
+                    foreach (var stuckSession in stuckSessions)
+                    {
+                        try
+                        {
+                            // Mark session as force-ended
+                            stuckSession.EndTime = DateTime.UtcNow;
+                            stuckSession.UpdatedOn = DateTime.UtcNow;
+
+                            // Try to get final meter reading from transaction if available
+                            if (stuckSession.TransactionId.HasValue)
+                            {
+                                var transaction = await _dbContext.Transactions
+                                    .FirstOrDefaultAsync(t => t.TransactionId == stuckSession.TransactionId.Value);
+
+                                if (transaction != null)
+                                {
+                                    double meterStop = transaction.MeterStop ?? transaction.MeterStart;
+                                    stuckSession.EndMeterReading = meterStop.ToString("F2");
+
+                                    double energyConsumed = Math.Max(0, meterStop - transaction.MeterStart);
+                                    stuckSession.EnergyTransmitted = energyConsumed.ToString("F2");
+
+                                    if (double.TryParse(stuckSession.ChargingTariff, out double tariff))
+                                    {
+                                        decimal fee = (decimal)(energyConsumed * tariff);
+                                        stuckSession.ChargingTotalFee = fee.ToString("F2");
+                                    }
+                                }
+                            }
+
+                            cleanedSessions.Add(stuckSession.RecId);
+                            _logger.LogInformation($"Force-ended stuck session: {stuckSession.RecId}");
+
+                            warnings.Add($"Session {stuckSession.RecId} was automatically ended");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error cleaning up stuck session {stuckSession.RecId}");
+                            warnings.Add($"Failed to clean session {stuckSession.RecId}: {ex.Message}");
+                        }
+                    }
+
+                    await _dbContext.SaveChangesAsync();
+                }
+
                 // Call OCPP server to unlock connector
                 var ocppResult = await CallOCPPUnlockConnector(
                     chargePoint.ChargePointId,
@@ -523,32 +778,46 @@ namespace OCPP.Core.Management.Controllers
 
                 if (!ocppResult.Success)
                 {
-                    return Ok(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto  // Changed from Ok to BadRequest
                     {
                         Success = false,
-                        Message = ocppResult.Message
+                        Message = ocppResult.Message,
+                        Data = new
+                        {
+                            CleanedSessions = cleanedSessions,
+                            Warnings = warnings
+                        }
                     });
                 }
 
                 _logger.LogInformation($"Connector unlocked: Station {request.ChargingStationId}, Connector {request.ConnectorId}");
 
+                var responseMessage = ocppResult.Message;
+                if (cleanedSessions.Any())
+                {
+                    responseMessage += $". {cleanedSessions.Count} stuck session(s) automatically cleared.";
+                }
+
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = ocppResult.Message,
+                    Message = responseMessage,
                     Data = new
                     {
                         ChargingStationId = request.ChargingStationId,
                         ConnectorId = request.ConnectorId,
                         ChargePointId = chargePoint.ChargePointId,
-                        Status = "Unlocked"
+                        Status = "Unlocked",
+                        CleanedSessions = cleanedSessions,
+                        SessionsCleared = cleanedSessions.Count,
+                        Warnings = warnings
                     }
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error unlocking connector");
-                return Ok(new ChargingSessionResponseDto
+                return Ok(new ChargingSessionResponseDto  // Changed from Ok to StatusCode
                 {
                     Success = false,
                     Message = "An error occurred while unlocking the connector"
