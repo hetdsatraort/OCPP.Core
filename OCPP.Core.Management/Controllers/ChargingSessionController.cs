@@ -61,7 +61,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new ChargingSessionResponseDto
+                    return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
                         Message = "User not authenticated"
