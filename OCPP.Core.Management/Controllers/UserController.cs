@@ -137,7 +137,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (user == null || !VerifyPassword(request.Password, user.Password))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid credentials"
@@ -318,7 +318,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -397,7 +397,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -467,7 +467,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (string.IsNullOrEmpty(refreshToken))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Refresh token is required"
@@ -480,7 +480,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (token == null || !token.IsActive)
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid refresh token"
@@ -490,7 +490,7 @@ namespace OCPP.Core.Management.Controllers
                 var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == token.UserId);
                 if (user == null || user.Active == 0)
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found or inactive"
@@ -544,7 +544,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -688,7 +688,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -795,7 +795,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -881,7 +881,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -1039,7 +1039,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
@@ -1096,7 +1096,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return Unauthorized(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid token"
