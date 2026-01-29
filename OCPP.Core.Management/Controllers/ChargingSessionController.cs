@@ -168,8 +168,42 @@ namespace OCPP.Core.Management.Controllers
                     .FirstOrDefaultAsync();
 
                 int? transactionId = ocppTransaction?.TransactionId;
-                double meterStart = ocppTransaction?.MeterStart ?? 0;
-                DateTime startTime = ocppTransaction?.StartTime ?? DateTime.UtcNow;
+                double meterStart = 0;
+                DateTime startTime = DateTime.UtcNow;
+                string meterSource = "Unknown";
+
+                // Priority 1: Use transaction meter start (most authoritative)
+                if (ocppTransaction != null)
+                {
+                    meterStart = ocppTransaction.MeterStart;
+                    startTime = ocppTransaction.StartTime;
+                    meterSource = "OCPP Transaction";
+                    _logger.LogInformation($"Using meter start from OCPP transaction: {meterStart:F3} kWh");
+                }
+                else
+                {
+                    // Priority 2: Fallback to connector real-time meter
+                    var connectorStatus = await _dbContext.ConnectorStatuses
+                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargePoint.ChargePointId
+                            && cs.ConnectorId == request.ConnectorId && cs.Active == 1);
+
+                    if (connectorStatus?.LastMeter.HasValue == true)
+                    {
+                        meterStart = connectorStatus.LastMeter.Value;
+                        if (connectorStatus.LastMeterTime.HasValue)
+                        {
+                            startTime = connectorStatus.LastMeterTime.Value;
+                        }
+                        meterSource = "Connector Real-time";
+                        _logger.LogWarning($"Transaction not found. Using connector meter: {meterStart:F3} kWh");
+                    }
+                    else
+                    {
+                        meterStart = 0;
+                        meterSource = "Default (No data)";
+                        _logger.LogError($"No meter reading available. Using default: 0 kWh");
+                    }
+                }
 
                 // Create new charging session in database
                 var session = new Database.EVCDTO.ChargingSession
@@ -206,7 +240,14 @@ namespace OCPP.Core.Management.Controllers
                         Session = await MapToChargingSessionDto(session),
                         TransactionId = transactionId,
                         MeterStart = meterStart,
-                        Tariff = session.ChargingTariff
+                        MeterSource = meterSource,
+                        Tariff = session.ChargingTariff,
+                        StartTime = startTime,
+                        Recommendation = meterSource == "OCPP Transaction"
+            ? "Meter reading from authoritative OCPP transaction"
+            : meterSource == "Connector Real-time"
+                ? "Using real-time connector meter (transaction not immediately available)"
+                : "Warning: No meter data available. Check charge point connection."
                     }
                 });
             }
@@ -1317,7 +1358,6 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
-        #endregion
 
         #region Helper Methods
 
