@@ -1219,6 +1219,7 @@ namespace OCPP.Core.Management.Controllers
                 PreviousCreditBalance = transaction.PreviousCreditBalance,
                 CurrentCreditBalance = transaction.CurrentCreditBalance,
                 TransactionType = transaction.TransactionType,
+                Amount = Math.Abs(decimal.Parse(transaction.CurrentCreditBalance) - decimal.Parse(transaction.PreviousCreditBalance)), // absolute amount
                 PaymentRecId = transaction.PaymentRecId,
                 ChargingSessionId = transaction.ChargingSessionId,
                 AdditionalInfo1 = transaction.AdditionalInfo1,

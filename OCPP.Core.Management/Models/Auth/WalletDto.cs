@@ -15,6 +15,7 @@ namespace OCPP.Core.Management.Models.Auth
         public string RecId { get; set; }
         public string PreviousCreditBalance { get; set; }
         public string CurrentCreditBalance { get; set; }
+        public decimal Amount { get; set; }
         public string TransactionType { get; set; }
         public string PaymentRecId { get; set; }
         public string ChargingSessionId { get; set; }
