@@ -6,18 +6,42 @@ namespace OCPP.Core.Management.Models.ChargingHub
     public class ChargerRequestDto
     {
         [Required]
+        public string ChargingStationId { get; set; }
+        
+        [Required]
         public string ChargePointId { get; set; }
         
         [Required]
-        [Range(1, 100)]
-        public int ConnectorId { get; set; }
+        public string ConnectorId { get; set; }
         
         [Required]
-        public string ConnectorName { get; set; }
+        public string ChargerTypeId { get; set; }
+        
+        public string ChargerTariff { get; set; }
+        
+        public string PowerOutput { get; set; }
+        
+        public string AdditionalInfo1 { get; set; }
+        
+        public string AdditionalInfo2 { get; set; }
     }
 
-    public class ChargerUpdateDto : ChargerRequestDto
+    public class ChargerUpdateDto
     {
-        public string LastStatus { get; set; }
+        [Required]
+        public string RecId { get; set; }
+        
+        public string ChargerTypeId { get; set; }
+        
+        public string ChargerTariff { get; set; }
+        
+        public string PowerOutput { get; set; }
+        
+        public string ChargerStatus { get; set; }
+        
+        public string AdditionalInfo1 { get; set; }
+        
+        public string AdditionalInfo2 { get; set; }
     }
 }
+

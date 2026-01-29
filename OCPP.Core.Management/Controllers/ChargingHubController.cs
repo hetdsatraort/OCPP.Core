@@ -575,7 +575,18 @@ namespace OCPP.Core.Management.Controllers
                 station.Active = 0;
                 station.UpdatedOn = DateTime.UtcNow;
 
-                // CASCADE: Soft delete all associated connectors
+                // CASCADE: Soft delete all associated charging guns
+                var chargingGuns = await _dbContext.ChargingGuns
+                    .Where(c => c.ChargingStationId == stationId && c.Active == 1)
+                    .ToListAsync();
+
+                foreach (var gun in chargingGuns)
+                {
+                    gun.Active = 0;
+                    gun.UpdatedOn = DateTime.UtcNow;
+                }
+
+                // Also soft delete associated connector statuses in OCPP layer
                 var connectors = await _dbContext.ConnectorStatuses
                     .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
                     .ToListAsync();
@@ -666,12 +677,16 @@ namespace OCPP.Core.Management.Controllers
 
                 var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId);
 
-                // Get chargers (connectors)
-                var chargers = await _dbContext.ConnectorStatuses
-                    .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
+                // Get chargers from ChargingGuns table
+                var chargers = await _dbContext.ChargingGuns
+                    .Where(c => c.ChargingStationId == stationId && c.Active == 1)
                     .ToListAsync();
 
-                var chargerDtos = chargers.Select(c => MapToChargerDto(c, station.RecId, chargePoint?.Name)).ToList();
+                var chargerDtos = new List<ChargerDto>();
+                foreach (var charger in chargers)
+                {
+                    chargerDtos.Add(await MapToChargerDtoAsync(charger));
+                }
 
                 // Get reviews
                 var reviews = await _dbContext.ChargingHubReviews
@@ -723,41 +738,107 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Check if connector already exists (active only)
-                var existing = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId && c.Active == 1);
+                // Verify station exists
+                var station = await _dbContext.ChargingStations
+                    .FirstOrDefaultAsync(s => s.RecId == request.ChargingStationId && s.Active == 1);
+
+                if (station == null)
+                {
+                    return Ok(new ChargerResponseDto
+                    {
+                        Success = false,
+                        Message = "Charging station not found"
+                    });
+                }
+
+                // Verify hub exists
+                var hub = await _dbContext.ChargingHubs
+                    .FirstOrDefaultAsync(h => h.RecId == station.ChargingHubId && h.Active == 1);
+
+                // Verify ChargePoint exists
+                var chargePoint = await _dbContext.ChargePoints
+                    .FirstOrDefaultAsync(cp => cp.ChargePointId == request.ChargePointId);
+
+                if (chargePoint == null)
+                {
+                    return Ok(new ChargerResponseDto
+                    {
+                        Success = false,
+                        Message = "Charge point not found"
+                    });
+                }
+
+                // Check if connector status exists, if not create it in OCPP layer
+                var connectorStatus = await _dbContext.ConnectorStatuses
+                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId 
+                        && c.ConnectorId.ToString() == request.ConnectorId && c.Active == 1);
+
+                if (connectorStatus == null)
+                {
+                    // Parse connector ID
+                    if (!int.TryParse(request.ConnectorId, out int connectorIdInt))
+                    {
+                        return Ok(new ChargerResponseDto
+                        {
+                            Success = false,
+                            Message = "Invalid connector ID format"
+                        });
+                    }
+
+                    connectorStatus = new ConnectorStatus
+                    {
+                        ChargePointId = request.ChargePointId,
+                        ConnectorId = connectorIdInt,
+                        ConnectorName = $"Connector {request.ConnectorId}",
+                        LastStatus = "Available",
+                        Active = 1
+                    };
+                    _dbContext.ConnectorStatuses.Add(connectorStatus);
+                    await _dbContext.SaveChangesAsync();
+                    _logger.LogInformation($"Connector status created: {request.ChargePointId}:{request.ConnectorId}");
+                }
+
+                // Check if charger already exists (active only)
+                var existing = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(c => c.ChargingStationId == request.ChargingStationId 
+                        && c.ConnectorId == request.ConnectorId && c.Active == 1);
 
                 if (existing != null)
                 {
                     return Ok(new ChargerResponseDto
                     {
                         Success = false,
-                        Message = "Charger with this connector ID already exists for this charge point"
+                        Message = "Charger with this connector ID already exists for this station"
                     });
                 }
 
-                var charger = new ConnectorStatus
+                var charger = new Database.EVCDTO.ChargingGuns
                 {
-                    ChargePointId = request.ChargePointId,
+                    RecId = Guid.NewGuid().ToString(),
+                    ChargingStationId = request.ChargingStationId,
+                    ChargingHubId = station.ChargingHubId,
                     ConnectorId = request.ConnectorId,
-                    ConnectorName = request.ConnectorName,
-                    LastStatus = "Available",
-                    Active = 1
+                    ChargerTypeId = request.ChargerTypeId,
+                    ChargerTariff = request.ChargerTariff,
+                    PowerOutput = request.PowerOutput,
+                    ChargerStatus = "Available",
+                    AdditionalInfo1 = request.AdditionalInfo1,
+                    AdditionalInfo2 = request.AdditionalInfo2,
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
                 };
 
-                _dbContext.ConnectorStatuses.Add(charger);
+                _dbContext.ChargingGuns.Add(charger);
                 await _dbContext.SaveChangesAsync();
 
-                var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.ChargingPointId == request.ChargePointId);
-                var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == request.ChargePointId);
-
-                _logger.LogInformation($"Charger added: {request.ChargePointId}:{request.ConnectorId}");
+                _logger.LogInformation($"Charger added: {charger.RecId} at station {request.ChargingStationId}");
 
                 return Ok(new ChargerResponseDto
                 {
                     Success = true,
                     Message = "Charger added successfully",
-                    Charger = MapToChargerDto(charger, station?.RecId, chargePoint?.Name)
+                    Charger = await MapToChargerDtoAsync(charger)
                 });
             }
             catch (Exception ex)
@@ -789,8 +870,8 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == request.ChargePointId && c.ConnectorId == request.ConnectorId && c.Active == 1);
+                var charger = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(c => c.RecId == request.RecId && c.Active == 1);
 
                 if (charger == null)
                 {
@@ -801,25 +882,31 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                charger.ConnectorName = request.ConnectorName;
-                if (!string.IsNullOrEmpty(request.LastStatus))
-                {
-                    charger.LastStatus = request.LastStatus;
-                    charger.LastStatusTime = DateTime.UtcNow;
-                }
+                // Update properties
+                if (!string.IsNullOrEmpty(request.ChargerTypeId))
+                    charger.ChargerTypeId = request.ChargerTypeId;
+                if (!string.IsNullOrEmpty(request.ChargerTariff))
+                    charger.ChargerTariff = request.ChargerTariff;
+                if (!string.IsNullOrEmpty(request.PowerOutput))
+                    charger.PowerOutput = request.PowerOutput;
+                if (!string.IsNullOrEmpty(request.ChargerStatus))
+                    charger.ChargerStatus = request.ChargerStatus;
+                if (!string.IsNullOrEmpty(request.AdditionalInfo1))
+                    charger.AdditionalInfo1 = request.AdditionalInfo1;
+                if (!string.IsNullOrEmpty(request.AdditionalInfo2))
+                    charger.AdditionalInfo2 = request.AdditionalInfo2;
+
+                charger.UpdatedOn = DateTime.UtcNow;
 
                 await _dbContext.SaveChangesAsync();
 
-                var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.ChargingPointId == request.ChargePointId);
-                var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == request.ChargePointId);
-
-                _logger.LogInformation($"Charger updated: {request.ChargePointId}:{request.ConnectorId}");
+                _logger.LogInformation($"Charger updated: {request.RecId}");
 
                 return Ok(new ChargerResponseDto
                 {
                     Success = true,
                     Message = "Charger updated successfully",
-                    Charger = MapToChargerDto(charger, station?.RecId, chargePoint?.Name)
+                    Charger = await MapToChargerDtoAsync(charger)
                 });
             }
             catch (Exception ex)
@@ -836,14 +923,14 @@ namespace OCPP.Core.Management.Controllers
         /// <summary>
         /// Delete charger/gun (connector) - Soft delete
         /// </summary>
-        [HttpDelete("chargers-delete/{chargePointId}/{connectorId}")]
+        [HttpDelete("chargers-delete/{chargerId}")]
         [Authorize]
-        public async Task<IActionResult> DeleteCharger(string chargePointId, int connectorId)
+        public async Task<IActionResult> DeleteCharger(string chargerId)
         {
             try
             {
-                var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId && c.Active == 1);
+                var charger = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(c => c.RecId == chargerId && c.Active == 1);
 
                 if (charger == null)
                 {
@@ -856,10 +943,10 @@ namespace OCPP.Core.Management.Controllers
 
                 // Soft delete
                 charger.Active = 0;
-                charger.LastStatusTime = DateTime.UtcNow;
+                charger.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Charger deleted (soft): {chargePointId}:{connectorId}");
+                _logger.LogInformation($"Charger deleted (soft): {chargerId}");
 
                 return Ok(new ChargerResponseDto
                 {
@@ -897,13 +984,15 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                var chargers = await _dbContext.ConnectorStatuses
-                    .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
+                var chargers = await _dbContext.ChargingGuns
+                    .Where(c => c.ChargingStationId == stationId && c.Active == 1)
                     .ToListAsync();
 
-                var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId);
-
-                var chargerDtos = chargers.Select(c => MapToChargerDto(c, stationId, chargePoint?.Name)).ToList();
+                var chargerDtos = new List<ChargerDto>();
+                foreach (var charger in chargers)
+                {
+                    chargerDtos.Add(await MapToChargerDtoAsync(charger));
+                }
 
                 return Ok(new ChargerListResponseDto
                 {
@@ -927,14 +1016,14 @@ namespace OCPP.Core.Management.Controllers
         /// <summary>
         /// Get charger details
         /// </summary>
-        [HttpGet("charger-details/{chargePointId}/{connectorId}")]
+        [HttpGet("charger-details/{chargerId}")]
         [AllowAnonymous]
-        public async Task<IActionResult> GetChargerDetails(string chargePointId, int connectorId)
+        public async Task<IActionResult> GetChargerDetails(string chargerId)
         {
             try
             {
-                var charger = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == chargePointId && c.ConnectorId == connectorId && c.Active == 1);
+                var charger = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(c => c.RecId == chargerId && c.Active == 1);
 
                 if (charger == null)
                 {
@@ -945,14 +1034,11 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.ChargingPointId == chargePointId);
-                var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == chargePointId);
-
                 return Ok(new ChargerResponseDto
                 {
                     Success = true,
                     Message = "Charger details retrieved successfully",
-                    Charger = MapToChargerDto(charger, station?.RecId, chargePoint?.Name)
+                    Charger = await MapToChargerDtoAsync(charger)
                 });
             }
             catch (Exception ex)
@@ -1063,21 +1149,34 @@ namespace OCPP.Core.Management.Controllers
                         var chargePoint = await _dbContext.ChargePoints
                             .FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId);
 
-                        // Get chargers for this station
-                        var chargers = await _dbContext.ConnectorStatuses
-                            .Where(c => c.ChargePointId == station.ChargingPointId && c.Active == 1)
+                        // Get chargers from ChargingGuns table
+                        var chargers = await _dbContext.ChargingGuns
+                            .Where(c => c.ChargingStationId == station.RecId && c.Active == 1)
                             .ToListAsync();
 
                         // Filter by charger status if specified
                         if (!string.IsNullOrEmpty(request.ChargerStatus))
                         {
                             chargers = chargers
-                                .Where(c => c.LastStatus.Equals(request.ChargerStatus, StringComparison.OrdinalIgnoreCase))
+                                .Where(c => c.ChargerStatus.Equals(request.ChargerStatus, StringComparison.OrdinalIgnoreCase))
                                 .ToList();
                         }
 
-                        var chargerDtos = chargers.Select(c => MapToChargerDto(c, station.RecId, chargePoint?.Name)).ToList();
-                        int stationAvailable = chargers.Count(c => c.LastStatus.Equals("Available", StringComparison.OrdinalIgnoreCase));
+                        var chargerDtos = new List<ChargerDto>();
+                        int stationAvailable = 0;
+                        
+                        foreach (var charger in chargers)
+                        {
+                            var chargerDto = await MapToChargerDtoAsync(charger);
+                            chargerDtos.Add(chargerDto);
+                            
+                            // Count available based on ChargerStatus or LastStatus from connector
+                            if (charger.ChargerStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true ||
+                                chargerDto.LastStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true)
+                            {
+                                stationAvailable++;
+                            }
+                        }
 
                         totalChargers += chargers.Count;
                         availableChargers += stationAvailable;
@@ -1508,14 +1607,70 @@ namespace OCPP.Core.Management.Controllers
             return new ChargerDto
             {
                 ChargePointId = connector.ChargePointId,
-                ConnectorId = connector.ConnectorId,
+                ConnectorId = connector.ConnectorId.ToString(),
                 ConnectorName = connector.ConnectorName,
                 LastStatus = connector.LastStatus,
                 LastStatusTime = connector.LastStatusTime,
                 LastMeter = connector.LastMeter,
                 LastMeterTime = connector.LastMeterTime,
-                StationRecId = stationRecId,
                 ChargePointName = chargePointName
+            };
+        }
+
+        private async Task<ChargerDto> MapToChargerDtoAsync(Database.EVCDTO.ChargingGuns charger)
+        {
+            var station = await _dbContext.ChargingStations
+                .FirstOrDefaultAsync(s => s.RecId == charger.ChargingStationId);
+
+            var hub = await _dbContext.ChargingHubs
+                .FirstOrDefaultAsync(h => h.RecId == charger.ChargingHubId);
+
+            var chargePoint = station != null 
+                ? await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == station.ChargingPointId)
+                : null;
+
+            var chargerType = charger.ChargerTypeId != null
+                ? await _dbContext.ChargerTypeMasters.FirstOrDefaultAsync(ct => ct.RecId == charger.ChargerTypeId)
+                : null;
+
+            // Get connector status from OCPP layer
+            ConnectorStatus connectorStatus = null;
+            if (station != null && int.TryParse(charger.ConnectorId, out int connectorIdInt))
+            {
+                connectorStatus = await _dbContext.ConnectorStatuses
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == station.ChargingPointId 
+                        && cs.ConnectorId == connectorIdInt && cs.Active == 1);
+            }
+
+            return new ChargerDto
+            {
+                RecId = charger.RecId,
+                ChargingStationId = charger.ChargingStationId,
+                ChargingHubId = charger.ChargingHubId,
+                ChargePointId = station?.ChargingPointId,
+                ConnectorId = charger.ConnectorId,
+                ChargerTypeId = charger.ChargerTypeId,
+                ChargerTypeName = chargerType?.ChargerType,
+                ChargerTariff = charger.ChargerTariff,
+                PowerOutput = charger.PowerOutput,
+                ChargerStatus = charger.ChargerStatus,
+                ChargerMeterReading = charger.ChargerMeterReading,
+                AdditionalInfo1 = charger.AdditionalInfo1,
+                AdditionalInfo2 = charger.AdditionalInfo2,
+                Active = charger.Active,
+                CreatedOn = charger.CreatedOn,
+                UpdatedOn = charger.UpdatedOn,
+                
+                // OCPP Connector Status Info
+                ConnectorName = connectorStatus?.ConnectorName,
+                LastStatus = connectorStatus?.LastStatus,
+                LastStatusTime = connectorStatus?.LastStatusTime,
+                LastMeter = connectorStatus?.LastMeter,
+                LastMeterTime = connectorStatus?.LastMeterTime,
+                
+                // Related info
+                ChargePointName = chargePoint?.Name,
+                ChargingHubName = hub?.ChargingHubName
             };
         }
 

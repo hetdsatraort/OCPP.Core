@@ -45,6 +45,7 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.ChargingHubReview> ChargingHubReviews { get; set; }
         public virtual DbSet<EVCDTO.ChargingSession> ChargingSessions { get; set; }
         public virtual DbSet<EVCDTO.ChargingStation> ChargingStations { get; set; }
+        public virtual DbSet<EVCDTO.ChargingGuns> ChargingGuns { get; set; }
         public virtual DbSet<EVCDTO.EVModelMaster> EVModelMasters { get; set; }
         public virtual DbSet<EVCDTO.PaymentHistory> PaymentHistories { get; set; }
         public virtual DbSet<EVCDTO.UserVehicle> UserVehicles { get; set; }
@@ -306,6 +307,53 @@ namespace OCPP.Core.Database
                     .HasForeignKey(d => d.ChargingHubId)
                     .OnDelete(DeleteBehavior.Restrict)
                     .HasConstraintName("FK_ChargingStation_ChargingHub");
+            });
+
+            modelBuilder.Entity<EVCDTO.ChargingGuns>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingStationId).HasMaxLength(50);
+
+                entity.Property(e => e.ConnectorId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargingHubId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerTypeId).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerTariff).HasMaxLength(50);
+
+                entity.Property(e => e.PowerOutput).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerStatus).HasMaxLength(50);
+
+                entity.Property(e => e.ChargerMeterReading).HasMaxLength(50);
+
+                entity.Property(e => e.AdditionalInfo1).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo2).HasMaxLength(200);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasOne<EVCDTO.ChargingStation>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingStationId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingGuns_ChargingStation");
+
+                entity.HasOne<EVCDTO.ChargingHub>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingHubId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingGuns_ChargingHub");
+
+                entity.HasOne<EVCDTO.ChargerTypeMaster>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargerTypeId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingGuns_ChargerTypeMaster");
             });
 
             modelBuilder.Entity<EVCDTO.EVModelMaster>(entity =>
