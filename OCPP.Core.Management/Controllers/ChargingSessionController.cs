@@ -761,6 +761,28 @@ namespace OCPP.Core.Management.Controllers
                 string status = "Unknown";
                 DateTime actualStartTime = session.StartTime;
                 DateTime? actualEndTime = session.EndTime == DateTime.MinValue ? null : session.EndTime;
+                bool isActiveSession = session.EndTime == DateTime.MinValue;
+
+                // Get real-time connector meter reading for active sessions
+                double? realtimeConnectorMeter = null;
+                if (isActiveSession && chargingStation != null)
+                {
+                    int connectorId = 1;
+                    if (int.TryParse(session.ChargingGunId, out int extractedId))
+                    {
+                        connectorId = extractedId;
+                    }
+
+                    var connectorStatus = await _dbContext.ConnectorStatuses
+                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                            && cs.ConnectorId == connectorId && cs.Active == 1);
+
+                    if (connectorStatus != null && connectorStatus.LastMeter.HasValue)
+                    {
+                        realtimeConnectorMeter = connectorStatus.LastMeter.Value;
+                        _logger.LogInformation($"Fetched real-time connector meter for active session {sessionId}: {realtimeConnectorMeter:F3} kWh");
+                    }
+                }
 
                 // Get real-time data from OCPP transaction if available
                 if (session.TransactionId.HasValue)
@@ -771,7 +793,25 @@ namespace OCPP.Core.Management.Controllers
                     if (transaction != null)
                     {
                         meterStart = transaction.MeterStart;
-                        meterCurrent = transaction.MeterStop ?? transaction.MeterStart;
+
+                        // For active sessions, use real-time connector meter if available
+                        if (isActiveSession && realtimeConnectorMeter.HasValue)
+                        {
+                            meterCurrent = realtimeConnectorMeter.Value;
+                            _logger.LogInformation($"Using real-time connector meter for active session: {meterCurrent:F3} kWh");
+                        }
+                        else if (transaction.StopTime.HasValue)
+                        {
+                            // Completed session - use transaction MeterStop
+                            meterCurrent = transaction.MeterStop ?? transaction.MeterStart;
+                        }
+                        else
+                        {
+                            // Active session but no real-time meter - fallback to MeterStart
+                            meterCurrent = transaction.MeterStart;
+                            _logger.LogWarning($"No real-time meter available for active session {sessionId}. Using MeterStart.");
+                        }
+
                         actualStartTime = transaction.StartTime;
 
                         if (transaction.StopTime.HasValue)
@@ -781,7 +821,7 @@ namespace OCPP.Core.Management.Controllers
                         }
                         else
                         {
-                            status = session.EndTime == DateTime.MinValue ? "Charging" : "Completed";
+                            status = isActiveSession ? "Charging" : "Completed";
                         }
 
                         energyConsumed = Math.Max(0, meterCurrent - meterStart);
@@ -803,41 +843,61 @@ namespace OCPP.Core.Management.Controllers
                             peakChargingSpeed = averageChargingSpeed; // Fallback
                         }
 
-                        if (session.EndTime == DateTime.MinValue)
+                        if (isActiveSession)
                         {
-                            _logger.LogInformation($"Real-time update for session {sessionId}: {energyConsumed:F2} kWh consumed, ${calculatedCost:F2} estimated");
+                            _logger.LogInformation($"Real-time update for session {sessionId}: {energyConsumed:F2} kWh consumed, ₹{calculatedCost:F2} estimated");
                         }
                     }
                     else
                     {
-                        // Transaction not found, use session data
+                        // Transaction not found, use session data and real-time meter
                         if (double.TryParse(session.StartMeterReading, out meterStart))
                         {
                             meterCurrent = meterStart;
                         }
-                        if (double.TryParse(session.EndMeterReading, out double endReading))
+
+                        // For active sessions, try to use real-time connector meter
+                        if (isActiveSession && realtimeConnectorMeter.HasValue)
+                        {
+                            meterCurrent = realtimeConnectorMeter.Value;
+                            energyConsumed = Math.Max(0, meterCurrent - meterStart);
+                            calculatedCost = energyConsumed * actualTariff;
+                            _logger.LogInformation($"Using real-time connector meter (no transaction): {meterCurrent:F3} kWh");
+                        }
+                        else if (double.TryParse(session.EndMeterReading, out double endReading))
                         {
                             meterCurrent = endReading;
                             energyConsumed = Math.Max(0, endReading - meterStart);
                             calculatedCost = energyConsumed * actualTariff;
                         }
-                        status = session.EndTime == DateTime.MinValue ? "Pending" : "Completed";
+
+                        status = isActiveSession ? "Pending" : "Completed";
                     }
                 }
                 else
                 {
-                    // No transaction ID, use session data
+                    // No transaction ID, use session data and real-time meter
                     if (double.TryParse(session.StartMeterReading, out meterStart))
                     {
                         meterCurrent = meterStart;
                     }
-                    if (double.TryParse(session.EndMeterReading, out double endReading) && endReading > 0)
+
+                    // For active sessions, try to use real-time connector meter
+                    if (isActiveSession && realtimeConnectorMeter.HasValue)
+                    {
+                        meterCurrent = realtimeConnectorMeter.Value;
+                        energyConsumed = Math.Max(0, meterCurrent - meterStart);
+                        calculatedCost = energyConsumed * actualTariff;
+                        _logger.LogInformation($"Using real-time connector meter (no transaction ID): {meterCurrent:F3} kWh");
+                    }
+                    else if (double.TryParse(session.EndMeterReading, out double endReading) && endReading > 0)
                     {
                         meterCurrent = endReading;
                         energyConsumed = Math.Max(0, endReading - meterStart);
                         calculatedCost = energyConsumed * actualTariff;
                     }
-                    status = session.EndTime == DateTime.MinValue ? "Pending" : "Completed";
+
+                    status = isActiveSession ? "Pending" : "Completed";
                 }
 
                 // Calculate SOC change if battery capacity is available
@@ -904,7 +964,13 @@ namespace OCPP.Core.Management.Controllers
                         {
                             StartReading = Math.Round(meterStart, 3),
                             CurrentReading = Math.Round(meterCurrent, 3),
-                            Unit = "kWh"
+                            Unit = "kWh",
+                            DataSource = isActiveSession && realtimeConnectorMeter.HasValue 
+                                ? "Real-time Connector (Live)" 
+                                : session.TransactionId.HasValue 
+                                    ? "OCPP Transaction" 
+                                    : "Session Data",
+                            IsRealtime = isActiveSession && realtimeConnectorMeter.HasValue
                         },
 
                         // Energy Consumption
