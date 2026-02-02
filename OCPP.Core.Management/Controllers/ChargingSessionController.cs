@@ -1432,6 +1432,13 @@ namespace OCPP.Core.Management.Controllers
             var chargingStation = await _dbContext.ChargingStations
                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
 
+            var chargingGun = await _dbContext.ChargingGuns
+                .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.ConnectorId == session.ChargingGunId);
+
+            var connectorStatus = await _dbContext.ConnectorStatuses
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
+                        && cs.ConnectorId == int.Parse(chargingGun.ConnectorId) && cs.Active == 1);
+
             string chargingHubName = null;
             if (chargingStation != null)
             {
@@ -1453,6 +1460,7 @@ namespace OCPP.Core.Management.Controllers
                 ChargingStationId = session.ChargingStationID,
                 ChargingStationName = chargingStation?.ChargingPointId,
                 ChargingHubName = chargingHubName,
+                ConnectorName = connectorStatus.ConnectorName,
                 StartMeterReading = session.StartMeterReading,
                 EndMeterReading = session.EndMeterReading,
                 EnergyTransmitted = session.EnergyTransmitted,

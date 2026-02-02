@@ -29,6 +29,7 @@ namespace OCPP.Core.Management.Models.ChargingSession
     {
         public string RecId { get; set; }
         public string ChargingGunId { get; set; }
+        public string ConnectorName { get; set; }
         public string ChargingStationId { get; set; }
         public string ChargingStationName { get; set; }
         public string ChargingHubName { get; set; }

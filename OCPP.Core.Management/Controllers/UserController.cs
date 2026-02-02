@@ -475,7 +475,6 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var token = await _dbContext.RefreshTokens
-                    .Include(t => t.UserId)
                     .FirstOrDefaultAsync(t => t.Token == refreshToken);
 
                 if (token == null || !token.IsActive)
