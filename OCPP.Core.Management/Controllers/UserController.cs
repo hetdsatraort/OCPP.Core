@@ -238,7 +238,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return Ok(new AuthResponseDto
+                    return BadRequest(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -253,7 +253,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (user == null || !VerifyPassword(request.OldPassword, user.Password))
                 {
-                    return Ok(new AuthResponseDto
+                    return BadRequest(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid credentials"
