@@ -107,8 +107,8 @@ namespace OCPP.Core.Management.Controllers
 
                 // Check if there's already an active session for this charging gun
                 var existingSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == request.ChargingGunId && 
-                                             s.Active == 1 && 
+                    .FirstOrDefaultAsync(s => s.ChargingGunId == request.ChargingGunId &&
+                                             s.Active == 1 &&
                                              s.EndTime == DateTime.MinValue);
 
                 if (existingSession != null)
@@ -122,7 +122,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get charging gun details to fetch the correct tariff
                 var chargingGun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId 
+                    .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
                         && g.ConnectorId == request.ConnectorId.ToString() && g.Active == 1);
 
                 string tariffToUse = request.ChargingTariff ?? "0";
@@ -143,8 +143,8 @@ namespace OCPP.Core.Management.Controllers
 
                 // Call OCPP server to start transaction
                 var ocppResult = await CallOCPPStartTransaction(
-                    chargePoint.ChargePointId, 
-                    request.ConnectorId, 
+                    chargePoint.ChargePointId,
+                    request.ConnectorId,
                     request.ChargeTagId);
 
                 if (!ocppResult.Success)
@@ -161,7 +161,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get the actual OCPP transaction that was just created
                 var ocppTransaction = await _dbContext.Transactions
-                    .Where(t => t.ChargePointId == chargePoint.ChargePointId && 
+                    .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
                                t.ConnectorId == request.ConnectorId &&
                                t.StartTagId == request.ChargeTagId)
                     .OrderByDescending(t => t.TransactionId)
@@ -228,6 +228,20 @@ namespace OCPP.Core.Management.Controllers
 
                 _dbContext.ChargingSessions.Add(session);
                 await _dbContext.SaveChangesAsync();
+                var socResult = await GetCachedSoC(ocppTransaction.ChargePointId, request.ConnectorId, maxAgeMinutes: 2);
+                if (socResult.Success && socResult.SoC.HasValue)
+                {
+                    session.SoCStart = socResult.SoC.Value;
+                    session.SoCLastUpdate = socResult.Timestamp;
+                    await _dbContext.SaveChangesAsync();
+
+                    _logger.LogInformation("StartChargingSession => Initial SoC captured: {0}% at {1}",
+                        socResult.SoC.Value, socResult.Timestamp);
+                }
+                else
+                {
+                    _logger.LogInformation("StartChargingSession => No recent SoC data available for initial capture");
+                }
 
                 _logger.LogInformation($"Charging session started: {session.RecId} (Transaction: {transactionId}) for user {userId} at station {request.ChargingStationId}");
 
@@ -346,7 +360,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get real-time connector status BEFORE calling stop transaction
                 var connectorStatus = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargePoint.ChargePointId 
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargePoint.ChargePointId
                         && cs.ConnectorId == connectorId && cs.Active == 1);
 
                 double realtimeMeterReading = 0;
@@ -361,7 +375,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Call OCPP server to stop transaction
                 var ocppResult = await CallOCPPStopTransaction(
-                    chargePoint.ChargePointId, 
+                    chargePoint.ChargePointId,
                     connectorId);
 
                 if (!ocppResult.Success)
@@ -430,13 +444,35 @@ namespace OCPP.Core.Management.Controllers
                     endReading = startReading;
                 }
 
+                var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(session.ChargingGunId), maxAgeMinutes: 5);
+                if (socResult.Success && socResult.SoC.HasValue)
+                {
+                    session.SoCEnd = socResult.SoC.Value;
+                    session.SoCLastUpdate = socResult.Timestamp;
+
+                    // Calculate SoC gain if we have both start and end
+                    if (session.SoCStart.HasValue)
+                    {
+                        double socGain = session.SoCEnd.Value - session.SoCStart.Value;
+                        _logger.LogInformation("EndChargingSession => SoC Gain: {0}% (Start: {1}%, End: {2}%)",
+                            socGain, session.SoCStart.Value, session.SoCEnd.Value);
+                    }
+
+                    // Clear cache after capturing
+                    await ClearCachedSoC(chargingStation.ChargingPointId, int.Parse(session.ChargingGunId));
+                }
+                else
+                {
+                    _logger.LogInformation("EndChargingSession => No recent SoC data available for final capture");
+                }
+
                 // Get charging gun for accurate tariff
                 var chargingGun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId 
+                    .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
                         && g.ConnectorId == session.ChargingGunId && g.Active == 1);
 
                 double tariff = 0;
-                if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.ChargerTariff) && 
+                if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.ChargerTariff) &&
                     double.TryParse(chargingGun.ChargerTariff, out double gunTariff))
                 {
                     tariff = gunTariff;
@@ -599,8 +635,8 @@ namespace OCPP.Core.Management.Controllers
             {
                 // Find active session for this gun
                 var activeSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGunId && 
-                                             s.Active == 1 && 
+                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGunId &&
+                                             s.Active == 1 &&
                                              s.EndTime == DateTime.MinValue);
 
                 // Get charging station info
@@ -676,7 +712,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     // Find the charging gun used in this session
                     chargingGun = await _dbContext.ChargingGuns
-                        .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId 
+                        .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
                             && g.ConnectorId == session.ChargingGunId && g.Active == 1);
 
                     if (chargingGun != null)
@@ -689,7 +725,7 @@ namespace OCPP.Core.Management.Controllers
                         }
 
                         // Use tariff from charging gun (most accurate)
-                        if (!string.IsNullOrEmpty(chargingGun.ChargerTariff) && 
+                        if (!string.IsNullOrEmpty(chargingGun.ChargerTariff) &&
                             double.TryParse(chargingGun.ChargerTariff, out double gunTariff))
                         {
                             actualTariff = gunTariff;
@@ -723,7 +759,7 @@ namespace OCPP.Core.Management.Controllers
                         var batteryCapacityMaster = await _dbContext.BatteryCapacityMasters
                             .FirstOrDefaultAsync(bc => bc.RecId == userVehicle.BatteryCapacityId && bc.Active == 1);
 
-                        if (batteryCapacityMaster != null && 
+                        if (batteryCapacityMaster != null &&
                             double.TryParse(batteryCapacityMaster.BatteryCapcacity, out double capacity))
                         {
                             batteryCapacity = capacity;
@@ -774,7 +810,7 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     var connectorStatus = await _dbContext.ConnectorStatuses
-                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
                             && cs.ConnectorId == connectorId && cs.Active == 1);
 
                     if (connectorStatus != null && connectorStatus.LastMeter.HasValue)
@@ -940,6 +976,27 @@ namespace OCPP.Core.Management.Controllers
                     }
                 }
 
+                double? currentSoC = null;
+                DateTime? currentSoCTime = null;
+                if (isActiveSession && int.TryParse(session.ChargingGunId, out int gunConnectorId))
+                {
+                    var socResult = await GetCachedSoC(chargingStation.ChargingPointId, gunConnectorId, maxAgeMinutes: 5);
+                    if (socResult.Success && socResult.SoC.HasValue)
+                    {
+                        currentSoC = socResult.SoC.Value;
+                        currentSoCTime = socResult.Timestamp;
+                        _logger.LogTrace("GetChargingSessionDetails => Real-time SoC: {0}% at {1}", currentSoC, currentSoCTime);
+                    }
+                }
+
+                // Calculate SoC gain
+                double? socGain = null;
+                if (session.SoCStart.HasValue && (session.SoCEnd.HasValue || currentSoC.HasValue))
+                {
+                    double endValue = session.SoCEnd ?? currentSoC.Value;
+                    socGain = endValue - session.SoCStart.Value;
+                }
+
                 bool isActive = session.EndTime == DateTime.MinValue;
 
                 // Calculate cost breakdown
@@ -965,10 +1022,10 @@ namespace OCPP.Core.Management.Controllers
                             StartReading = Math.Round(meterStart, 3),
                             CurrentReading = Math.Round(meterCurrent, 3),
                             Unit = "kWh",
-                            DataSource = isActiveSession && realtimeConnectorMeter.HasValue 
-                                ? "Real-time Connector (Live)" 
-                                : session.TransactionId.HasValue 
-                                    ? "OCPP Transaction" 
+                            DataSource = isActiveSession && realtimeConnectorMeter.HasValue
+                                ? "Real-time Connector (Live)"
+                                : session.TransactionId.HasValue
+                                    ? "OCPP Transaction"
                                     : "Session Data",
                             IsRealtime = isActiveSession && realtimeConnectorMeter.HasValue
                         },
@@ -990,7 +1047,7 @@ namespace OCPP.Core.Management.Controllers
                             BatteryCapacityUnit = batteryCapacityUnit ?? "kWh",
                             EstimatedRangeAdded = estimatedRange.HasValue ? Math.Round(estimatedRange.Value, 0) : 4,
                             EstimatedRangeUnit = "km",
-                            Description = socChangePercentage.HasValue 
+                            Description = socChangePercentage.HasValue
                                 ? $"Battery charged by {Math.Round(socChangePercentage.Value, 1)}% (~{Math.Round(estimatedRange.Value, 0)} km range added)"
                                 : "Battery capacity information available"
                         } : null,
@@ -1013,7 +1070,7 @@ namespace OCPP.Core.Management.Controllers
                             Unit = "kW",
                             ChargingEfficiency = chargingEfficiency.HasValue ? Math.Round(chargingEfficiency.Value, 1) : 80,
                             EfficiencyUnit = "%",
-                            Description = chargingEfficiency.HasValue 
+                            Description = chargingEfficiency.HasValue
                                 ? $"Average {Math.Round(averageChargingSpeed, 1)} kW charging at {Math.Round(chargingEfficiency.Value, 1)}% efficiency"
                                 : $"Average charging speed: {Math.Round(averageChargingSpeed, 1)} kW"
                         },
@@ -1053,8 +1110,8 @@ namespace OCPP.Core.Management.Controllers
                                 Hours = duration.Hours,
                                 Minutes = duration.Minutes,
                                 TotalHours = Math.Round(duration.TotalHours, 2),
-                                FormattedDuration = duration.Hours > 0 
-                                    ? $"{duration.Hours}h {duration.Minutes}m" 
+                                FormattedDuration = duration.Hours > 0
+                                    ? $"{duration.Hours}h {duration.Minutes}m"
                                     : $"{duration.Minutes}m"
                             },
                             IsActive = isActive,
@@ -1065,18 +1122,29 @@ namespace OCPP.Core.Management.Controllers
                         Summary = new
                         {
                             EnergyDelivered = $"{Math.Round(energyConsumed, 2)} kWh",
-                            SocGained = socChangePercentage.HasValue 
-                                ? $"{Math.Round(socChangePercentage.Value, 1)}%" 
+                            SocGained = socChangePercentage.HasValue
+                                ? $"{Math.Round(socChangePercentage.Value, 1)}%"
                                 : "N/A",
-                            RangeAdded = estimatedRange.HasValue 
-                                ? $"~{Math.Round(estimatedRange.Value, 0)} km" 
+                            RangeAdded = estimatedRange.HasValue
+                                ? $"~{Math.Round(estimatedRange.Value, 0)} km"
                                 : "N/A",
                             TotalCost = $"₹{Math.Round(totalCost, 2)}",
-                            ChargingTime = duration.Hours > 0 
-                                ? $"{duration.Hours}h {duration.Minutes}m" 
+                            ChargingTime = duration.Hours > 0
+                                ? $"{duration.Hours}h {duration.Minutes}m"
                                 : $"{duration.Minutes}m",
                             AverageSpeed = $"{Math.Round(averageChargingSpeed, 1)} kW",
                             CostPerKwh = $"₹{Math.Round(actualTariff, 2)}"
+                        },
+                        BatteryStateOfCharge = new
+                        {
+                            StartSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
+                            EndSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
+                            CurrentSoC = currentSoC.HasValue ? Math.Round(currentSoC.Value, 1) : (double?)null,
+                            SoCGain = socGain.HasValue ? Math.Round(socGain.Value, 1) : (double?)null,
+                            LastUpdate = currentSoCTime ?? session.SoCLastUpdate,
+                            Unit = "%",
+                            IsRealtime = isActiveSession && currentSoC.HasValue,
+                            DataSource = currentSoC.HasValue ? "OCPP Server Cache (Live)" : "Database (Historical)"
                         }
                     }
                 });
@@ -1330,7 +1398,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 var connectorStatus = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargePointId 
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargePointId
                         && cs.ConnectorId == connectorId && cs.Active == 1);
 
                 if (connectorStatus == null)
@@ -1346,11 +1414,11 @@ namespace OCPP.Core.Management.Controllers
                 var chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(s => s.ChargingPointId == chargePointId && s.Active == 1);
 
-                var activeSession = chargingStation != null 
+                var activeSession = chargingStation != null
                     ? await _dbContext.ChargingSessions
-                        .FirstOrDefaultAsync(s => s.ChargingStationID == chargingStation.RecId 
-                            && s.ChargingGunId == connectorId.ToString() 
-                            && s.Active == 1 
+                        .FirstOrDefaultAsync(s => s.ChargingStationID == chargingStation.RecId
+                            && s.ChargingGunId == connectorId.ToString()
+                            && s.Active == 1
                             && s.EndTime == DateTime.MinValue)
                     : null;
 
@@ -1384,12 +1452,12 @@ namespace OCPP.Core.Management.Controllers
                         ConnectorName = connectorStatus.ConnectorName,
                         Status = connectorStatus.LastStatus,
                         StatusTime = connectorStatus.LastStatusTime,
-                        MeterValue = connectorStatus.LastMeter.HasValue 
-                            ? Math.Round(connectorStatus.LastMeter.Value, 3) 
+                        MeterValue = connectorStatus.LastMeter.HasValue
+                            ? Math.Round(connectorStatus.LastMeter.Value, 3)
                             : (double?)null,
                         MeterUnit = "kWh",
                         MeterTime = connectorStatus.LastMeterTime,
-                        MeterAge = connectorStatus.LastMeterTime.HasValue 
+                        MeterAge = connectorStatus.LastMeterTime.HasValue
                             ? Math.Round((DateTime.UtcNow - connectorStatus.LastMeterTime.Value).TotalMinutes, 0) + " minutes ago"
                             : "Never updated",
                         HasActiveSession = activeSession != null,
@@ -1400,14 +1468,14 @@ namespace OCPP.Core.Management.Controllers
                             StartMeter = activeSession.StartMeterReading,
                             EnergySinceStart = energySinceStart.HasValue ? Math.Round(energySinceStart.Value, 3) : (double?)null,
                             EstimatedCost = estimatedCost.HasValue ? Math.Round(estimatedCost.Value, 2) : (double?)null,
-                            Duration = duration.HasValue 
-                                ? $"{duration.Value.Hours}h {duration.Value.Minutes}m" 
+                            Duration = duration.HasValue
+                                ? $"{duration.Value.Hours}h {duration.Value.Minutes}m"
                                 : null,
                             Tariff = activeSession.ChargingTariff
                         } : null,
                         Recommendation = connectorStatus.LastMeter.HasValue && connectorStatus.LastMeterTime.HasValue
-                            ? (DateTime.UtcNow - connectorStatus.LastMeterTime.Value).TotalMinutes < 5 
-                                ? "Meter values are up-to-date" 
+                            ? (DateTime.UtcNow - connectorStatus.LastMeterTime.Value).TotalMinutes < 5
+                                ? "Meter values are up-to-date"
                                 : "Warning: Meter values may be stale. Check charge point connection."
                             : "No meter values received yet"
                     }
@@ -1449,8 +1517,8 @@ namespace OCPP.Core.Management.Controllers
 
             var isActive = session.EndTime == DateTime.MinValue;
             var endTime = session.EndTime == DateTime.MinValue ? (DateTime?)null : session.EndTime;
-            var duration = isActive 
-                ? DateTime.UtcNow - session.StartTime 
+            var duration = isActive
+                ? DateTime.UtcNow - session.StartTime
                 : (endTime.HasValue ? endTime.Value - session.StartTime : TimeSpan.Zero);
 
             return new ChargingSessionDto
@@ -1506,7 +1574,7 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     HttpResponseMessage response = await httpClient.GetAsync(uri);
-                    
+
                     if (response.StatusCode == HttpStatusCode.OK)
                     {
                         string jsonResult = await response.Content.ReadAsStringAsync();
@@ -1514,9 +1582,9 @@ namespace OCPP.Core.Management.Controllers
                         {
                             dynamic jsonObject = JsonConvert.DeserializeObject(jsonResult);
                             string status = jsonObject.status;
-                            
+
                             _logger.LogInformation($"OCPP StartTransaction result: {status}");
-                            
+
                             switch (status)
                             {
                                 case "Accepted":
@@ -1578,7 +1646,7 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     HttpResponseMessage response = await httpClient.GetAsync(uri);
-                    
+
                     if (response.StatusCode == HttpStatusCode.OK)
                     {
                         string jsonResult = await response.Content.ReadAsStringAsync();
@@ -1586,9 +1654,9 @@ namespace OCPP.Core.Management.Controllers
                         {
                             dynamic jsonObject = JsonConvert.DeserializeObject(jsonResult);
                             string status = jsonObject.status;
-                            
+
                             _logger.LogInformation($"OCPP StopTransaction result: {status}");
-                            
+
                             switch (status)
                             {
                                 case "Accepted":
@@ -1650,7 +1718,7 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     HttpResponseMessage response = await httpClient.GetAsync(uri);
-                    
+
                     if (response.StatusCode == HttpStatusCode.OK)
                     {
                         string jsonResult = await response.Content.ReadAsStringAsync();
@@ -1658,9 +1726,9 @@ namespace OCPP.Core.Management.Controllers
                         {
                             dynamic jsonObject = JsonConvert.DeserializeObject(jsonResult);
                             string status = jsonObject.status;
-                            
+
                             _logger.LogInformation($"OCPP UnlockConnector result: {status}");
-                            
+
                             switch (status)
                             {
                                 case "Unlocked":
@@ -1699,6 +1767,141 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        private async Task<(bool Success, double? SoC, DateTime? Timestamp, int? TransactionId, string Message)> GetCachedSoC(string chargePointId, int connectorId, int maxAgeMinutes = 5)
+        {
+            try
+            {
+                string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+                if (string.IsNullOrEmpty(serverApiUrl))
+                {
+                    _logger.LogError("GetCachedSoC => ServerApiUrl not configured");
+                    return (false, null, null, null, "Server API URL not configured");
+                }
+
+                string apiKeyConfig = _config.GetValue<string>("ApiKey");
+                string apiKey = (apiKeyConfig != null) ? apiKeyConfig : string.Empty;
+
+                using (var httpClient = new HttpClient())
+                {
+                    if (!serverApiUrl.EndsWith('/'))
+                    {
+                        serverApiUrl += '/';
+                    }
+
+                    httpClient.BaseAddress = new Uri(serverApiUrl);
+                    httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        httpClient.DefaultRequestHeaders.Add("API-Key", apiKey);
+                    }
+
+                    string url = $"API/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}&connectorId={connectorId}&maxAgeMinutes={maxAgeMinutes}";
+
+                    _logger.LogTrace("GetCachedSoC => Calling: {0}", url);
+
+                    HttpResponseMessage response = await httpClient.GetAsync(url);
+                    string jsonResponse = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var apiResponse = JsonConvert.DeserializeObject<dynamic>(jsonResponse);
+
+                        if (apiResponse?.Success == true && apiResponse?.Data != null)
+                        {
+                            double? soc = apiResponse.Data.SoC;
+                            DateTime? timestamp = apiResponse.Data.Timestamp;
+                            int? transactionId = apiResponse.Data.TransactionId;
+
+                            _logger.LogInformation("GetCachedSoC => Retrieved SoC: {0}% for {1}/{2}",
+                                soc, chargePointId, connectorId);
+
+                            return (true, soc, timestamp, transactionId, "SoC retrieved successfully");
+                        }
+                        else
+                        {
+                            _logger.LogInformation("GetCachedSoC => No cached SoC data available");
+                            return (true, null, null, null, "No recent SoC data available");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogError("GetCachedSoC => HTTP error: {0} - {1}", response.StatusCode, jsonResponse);
+                        return (false, null, null, null, $"Server returned: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "GetCachedSoC => Exception: {0}", ex.Message);
+                return (false, null, null, null, ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Clear cached SoC on OCPP Server
+        /// </summary>
+        private async Task<(bool Success, string Message)> ClearCachedSoC(string chargePointId, int connectorId)
+        {
+            try
+            {
+                string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+                if (string.IsNullOrEmpty(serverApiUrl))
+                {
+                    _logger.LogError("ClearCachedSoC => ServerApiUrl not configured");
+                    return (false, "Server API URL not configured");
+                }
+
+                string apiKeyConfig = _config.GetValue<string>("ApiKey");
+                string apiKey = (apiKeyConfig != null) ? apiKeyConfig : string.Empty;
+
+                using (var httpClient = new HttpClient())
+                {
+                    if (!serverApiUrl.EndsWith('/'))
+                    {
+                        serverApiUrl += '/';
+                    }
+
+                    httpClient.BaseAddress = new Uri(serverApiUrl);
+                    httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        httpClient.DefaultRequestHeaders.Add("API-Key", apiKey);
+                    }
+
+                    var requestBody = new
+                    {
+                        ChargePointId = chargePointId,
+                        ConnectorId = connectorId
+                    };
+
+                    var content = new StringContent(
+                        JsonConvert.SerializeObject(requestBody),
+                        System.Text.Encoding.UTF8,
+                        "application/json");
+
+                    HttpResponseMessage response = await httpClient.PostAsync("API/SoC/ClearSoC", content);
+                    string jsonResponse = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        _logger.LogInformation("ClearCachedSoC => SoC cache cleared for {0}/{1}", chargePointId, connectorId);
+                        return (true, "SoC cache cleared");
+                    }
+                    else
+                    {
+                        _logger.LogError("ClearCachedSoC => HTTP error: {0} - {1}", response.StatusCode, jsonResponse);
+                        return (false, $"Server returned: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ClearCachedSoC => Exception: {0}", ex.Message);
+                return (false, ex.Message);
+            }
+        }
         #endregion
     }
 }

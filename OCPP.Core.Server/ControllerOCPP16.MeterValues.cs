@@ -173,6 +173,20 @@ namespace OCPP.Core.Server
                             UpdateConnectorStatus(connectorId, null, null, meterKWH, meterTime);
                             UpdateMemoryConnectorStatus(connectorId, meterKWH, meterTime, currentChargeKW, stateOfCharge);
                         }
+
+                        // Cache SoC in memory
+                        if (stateOfCharge >= 0)
+                        {
+                            SoCCache.Set(
+                                ChargePointStatus.Id,
+                                connectorId,
+                                stateOfCharge,
+                                meterTime.UtcDateTime,
+                                meterValueRequest.TransactionId
+                            );
+                            Logger.LogTrace("MeterValues => SoC cached: Connector={0}, SoC={1:0.0}%, TransactionId={2}",
+                                connectorId, stateOfCharge, meterValueRequest.TransactionId);
+                        }
                     }
                 }
                 else

@@ -24,5 +24,8 @@ namespace OCPP.Core.Database.EVCDTO
         public int Active { get; set; }
         public DateTime CreatedOn { get; set; }
         public DateTime UpdatedOn { get; set; }
+        public double? SoCStart { get; set; }
+        public double? SoCEnd { get; set; }
+        public DateTime? SoCLastUpdate { get; set; }
     }
 }
