@@ -9,6 +9,7 @@ namespace OCPP.Core.Database.EVCDTO
     public class ChargingHubReview
     {
         public string RecId { get; set; }
+        public string UserId { get; set; }
         public string ChargingHubId { get; set; }
         public string ChargingStationId { get; set; }
         public int Rating { get; set; }

@@ -7,6 +7,7 @@ using OCPP.Core.Management.Models.ChargingHub;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -1287,6 +1288,17 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                // Get UserId from JWT token
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return BadRequest(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "User not authenticated"
+                    });
+                }
+
                 if (!ModelState.IsValid)
                 {
                     return BadRequest(new ReviewResponseDto
@@ -1308,6 +1320,7 @@ namespace OCPP.Core.Management.Controllers
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
                     RecId = Guid.NewGuid().ToString(),
+                    UserId = userId,
                     ChargingHubId = request.ChargingHubId,
                     ChargingStationId = request.ChargingStationId,
                     Rating = request.Rating,
@@ -1325,7 +1338,7 @@ namespace OCPP.Core.Management.Controllers
                 _dbContext.ChargingHubReviews.Add(review);
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Hub review added: {review.RecId}");
+                _logger.LogInformation($"Hub review added: {review.RecId} by User: {userId}");
 
                 return Ok(new ReviewResponseDto
                 {
@@ -1354,6 +1367,17 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                // Get UserId from JWT token
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return BadRequest(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "User not authenticated"
+                    });
+                }
+
                 if (!ModelState.IsValid)
                 {
                     return Ok(new ReviewResponseDto
@@ -1375,6 +1399,7 @@ namespace OCPP.Core.Management.Controllers
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
                     RecId = Guid.NewGuid().ToString(),
+                    UserId = userId,
                     ChargingHubId = request.ChargingHubId,
                     ChargingStationId = request.ChargingStationId,
                     Rating = request.Rating,
@@ -1392,7 +1417,7 @@ namespace OCPP.Core.Management.Controllers
                 _dbContext.ChargingHubReviews.Add(review);
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"Station review added: {review.RecId}");
+                _logger.LogInformation($"Station review added: {review.RecId} by User: {userId}");
 
                 return Ok(new ReviewResponseDto
                 {
@@ -1421,6 +1446,17 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                // Get UserId from JWT token
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return BadRequest(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "User not authenticated"
+                    });
+                }
+
                 if (!ModelState.IsValid)
                 {
                     return Ok(new ReviewResponseDto
@@ -1437,6 +1473,17 @@ namespace OCPP.Core.Management.Controllers
                     {
                         Success = false,
                         Message = "Review not found"
+                    });
+                }
+
+                // Check if user owns this review
+                if (review.UserId != userId)
+                {
+                    _logger.LogWarning($"Unauthorized update attempt on review {request.RecId} by user {userId}");
+                    return StatusCode(403, new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "You can only edit your own reviews"
                     });
                 }
 
@@ -1479,6 +1526,17 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                // Get UserId from JWT token
+                var userId = User.FindFirst("UserId")?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return BadRequest(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "User not authenticated"
+                    });
+                }
+
                 var review = await _dbContext.ChargingHubReviews.FirstOrDefaultAsync(r => r.RecId == reviewId && r.Active == 1);
                 if (review == null)
                 {
@@ -1486,6 +1544,17 @@ namespace OCPP.Core.Management.Controllers
                     {
                         Success = false,
                         Message = "Review not found"
+                    });
+                }
+
+                // Check if user owns this review
+                if (review.UserId != userId)
+                {
+                    _logger.LogWarning($"Unauthorized delete attempt on review {reviewId} by user {userId}");
+                    return StatusCode(403, new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "You can only delete your own reviews"
                     });
                 }
 
@@ -1679,6 +1748,7 @@ namespace OCPP.Core.Management.Controllers
             return new ReviewDto
             {
                 RecId = review.RecId,
+                UserId = review.UserId,
                 ChargingHubId = review.ChargingHubId,
                 ChargingStationId = review.ChargingStationId,
                 Rating = review.Rating,

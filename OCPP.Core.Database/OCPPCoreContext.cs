@@ -234,6 +234,8 @@ namespace OCPP.Core.Database
 
                 entity.Property(e => e.RecId).HasMaxLength(50);
 
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
                 entity.Property(e => e.ChargingHubId).HasMaxLength(50);
 
                 entity.Property(e => e.ChargingStationId).HasMaxLength(50);
@@ -247,6 +249,12 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.ReviewImage3).HasMaxLength(50);
 
                 entity.Property(e => e.ReviewImage4).HasMaxLength(50);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_ChargingHubReview_Users");
 
                 entity.HasOne<EVCDTO.ChargingHub>()
                     .WithMany()

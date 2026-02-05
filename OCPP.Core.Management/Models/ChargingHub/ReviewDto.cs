@@ -5,6 +5,7 @@ namespace OCPP.Core.Management.Models.ChargingHub
     public class ReviewDto
     {
         public string RecId { get; set; }
+        public string UserId { get; set; }
         public string ChargingHubId { get; set; }
         public string ChargingStationId { get; set; }
         public int Rating { get; set; }
