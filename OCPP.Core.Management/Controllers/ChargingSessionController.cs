@@ -1793,10 +1793,10 @@ namespace OCPP.Core.Management.Controllers
 
                     if (!string.IsNullOrEmpty(apiKey))
                     {
-                        httpClient.DefaultRequestHeaders.Add("API-Key", apiKey);
+                        httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
                     }
 
-                    string url = $"API/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}&connectorId={connectorId}&maxAgeMinutes={maxAgeMinutes}";
+                    string url = $"SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}&connectorId={connectorId}&maxAgeMinutes={maxAgeMinutes}";
 
                     _logger.LogTrace("GetCachedSoC => Calling: {0}", url);
 
@@ -1807,11 +1807,11 @@ namespace OCPP.Core.Management.Controllers
                     {
                         var apiResponse = JsonConvert.DeserializeObject<dynamic>(jsonResponse);
 
-                        if (apiResponse?.Success == true && apiResponse?.Data != null)
+                        if (apiResponse?.success == true && apiResponse?.data != null)
                         {
-                            double? soc = apiResponse.Data.SoC;
-                            DateTime? timestamp = apiResponse.Data.Timestamp;
-                            int? transactionId = apiResponse.Data.TransactionId;
+                            double? soc = apiResponse.data.soC;
+                            DateTime? timestamp = apiResponse.data.timestamp;
+                            int? transactionId = apiResponse.data.transactionId;
 
                             _logger.LogInformation("GetCachedSoC => Retrieved SoC: {0}% for {1}/{2}",
                                 soc, chargePointId, connectorId);

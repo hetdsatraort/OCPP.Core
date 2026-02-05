@@ -306,6 +306,15 @@ namespace OCPP.Core.Server
             }
             else if (context.Request.Path.StartsWithSegments("/API"))
             {
+                // Allow standard ASP.NET Controllers to handle their own routes (e.g., SoCController)
+                // Pass through to next middleware if path starts with known controller routes
+                if (context.Request.Path.StartsWithSegments("/API/SoC"))
+                {
+                    _logger.LogTrace("OCPPMiddleware => Passing /API/SoC request to controller pipeline");
+                    await _next(context);
+                    return;
+                }
+
                 // Check authentication (X-API-Key)
                 string apiKeyConfig = _configuration.GetValue<string>("ApiKey");
                 if (!string.IsNullOrWhiteSpace(apiKeyConfig))

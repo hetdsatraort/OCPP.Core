@@ -8,17 +8,15 @@ using System;
 
 namespace OCPP.Core.Server
 {
-    [Authorize]
     [ApiController]
     [Route("API/[controller]")]
-    public class SoCController : ControllerBase
+    public class SoCController : Microsoft.AspNetCore.Mvc.ControllerBase
     {
-        private readonly ILogger<SoCController> _logger;
+        private readonly ILogger _logger;
 
-        public SoCController(IConfiguration config, ILoggerFactory loggerFactory, ChargePointStatus chargePointStatus, OCPPCoreContext dbContext) :
-            base(config, loggerFactory, chargePointStatus, dbContext)
+        public SoCController(ILoggerFactory loggerFactory)
         {
-            Logger = loggerFactory.CreateLogger(typeof(ControllerOCPP16));
+            _logger = loggerFactory.CreateLogger(typeof(SoCController));
         }
 
         /// <summary>

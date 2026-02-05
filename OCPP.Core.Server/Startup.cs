@@ -103,8 +103,17 @@ namespace OCPP.Core.Server
             // Accept WebSocket
             app.UseWebSockets(webSocketOptions);
 
+            // Enable routing
+            app.UseRouting();
+
             // Integrate custom OCPP middleware for message processing
             app.UseOCPPMiddleware();
+
+            // Map controller endpoints
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
         }
     }
 }
