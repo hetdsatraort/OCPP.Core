@@ -296,6 +296,8 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                double? socGain = null;
+
                 if (!ModelState.IsValid)
                 {
                     return Ok(new ChargingSessionResponseDto
@@ -464,7 +466,7 @@ namespace OCPP.Core.Management.Controllers
                     // Calculate SoC gain if we have both start and end
                     if (session.SoCStart.HasValue)
                     {
-                        double socGain = session.SoCEnd.Value - session.SoCStart.Value;
+                        socGain = session.SoCEnd.Value - session.SoCStart.Value;
                         _logger.LogInformation("EndChargingSession => SoC Gain: {0}% (Start: {1}%, End: {2}%)",
                             socGain, session.SoCStart.Value, session.SoCEnd.Value);
                     }
@@ -612,7 +614,6 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogInformation($"Charging session ended: {session.RecId} (Txn: {session.TransactionId}). Energy: {energyTransmitted:F3}kWh, Fee: ₹{totalFee:F2}, Balance: ₹{newBalance:F2}");
 
                 // Calculate SoC gain for response
-                double? socGain = null;
                 if (session.SoCStart.HasValue && session.SoCEnd.HasValue)
                 {
                     socGain = session.SoCEnd.Value - session.SoCStart.Value;
@@ -1410,6 +1411,41 @@ namespace OCPP.Core.Management.Controllers
                     sessionDtos.Add(await MapToChargingSessionDto(session));
                 }
 
+                // Calculate summary totals
+                double totalEnergyTransmitted = 0;
+                decimal totalChargingTotalFee = 0;
+                TimeSpan totalChargingTime = TimeSpan.Zero;
+
+                foreach (var session in sessions)
+                {
+                    // Sum energy transmitted
+                    if (!string.IsNullOrEmpty(session.EnergyTransmitted) && 
+                        double.TryParse(session.EnergyTransmitted, out double energy))
+                    {
+                        totalEnergyTransmitted += energy;
+                    }
+
+                    // Sum charging fees
+                    if (!string.IsNullOrEmpty(session.ChargingTotalFee) && 
+                        decimal.TryParse(session.ChargingTotalFee, out decimal fee))
+                    {
+                        totalChargingTotalFee += fee;
+                    }
+
+                    // Sum charging duration
+                    if (session.EndTime != DateTime.MinValue)
+                    {
+                        var duration = session.EndTime - session.StartTime;
+                        totalChargingTime += duration;
+                    }
+                    else
+                    {
+                        // For active sessions, calculate duration until now
+                        var duration = DateTime.UtcNow - session.StartTime;
+                        totalChargingTime += duration;
+                    }
+                }
+
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
@@ -1420,7 +1456,24 @@ namespace OCPP.Core.Management.Controllers
                         Page = page,
                         PageSize = pageSize,
                         TotalPages = (int)Math.Ceiling((double)totalRecords / pageSize),
-                        Sessions = sessionDtos
+                        Sessions = sessionDtos,
+                        Summary = new
+                        {
+                            TotalEnergyTransmitted = Math.Round(totalEnergyTransmitted, 3),
+                            TotalEnergyUnit = "kWh",
+                            TotalChargingTotalFee = Math.Round(totalChargingTotalFee, 2),
+                            TotalFeeUnit = "₹",
+                            TotalChargingTime = new
+                            {
+                                TotalHours = Math.Round(totalChargingTime.TotalHours, 2),
+                                TotalMinutes = Math.Round(totalChargingTime.TotalMinutes, 0),
+                                FormattedDuration = totalChargingTime.Days > 0
+                                    ? $"{totalChargingTime.Days}d {totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                    : totalChargingTime.Hours > 0
+                                        ? $"{totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                        : $"{totalChargingTime.Minutes}m"
+                            }
+                        }
                     }
                 });
             }
