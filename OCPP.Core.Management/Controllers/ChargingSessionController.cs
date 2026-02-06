@@ -257,6 +257,17 @@ namespace OCPP.Core.Management.Controllers
                         MeterSource = meterSource,
                         Tariff = session.ChargingTariff,
                         StartTime = startTime,
+                        BatteryStateOfCharge = new
+                        {
+                            StartSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
+                            EndSoC = (double?)null,
+                            CurrentSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
+                            SoCGain = (double?)null,
+                            LastUpdate = session.SoCLastUpdate,
+                            Unit = "%",
+                            IsRealtime = session.SoCStart.HasValue,
+                            DataSource = session.SoCStart.HasValue ? "OCPP Server Cache (Live)" : "Not Available"
+                        },
                         Recommendation = meterSource == "OCPP Transaction"
             ? "Meter reading from authoritative OCPP transaction"
             : meterSource == "Connector Real-time"
@@ -535,6 +546,13 @@ namespace OCPP.Core.Management.Controllers
                     session.UpdatedOn = DateTime.UtcNow;
                     await _dbContext.SaveChangesAsync();
 
+                    // Calculate SoC gain for insufficient balance response
+                    double? socGainInsufficient = null;
+                    if (session.SoCStart.HasValue && session.SoCEnd.HasValue)
+                    {
+                        socGainInsufficient = session.SoCEnd.Value - session.SoCStart.Value;
+                    }
+
                     return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
@@ -547,6 +565,17 @@ namespace OCPP.Core.Management.Controllers
                             MeterStart = startReading,
                             MeterStop = endReading,
                             Duration = duration.TotalMinutes,
+                            BatteryStateOfCharge = new
+                            {
+                                StartSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
+                                EndSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
+                                CurrentSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
+                                SoCGain = socGainInsufficient.HasValue ? Math.Round(socGainInsufficient.Value, 1) : (double?)null,
+                                LastUpdate = session.SoCLastUpdate,
+                                Unit = "%",
+                                IsRealtime = false,
+                                DataSource = session.SoCEnd.HasValue ? "Database (Historical)" : "Not Available"
+                            },
                             DataSource = new
                             {
                                 TransactionFound = session.TransactionId.HasValue,
@@ -582,6 +611,13 @@ namespace OCPP.Core.Management.Controllers
 
                 _logger.LogInformation($"Charging session ended: {session.RecId} (Txn: {session.TransactionId}). Energy: {energyTransmitted:F3}kWh, Fee: ₹{totalFee:F2}, Balance: ₹{newBalance:F2}");
 
+                // Calculate SoC gain for response
+                double? socGain = null;
+                if (session.SoCStart.HasValue && session.SoCEnd.HasValue)
+                {
+                    socGain = session.SoCEnd.Value - session.SoCStart.Value;
+                }
+
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
@@ -596,6 +632,17 @@ namespace OCPP.Core.Management.Controllers
                         MeterStop = endReading,
                         Duration = duration.TotalMinutes,
                         ChargingSpeed = session.ChargingSpeed,
+                        BatteryStateOfCharge = new
+                        {
+                            StartSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
+                            EndSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
+                            CurrentSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
+                            SoCGain = socGain.HasValue ? Math.Round(socGain.Value, 1) : (double?)null,
+                            LastUpdate = session.SoCLastUpdate,
+                            Unit = "%",
+                            IsRealtime = false,
+                            DataSource = session.SoCEnd.HasValue ? "Database (Historical)" : "Not Available"
+                        },
                         DataSource = new
                         {
                             TransactionUsed = session.TransactionId.HasValue,
@@ -1541,7 +1588,10 @@ namespace OCPP.Core.Management.Controllers
                 Duration = duration,
                 Active = session.Active,
                 CreatedOn = session.CreatedOn,
-                UpdatedOn = session.UpdatedOn
+                UpdatedOn = session.UpdatedOn,
+                SoCStart = session.SoCStart,
+                SoCEnd = session.SoCEnd,
+                SoCLastUpdate = session.SoCLastUpdate
             };
         }
 
