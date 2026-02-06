@@ -514,10 +514,16 @@ namespace OCPP.Core.Management.Controllers
 
                 // Calculate charging speed (kW)
                 var duration = actualEndTime - actualStartTime;
-                if (duration.TotalHours > 0)
+                // Only calculate charging speed if duration is positive
+                if (duration.TotalSeconds > 0 && duration.TotalHours > 0)
                 {
                     double chargingSpeed = energyTransmitted / duration.TotalHours;
                     session.ChargingSpeed = chargingSpeed.ToString("F2");
+                }
+                else if (duration.TotalSeconds <= 0)
+                {
+                    _logger.LogWarning($"Negative or zero duration detected for session {session.RecId}. Start: {actualStartTime}, End: {actualEndTime}");
+                    session.ChargingSpeed = "0";
                 }
 
                 // Update charging gun meter reading
@@ -991,6 +997,13 @@ namespace OCPP.Core.Management.Controllers
                 double? chargingEfficiency = null;
                 var duration = (actualEndTime ?? DateTime.UtcNow) - actualStartTime;
 
+                // Handle negative durations - set to zero if negative
+                if (duration.TotalSeconds < 0)
+                {
+                    duration = TimeSpan.Zero;
+                    _logger.LogWarning($"Negative duration detected for session {sessionId}. Setting duration to zero.");
+                }
+
                 if (batteryCapacity.HasValue && batteryCapacity.Value > 0 && energyConsumed > 0)
                 {
                     // SOC change in kWh
@@ -1436,13 +1449,21 @@ namespace OCPP.Core.Management.Controllers
                     if (session.EndTime != DateTime.MinValue)
                     {
                         var duration = session.EndTime - session.StartTime;
-                        totalChargingTime += duration;
+                        // Only add positive durations to avoid data inconsistencies
+                        if (duration.TotalSeconds > 0)
+                        {
+                            totalChargingTime += duration;
+                        }
                     }
                     else
                     {
                         // For active sessions, calculate duration until now
                         var duration = DateTime.UtcNow - session.StartTime;
-                        totalChargingTime += duration;
+                        // Only add positive durations to avoid data inconsistencies
+                        if (duration.TotalSeconds > 0)
+                        {
+                            totalChargingTime += duration;
+                        }
                     }
                 }
 
@@ -1620,6 +1641,12 @@ namespace OCPP.Core.Management.Controllers
             var duration = isActive
                 ? DateTime.UtcNow - session.StartTime
                 : (endTime.HasValue ? endTime.Value - session.StartTime : TimeSpan.Zero);
+
+            // Handle negative durations - set to zero if negative
+            if (duration.TotalSeconds < 0)
+            {
+                duration = TimeSpan.Zero;
+            }
 
             return new ChargingSessionDto
             {
