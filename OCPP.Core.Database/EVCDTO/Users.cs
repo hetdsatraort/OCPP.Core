@@ -25,6 +25,7 @@ namespace OCPP.Core.Database.EVCDTO
         public string ProfileCompleted { get; set; }
         public string LastLogin { get; set; }
         public string UserRole { get; set; }
+        public string CreditBalance { get; set; }
         public int Active { get; set; }
         public DateTime CreatedOn { get; set; }
         public DateTime UpdatedOn { get; set; }

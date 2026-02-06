@@ -56,6 +56,7 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.BatteryTypeMaster> BatteryTypeMasters { get; set; }
         public virtual DbSet<EVCDTO.BatteryCapacityMaster> BatteryCapacityMasters { get; set; }
         public virtual DbSet<EVCDTO.CarManufacturerMaster> CarManufacturerMasters { get; set; }
+        public virtual DbSet<EVCDTO.PaymentValidation> PaymentValidations { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -187,6 +188,8 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.LastLogin).HasMaxLength(50);
 
                 entity.Property(e => e.UserRole).HasMaxLength(50);
+
+                entity.Property(e => e.CreditBalance).HasMaxLength(50);
             });
 
             modelBuilder.Entity<EVCDTO.ChargingHub>(entity =>
@@ -636,6 +639,68 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.Active).HasDefaultValue(1);
 
                 entity.HasIndex(e => e.ManufacturerName);
+            });
+
+            modelBuilder.Entity<EVCDTO.PaymentValidation>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.UserId)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.OrderId)
+                    .IsRequired()
+                    .HasMaxLength(100);
+
+                entity.Property(e => e.PaymentId).HasMaxLength(100);
+
+                entity.Property(e => e.PaymentSignature).HasMaxLength(500);
+
+                entity.Property(e => e.Currency).HasMaxLength(10);
+
+                entity.Property(e => e.Status)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.PaymentMethod).HasMaxLength(50);
+
+                entity.Property(e => e.IpAddress).HasMaxLength(50);
+
+                entity.Property(e => e.UserAgent).HasMaxLength(500);
+
+                entity.Property(e => e.PaymentHistoryId).HasMaxLength(50);
+
+                entity.Property(e => e.WalletTransactionId).HasMaxLength(50);
+
+                entity.Property(e => e.VerificationMessage).HasMaxLength(500);
+
+                entity.Property(e => e.SecurityHash).HasMaxLength(500);
+
+                entity.Property(e => e.FailureReason).HasMaxLength(500);
+
+                entity.Property(e => e.Metadata).HasMaxLength(2000);
+
+                entity.Property(e => e.AdditionalInfo1).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo2).HasMaxLength(200);
+
+                entity.Property(e => e.AdditionalInfo3).HasMaxLength(200);
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.OrderId);
+                entity.HasIndex(e => e.PaymentId);
+                entity.HasIndex(e => e.UserId);
+                entity.HasIndex(e => e.Status);
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_PaymentValidation_Users");
             });
 
             OnModelCreatingPartial(modelBuilder);

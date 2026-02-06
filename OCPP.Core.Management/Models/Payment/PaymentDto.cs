@@ -68,4 +68,23 @@ namespace OCPP.Core.Management.Models.Payment
         public string Status { get; set; }
         public DateTime Timestamp { get; set; }
     }
+
+    public class AddCreditsRequestDto
+    {
+        public string UserId { get; set; }
+        public string OrderId { get; set; }
+        public string PaymentId { get; set; }
+        public string PaymentSignature { get; set; }
+        public decimal Amount { get; set; }
+        public string Currency { get; set; }
+    }
+
+    public class AddCreditsResponseDto
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; }
+        public decimal NewBalance { get; set; }
+        public string ValidationId { get; set; }
+        public string TransactionId { get; set; }
+    }
 }
