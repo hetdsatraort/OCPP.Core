@@ -1037,7 +1037,7 @@ namespace OCPP.Core.Management.Controllers
         /// </summary>
         [HttpGet("wallet-details")]
         [Authorize]
-        public async Task<IActionResult> GetWalletDetails()
+        public async Task<IActionResult> GetWalletDetails([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
             try
             {
@@ -1051,18 +1051,24 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                var walletTransactions = await _dbContext.WalletTransactionLogs
-                    .Where(w => w.UserId == userId && w.Active == 1)
-                    .OrderByDescending(w => w.CreatedOn)
-                    .Take(20)
-                    .ToListAsync();
-
                 // Get total count of all transactions for this user
                 var totalTransactionCount = await _dbContext.WalletTransactionLogs
                     .Where(w => w.UserId == userId && w.Active == 1)
                     .CountAsync();
 
-                var lastTransaction = walletTransactions.FirstOrDefault();
+                // Get paginated transactions
+                var walletTransactions = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                // Get the absolute latest transaction for current balance (regardless of pagination)
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
                 decimal currentBalance = 0;
                 if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
                 {
