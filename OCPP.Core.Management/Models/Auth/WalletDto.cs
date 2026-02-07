@@ -7,6 +7,7 @@ namespace OCPP.Core.Management.Models.Auth
     {
         public string UserId { get; set; }
         public decimal CurrentBalance { get; set; }
+        public int TotalTransactions { get; set; }
         public List<WalletTransactionDto> RecentTransactions { get; set; }
     }
 

@@ -8,6 +8,7 @@ using Newtonsoft.Json;
 using OCPP.Core.Database;
 using OCPP.Core.Management.Models.ChargingSession;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -1412,44 +1413,37 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var totalRecords = await query.CountAsync();
-                var sessions = await query
-                    .OrderByDescending(s => s.StartTime)
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
-                    .ToListAsync();
-
-                var sessionDtos = new System.Collections.Generic.List<ChargingSessionDto>();
-                foreach (var session in sessions)
+                
+                // Use database aggregation for summary calculations - MUCH faster!
+                var summaryData = await query.Select(s => new
                 {
-                    sessionDtos.Add(await MapToChargingSessionDto(session));
-                }
+                    EnergyTransmitted = s.EnergyTransmitted,
+                    ChargingTotalFee = s.ChargingTotalFee,
+                    StartTime = s.StartTime,
+                    EndTime = s.EndTime
+                }).ToListAsync();
 
-                // Calculate summary totals
                 double totalEnergyTransmitted = 0;
                 decimal totalChargingTotalFee = 0;
                 TimeSpan totalChargingTime = TimeSpan.Zero;
 
-                foreach (var session in sessions)
+                foreach (var item in summaryData)
                 {
-                    // Sum energy transmitted
-                    if (!string.IsNullOrEmpty(session.EnergyTransmitted) && 
-                        double.TryParse(session.EnergyTransmitted, out double energy))
+                    if (!string.IsNullOrEmpty(item.EnergyTransmitted) && 
+                        double.TryParse(item.EnergyTransmitted, out double energy))
                     {
                         totalEnergyTransmitted += energy;
                     }
 
-                    // Sum charging fees
-                    if (!string.IsNullOrEmpty(session.ChargingTotalFee) && 
-                        decimal.TryParse(session.ChargingTotalFee, out decimal fee))
+                    if (!string.IsNullOrEmpty(item.ChargingTotalFee) && 
+                        decimal.TryParse(item.ChargingTotalFee, out decimal fee))
                     {
                         totalChargingTotalFee += fee;
                     }
 
-                    // Sum charging duration
-                    if (session.EndTime != DateTime.MinValue)
+                    if (item.EndTime != DateTime.MinValue)
                     {
-                        var duration = session.EndTime - session.StartTime;
-                        // Only add positive durations to avoid data inconsistencies
+                        var duration = item.EndTime - item.StartTime;
                         if (duration.TotalSeconds > 0)
                         {
                             totalChargingTime += duration;
@@ -1457,14 +1451,49 @@ namespace OCPP.Core.Management.Controllers
                     }
                     else
                     {
-                        // For active sessions, calculate duration until now
-                        var duration = DateTime.UtcNow - session.StartTime;
-                        // Only add positive durations to avoid data inconsistencies
+                        var duration = DateTime.UtcNow - item.StartTime;
                         if (duration.TotalSeconds > 0)
                         {
                             totalChargingTime += duration;
                         }
                     }
+                }
+
+                // Get paginated sessions with related data in ONE query
+                var pagedSessions = await query
+                    .OrderByDescending(s => s.StartTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                // Bulk load all related data to avoid N+1 queries
+                var stationIds = pagedSessions.Select(s => s.ChargingStationID).Distinct().ToList();
+                var stations = await _dbContext.ChargingStations
+                    .Where(cs => stationIds.Contains(cs.RecId))
+                    .ToDictionaryAsync(cs => cs.RecId, cs => cs);
+
+                var hubIds = stations.Values.Select(s => s.ChargingHubId).Distinct().ToList();
+                var hubs = await _dbContext.ChargingHubs
+                    .Where(ch => hubIds.Contains(ch.RecId))
+                    .ToDictionaryAsync(ch => ch.RecId, ch => ch);
+
+                var gunKeys = pagedSessions.Select(s => new { s.ChargingStationID, s.ChargingGunId }).Distinct().ToList();
+                var guns = await _dbContext.ChargingGuns
+                    .Where(cg => stationIds.Contains(cg.ChargingStationId))
+                    .ToListAsync();
+                var gunsDict = guns.ToDictionary(g => $"{g.ChargingStationId}_{g.ConnectorId}", g => g);
+
+                var chargePointIds = stations.Values.Select(s => s.ChargingPointId).Distinct().ToList();
+                var connectorStatuses = await _dbContext.ConnectorStatuses
+                    .Where(cs => chargePointIds.Contains(cs.ChargePointId) && cs.Active == 1)
+                    .ToListAsync();
+                var connectorDict = connectorStatuses.ToDictionary(cs => $"{cs.ChargePointId}_{cs.ConnectorId}", cs => cs);
+
+                // Map paginated sessions to DTOs using pre-loaded data
+                var sessionDtos = new System.Collections.Generic.List<ChargingSessionDto>();
+                foreach (var session in pagedSessions)
+                {
+                    sessionDtos.Add(MapToChargingSessionDtoFast(session, stations, hubs, gunsDict, connectorDict));
                 }
 
                 return Ok(new ChargingSessionResponseDto
@@ -1656,6 +1685,71 @@ namespace OCPP.Core.Management.Controllers
                 ChargingStationName = chargingStation?.ChargingPointId,
                 ChargingHubName = chargingHubName,
                 ConnectorName = connectorStatus.ConnectorName,
+                StartMeterReading = session.StartMeterReading,
+                EndMeterReading = session.EndMeterReading,
+                EnergyTransmitted = session.EnergyTransmitted,
+                StartTime = session.StartTime,
+                EndTime = endTime,
+                ChargingSpeed = session.ChargingSpeed,
+                ChargingTariff = session.ChargingTariff,
+                ChargingTotalFee = session.ChargingTotalFee,
+                Status = isActive ? "Active" : "Completed",
+                Duration = duration,
+                Active = session.Active,
+                CreatedOn = session.CreatedOn,
+                UpdatedOn = session.UpdatedOn,
+                SoCStart = session.SoCStart,
+                SoCEnd = session.SoCEnd,
+                SoCLastUpdate = session.SoCLastUpdate
+            };
+        }
+
+        // Fast mapping using pre-loaded data to avoid N+1 queries
+        private ChargingSessionDto MapToChargingSessionDtoFast(
+            Database.EVCDTO.ChargingSession session,
+            Dictionary<string, Database.EVCDTO.ChargingStation> stations,
+            Dictionary<string, Database.EVCDTO.ChargingHub> hubs,
+            Dictionary<string, Database.EVCDTO.ChargingGuns> guns,
+            Dictionary<string, Database.ConnectorStatus> connectorStatuses)
+        {
+            Database.EVCDTO.ChargingStation chargingStation = null;
+            stations.TryGetValue(session.ChargingStationID, out chargingStation);
+
+            Database.EVCDTO.ChargingGuns chargingGun = null;
+            guns.TryGetValue($"{session.ChargingStationID}_{session.ChargingGunId}", out chargingGun);
+
+            Database.ConnectorStatus connectorStatus = null;
+            if (chargingStation != null && chargingGun != null)
+            {
+                connectorStatuses.TryGetValue($"{chargingStation.ChargingPointId}_{chargingGun.ConnectorId}", out connectorStatus);
+            }
+
+            string chargingHubName = null;
+            if (chargingStation != null && hubs.TryGetValue(chargingStation.ChargingHubId, out var hub))
+            {
+                chargingHubName = hub.City;
+            }
+
+            var isActive = session.EndTime == DateTime.MinValue;
+            var endTime = session.EndTime == DateTime.MinValue ? (DateTime?)null : session.EndTime;
+            var duration = isActive
+                ? DateTime.UtcNow - session.StartTime
+                : (endTime.HasValue ? endTime.Value - session.StartTime : TimeSpan.Zero);
+
+            // Handle negative durations - set to zero if negative
+            if (duration.TotalSeconds < 0)
+            {
+                duration = TimeSpan.Zero;
+            }
+
+            return new ChargingSessionDto
+            {
+                RecId = session.RecId,
+                ChargingGunId = session.ChargingGunId,
+                ChargingStationId = session.ChargingStationID,
+                ChargingStationName = chargingStation?.ChargingPointId,
+                ChargingHubName = chargingHubName,
+                ConnectorName = connectorStatus?.ConnectorName,
                 StartMeterReading = session.StartMeterReading,
                 EndMeterReading = session.EndMeterReading,
                 EnergyTransmitted = session.EnergyTransmitted,

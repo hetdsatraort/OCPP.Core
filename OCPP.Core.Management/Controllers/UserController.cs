@@ -987,6 +987,11 @@ namespace OCPP.Core.Management.Controllers
                     .Take(10)
                     .ToListAsync();
 
+                // Get total count of all transactions for this user
+                var totalTransactionCount = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .CountAsync();
+
                 var lastTransaction = walletTransactions.FirstOrDefault();
                 decimal currentBalance = 0;
                 if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
@@ -998,6 +1003,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     UserId = userId,
                     CurrentBalance = currentBalance,
+                    TotalTransactions = totalTransactionCount,
                     RecentTransactions = walletTransactions.Select(MapToWalletTransactionDto).ToList()
                 };
 
@@ -1051,6 +1057,11 @@ namespace OCPP.Core.Management.Controllers
                     .Take(20)
                     .ToListAsync();
 
+                // Get total count of all transactions for this user
+                var totalTransactionCount = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .CountAsync();
+
                 var lastTransaction = walletTransactions.FirstOrDefault();
                 decimal currentBalance = 0;
                 if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
@@ -1062,6 +1073,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     UserId = userId,
                     CurrentBalance = currentBalance,
+                    TotalTransactions = totalTransactionCount,
                     RecentTransactions = walletTransactions.Select(MapToWalletTransactionDto).ToList()
                 };
 
