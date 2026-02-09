@@ -11,6 +11,7 @@ namespace OCPP.Core.Management.Services
     /// <summary>
     /// Background service that periodically checks active charging sessions for limit violations
     /// and automatically stops sessions that exceed their configured limits.
+    /// Uses PeriodicTimer for efficient periodic execution.
     /// </summary>
     public class SessionLimitMonitorService : BackgroundService
     {
@@ -42,30 +43,30 @@ namespace OCPP.Core.Management.Services
             // Wait a bit before starting to ensure the application is fully initialized
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
-            while (!stoppingToken.IsCancellationRequested)
+            // Use PeriodicTimer for efficient periodic execution
+            using var timer = new PeriodicTimer(_checkInterval);
+
+            try
             {
-                try
+                // Execute immediately on start, then wait for timer
+                do
                 {
-                    await CheckSessionLimits(stoppingToken);
+                    try
+                    {
+                        await CheckSessionLimits(stoppingToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error occurred while checking session limits");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error occurred while checking session limits");
-                }
-
-                // Wait for the configured interval before next check
-                try
-                {
-                    await Task.Delay(_checkInterval, stoppingToken);
-                }
-                catch (TaskCanceledException)
-                {
-                    // Expected when cancellation is requested
-                    break;
-                }
+                while (await timer.WaitForNextTickAsync(stoppingToken));
             }
-
-            _logger.LogInformation("SessionLimitMonitorService is stopping");
+            catch (OperationCanceledException)
+            {
+                // Expected when cancellation is requested
+                _logger.LogInformation("SessionLimitMonitorService is stopping");
+            }
         }
 
         private async Task CheckSessionLimits(CancellationToken cancellationToken)
