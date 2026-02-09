@@ -157,6 +157,12 @@ namespace OCPP.Core.Management
             services.AddScoped<IFileStorageService, FileStorageService>();
             services.AddDistributedMemoryCache();
             
+            // Add HttpClient for background services
+            services.AddHttpClient("SessionLimitMonitor");
+            
+            // Add Session Limit Monitor Background Service
+            services.AddHostedService<SessionLimitMonitorService>();
+            
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo

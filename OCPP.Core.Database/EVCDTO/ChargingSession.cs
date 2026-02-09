@@ -27,5 +27,11 @@ namespace OCPP.Core.Database.EVCDTO
         public double? SoCStart { get; set; }
         public double? SoCEnd { get; set; }
         public DateTime? SoCLastUpdate { get; set; }
+        
+        // Session Limits
+        public double? EnergyLimit { get; set; }  // kWh
+        public double? CostLimit { get; set; }  // Currency units
+        public int? TimeLimit { get; set; }  // Minutes
+        public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace OCPP.Core.Management.Models.ChargingSession
 {
@@ -11,6 +12,12 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public int ConnectorId { get; set; }
         public string StartMeterReading { get; set; }
         public string ChargingTariff { get; set; }
+        
+        // Session Limits (all optional)
+        public double? EnergyLimit { get; set; }  // kWh
+        public double? CostLimit { get; set; }  // Currency units
+        public int? TimeLimit { get; set; }  // Minutes
+        public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
     }
 
     public class EndChargingSessionRequestDto
@@ -49,6 +56,12 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public double? SoCStart { get; set; }
         public double? SoCEnd { get; set; }
         public DateTime? SoCLastUpdate { get; set; }
+        
+        // Session Limits
+        public double? EnergyLimit { get; set; }  // kWh
+        public double? CostLimit { get; set; }  // Currency units
+        public int? TimeLimit { get; set; }  // Minutes
+        public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
     }
 
     public class ChargingGunStatusDto
@@ -67,5 +80,38 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public bool Success { get; set; }
         public string Message { get; set; }
         public object Data { get; set; }
+    }
+
+    public class SessionLimitCheckDto
+    {
+        public string SessionId { get; set; }
+        public string ChargingStationId { get; set; }
+        public string UserId { get; set; }
+        public bool HasViolations { get; set; }
+        public List<string> ViolatedLimits { get; set; } = new List<string>();
+        public SessionLimitStatus LimitStatus { get; set; }
+    }
+
+    public class SessionLimitStatus
+    {
+        // Energy
+        public double? EnergyConsumed { get; set; }  // kWh
+        public double? EnergyLimit { get; set; }
+        public double? EnergyPercentage { get; set; }
+        
+        // Cost
+        public double? CurrentCost { get; set; }
+        public double? CostLimit { get; set; }
+        public double? CostPercentage { get; set; }
+        
+        // Time
+        public int? ElapsedMinutes { get; set; }
+        public int? TimeLimit { get; set; }
+        public double? TimePercentage { get; set; }
+        
+        // Battery
+        public double? BatteryIncrease { get; set; }  // Percentage points
+        public double? BatteryIncreaseLimit { get; set; }
+        public double? BatteryPercentage { get; set; }
     }
 }

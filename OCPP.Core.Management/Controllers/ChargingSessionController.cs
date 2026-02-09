@@ -224,7 +224,12 @@ namespace OCPP.Core.Management.Controllers
                     ChargingTotalFee = "0",
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
-                    UpdatedOn = DateTime.UtcNow
+                    UpdatedOn = DateTime.UtcNow,
+                    // Session Limits
+                    EnergyLimit = request.EnergyLimit,
+                    CostLimit = request.CostLimit,
+                    TimeLimit = request.TimeLimit,
+                    BatteryIncreaseLimit = request.BatteryIncreaseLimit
                 };
 
                 _dbContext.ChargingSessions.Add(session);
@@ -1642,6 +1647,163 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// Check active sessions for limit violations (designed to be called periodically)
+        /// </summary>
+        [HttpGet("check-session-limits")]
+        [Authorize]
+        public async Task<IActionResult> CheckSessionLimits()
+        {
+            try
+            {
+                var activeSessions = await _dbContext.ChargingSessions
+                    .Where(s => s.Active == 1 && s.EndTime == DateTime.MinValue)
+                    .ToListAsync();
+
+                var violatedSessions = new List<SessionLimitCheckDto>();
+                var autoStoppedSessions = new List<string>();
+
+                foreach (var session in activeSessions)
+                {
+                    var limitCheck = await CheckSessionLimitViolations(session);
+                    
+                    if (limitCheck.HasViolations)
+                    {
+                        violatedSessions.Add(limitCheck);
+                        
+                        // Auto-stop the session if it violates limits
+                        _logger.LogWarning($"Session {session.RecId} has violated limits: {string.Join(", ", limitCheck.ViolatedLimits)}");
+                        
+                        try
+                        {
+                            // Attempt to stop the session automatically
+                            var chargingStation = await _dbContext.ChargingStations
+                                .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
+                            
+                            if (chargingStation != null)
+                            {
+                                var chargePoint = await _dbContext.ChargePoints
+                                    .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
+                                
+                                if (chargePoint != null && int.TryParse(session.ChargingGunId, out int connectorId))
+                                {
+                                    var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+                                    
+                                    if (ocppResult.Success)
+                                    {
+                                        // Update session status
+                                        session.EndTime = DateTime.UtcNow;
+                                        session.Active = 0;
+                                        session.UpdatedOn = DateTime.UtcNow;
+                                        
+                                        // Get final meter reading
+                                        var connectorStatus = await _dbContext.ConnectorStatuses
+                                            .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                                                && cs.ConnectorId == connectorId && cs.Active == 1);
+                                        
+                                        if (connectorStatus?.LastMeter != null)
+                                        {
+                                            session.EndMeterReading = connectorStatus.LastMeter.Value.ToString("F2");
+                                            
+                                            if (double.TryParse(session.StartMeterReading, out double startMeter))
+                                            {
+                                                var energyConsumed = connectorStatus.LastMeter.Value - startMeter;
+                                                session.EnergyTransmitted = energyConsumed.ToString("F2");
+                                                
+                                                if (double.TryParse(session.ChargingTariff, out double tariff))
+                                                {
+                                                    var totalFee = energyConsumed * tariff;
+                                                    session.ChargingTotalFee = totalFee.ToString("F2");
+                                                }
+                                            }
+                                        }
+                                        
+                                        await _dbContext.SaveChangesAsync();
+                                        autoStoppedSessions.Add(session.RecId);
+                                        
+                                        _logger.LogInformation($"Auto-stopped session {session.RecId} due to limit violations");
+                                    }
+                                    else
+                                    {
+                                        _logger.LogWarning($"Failed to auto-stop session {session.RecId}: {ocppResult.Message}");
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception stopEx)
+                        {
+                            _logger.LogError(stopEx, $"Error auto-stopping session {session.RecId}");
+                        }
+                    }
+                }
+
+                return Ok(new ChargingSessionResponseDto
+                {
+                    Success = true,
+                    Message = $"Checked {activeSessions.Count} active sessions. Found {violatedSessions.Count} with limit violations. Auto-stopped {autoStoppedSessions.Count} sessions.",
+                    Data = new
+                    {
+                        TotalActiveSessions = activeSessions.Count,
+                        ViolatedSessions = violatedSessions,
+                        AutoStoppedSessionIds = autoStoppedSessions,
+                        CheckedAt = DateTime.UtcNow
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking session limits");
+                return StatusCode(500, new ChargingSessionResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while checking session limits"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get limit status for a specific session
+        /// </summary>
+        [HttpGet("session-limit-status/{sessionId}")]
+        [Authorize]
+        public async Task<IActionResult> GetSessionLimitStatus(string sessionId)
+        {
+            try
+            {
+                var session = await _dbContext.ChargingSessions
+                    .FirstOrDefaultAsync(s => s.RecId == sessionId);
+
+                if (session == null)
+                {
+                    return NotFound(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "Session not found"
+                    });
+                }
+
+                var limitCheck = await CheckSessionLimitViolations(session);
+
+                return Ok(new ChargingSessionResponseDto
+                {
+                    Success = true,
+                    Message = limitCheck.HasViolations 
+                        ? "Session has violated one or more limits" 
+                        : "Session is within all configured limits",
+                    Data = limitCheck
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error checking limit status for session {sessionId}");
+                return StatusCode(500, new ChargingSessionResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while checking session limit status"
+                });
+            }
+        }
+
 
         #region Helper Methods
 
@@ -1700,7 +1862,12 @@ namespace OCPP.Core.Management.Controllers
                 UpdatedOn = session.UpdatedOn,
                 SoCStart = session.SoCStart,
                 SoCEnd = session.SoCEnd,
-                SoCLastUpdate = session.SoCLastUpdate
+                SoCLastUpdate = session.SoCLastUpdate,
+                // Session Limits
+                EnergyLimit = session.EnergyLimit,
+                CostLimit = session.CostLimit,
+                TimeLimit = session.TimeLimit,
+                BatteryIncreaseLimit = session.BatteryIncreaseLimit
             };
         }
 
@@ -1765,7 +1932,12 @@ namespace OCPP.Core.Management.Controllers
                 UpdatedOn = session.UpdatedOn,
                 SoCStart = session.SoCStart,
                 SoCEnd = session.SoCEnd,
-                SoCLastUpdate = session.SoCLastUpdate
+                SoCLastUpdate = session.SoCLastUpdate,
+                // Session Limits
+                EnergyLimit = session.EnergyLimit,
+                CostLimit = session.CostLimit,
+                TimeLimit = session.TimeLimit,
+                BatteryIncreaseLimit = session.BatteryIncreaseLimit
             };
         }
 
@@ -2125,6 +2297,134 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogError(ex, "ClearCachedSoC => Exception: {0}", ex.Message);
                 return (false, ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Check if a session has violated any of its configured limits
+        /// </summary>
+        private async Task<SessionLimitCheckDto> CheckSessionLimitViolations(Database.EVCDTO.ChargingSession session)
+        {
+            var result = new SessionLimitCheckDto
+            {
+                SessionId = session.RecId,
+                ChargingStationId = session.ChargingStationID,
+                UserId = session.UserId,
+                HasViolations = false,
+                LimitStatus = new SessionLimitStatus()
+            };
+
+            // Get charging station and connector status for real-time data
+            var chargingStation = await _dbContext.ChargingStations
+                .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
+            
+            ConnectorStatus connectorStatus = null;
+            int connectorId = 0;
+            if (chargingStation != null && int.TryParse(session.ChargingGunId, out connectorId))
+            {
+                connectorStatus = await _dbContext.ConnectorStatuses
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                        && cs.ConnectorId == connectorId && cs.Active == 1);
+            }
+
+            // Calculate current session metrics
+            double energyConsumed = 0;
+            double currentCost = 0;
+            double.TryParse(session.StartMeterReading, out double startMeter);
+            
+            if (connectorStatus?.LastMeter != null)
+            {
+                energyConsumed = connectorStatus.LastMeter.Value - startMeter;
+                result.LimitStatus.EnergyConsumed = Math.Round(energyConsumed, 2);
+            }
+            else if (double.TryParse(session.EnergyTransmitted, out double storedEnergy))
+            {
+                energyConsumed = storedEnergy;
+                result.LimitStatus.EnergyConsumed = Math.Round(energyConsumed, 2);
+            }
+
+            if (double.TryParse(session.ChargingTariff, out double tariff))
+            {
+                currentCost = energyConsumed * tariff;
+                result.LimitStatus.CurrentCost = Math.Round(currentCost, 2);
+            }
+
+            var elapsedTime = DateTime.UtcNow - session.StartTime;
+            int elapsedMinutes = (int)elapsedTime.TotalMinutes;
+            result.LimitStatus.ElapsedMinutes = elapsedMinutes;
+
+            double? batteryIncrease = null;
+            if (session.SoCStart.HasValue)
+            {
+                // Try to get current SoC
+                if (chargingStation != null && connectorId > 0)
+                {
+                    var socResult = await GetCachedSoC(chargingStation.ChargingPointId, connectorId, maxAgeMinutes: 5);
+                    if (socResult.Success && socResult.SoC.HasValue)
+                    {
+                        batteryIncrease = socResult.SoC.Value - session.SoCStart.Value;
+                        result.LimitStatus.BatteryIncrease = Math.Round(batteryIncrease.Value, 1);
+                    }
+                }
+                else if (session.SoCEnd.HasValue)
+                {
+                    batteryIncrease = session.SoCEnd.Value - session.SoCStart.Value;
+                    result.LimitStatus.BatteryIncrease = Math.Round(batteryIncrease.Value, 1);
+                }
+            }
+
+            // Check Energy Limit
+            if (session.EnergyLimit.HasValue && energyConsumed > 0)
+            {
+                result.LimitStatus.EnergyLimit = session.EnergyLimit.Value;
+                result.LimitStatus.EnergyPercentage = Math.Round((energyConsumed / session.EnergyLimit.Value) * 100, 1);
+                
+                if (energyConsumed >= session.EnergyLimit.Value)
+                {
+                    result.HasViolations = true;
+                    result.ViolatedLimits.Add($"Energy: {energyConsumed:F2} kWh >= {session.EnergyLimit.Value:F2} kWh limit");
+                }
+            }
+
+            // Check Cost Limit
+            if (session.CostLimit.HasValue && currentCost > 0)
+            {
+                result.LimitStatus.CostLimit = session.CostLimit.Value;
+                result.LimitStatus.CostPercentage = Math.Round((currentCost / session.CostLimit.Value) * 100, 1);
+                
+                if (currentCost >= session.CostLimit.Value)
+                {
+                    result.HasViolations = true;
+                    result.ViolatedLimits.Add($"Cost: {currentCost:F2} >= {session.CostLimit.Value:F2} limit");
+                }
+            }
+
+            // Check Time Limit
+            if (session.TimeLimit.HasValue)
+            {
+                result.LimitStatus.TimeLimit = session.TimeLimit.Value;
+                result.LimitStatus.TimePercentage = Math.Round((elapsedMinutes / (double)session.TimeLimit.Value) * 100, 1);
+                
+                if (elapsedMinutes >= session.TimeLimit.Value)
+                {
+                    result.HasViolations = true;
+                    result.ViolatedLimits.Add($"Time: {elapsedMinutes} min >= {session.TimeLimit.Value} min limit");
+                }
+            }
+
+            // Check Battery Increase Limit
+            if (session.BatteryIncreaseLimit.HasValue && batteryIncrease.HasValue)
+            {
+                result.LimitStatus.BatteryIncreaseLimit = session.BatteryIncreaseLimit.Value;
+                result.LimitStatus.BatteryPercentage = Math.Round((batteryIncrease.Value / session.BatteryIncreaseLimit.Value) * 100, 1);
+                
+                if (batteryIncrease.Value >= session.BatteryIncreaseLimit.Value)
+                {
+                    result.HasViolations = true;
+                    result.ViolatedLimits.Add($"Battery: +{batteryIncrease.Value:F1}% >= +{session.BatteryIncreaseLimit.Value:F1}% limit");
+                }
+            }
+
+            return result;
         }
         #endregion
     }
