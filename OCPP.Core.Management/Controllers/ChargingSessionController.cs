@@ -80,6 +80,20 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Log user wallet balance for information
+                var lastWalletTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                decimal currentBalance = 0;
+                if (lastWalletTransaction != null && decimal.TryParse(lastWalletTransaction.CurrentCreditBalance, out var balance))
+                {
+                    currentBalance = balance;
+                }
+
+                _logger.LogInformation($"User {userId} starting session with balance: ₹{currentBalance:F2}");
+
                 // Verify charging station exists
                 var chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(cs => cs.RecId == request.ChargingStationId && cs.Active == 1);
@@ -141,6 +155,88 @@ namespace OCPP.Core.Management.Controllers
                 {
                     _logger.LogWarning($"No tariff found for charging gun. Using default: 0");
                 }
+
+                // Parse tariff for calculations
+                double tariff = 0;
+                double.TryParse(tariffToUse, out tariff);
+
+                // Calculate minimum required balance based on session limits
+                decimal minBalanceRequired = 100m; // Default minimum
+                string balanceRequirementSource = "default minimum";
+                var estimatedCosts = new List<(string source, decimal amount)>();
+
+                // 1. Cost Limit - direct cost limit
+                if (request.CostLimit.HasValue && request.CostLimit.Value > 0)
+                {
+                    estimatedCosts.Add(("Cost Limit", (decimal)request.CostLimit.Value));
+                }
+
+                // 2. Energy Limit - energy × tariff
+                if (request.EnergyLimit.HasValue && request.EnergyLimit.Value > 0 && tariff > 0)
+                {
+                    decimal energyCost = (decimal)(request.EnergyLimit.Value * tariff);
+                    estimatedCosts.Add(("Energy Limit", energyCost));
+                }
+
+                // 3. Time Limit - estimate based on average charging speed
+                if (request.TimeLimit.HasValue && request.TimeLimit.Value > 0 && tariff > 0)
+                {
+                    // Get power output from charging gun to estimate energy consumption
+                    double estimatedPowerKw = 7.0; // Default 7 kW if not available
+                    if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.PowerOutput) && 
+                        double.TryParse(chargingGun.PowerOutput, out double gunPower))
+                    {
+                        estimatedPowerKw = gunPower;
+                    }
+
+                    // Calculate estimated energy: Power (kW) × Time (hours) = Energy (kWh)
+                    double timeInHours = request.TimeLimit.Value / 60.0;
+                    double estimatedEnergy = estimatedPowerKw * timeInHours;
+                    decimal timeCost = (decimal)(estimatedEnergy * tariff);
+                    estimatedCosts.Add(("Time Limit", timeCost));
+                }
+
+                // 4. Battery Increase Limit - just use 100 as specified
+                if (request.BatteryIncreaseLimit.HasValue && request.BatteryIncreaseLimit.Value > 0)
+                {
+                    estimatedCosts.Add(("Battery Limit", 100m));
+                }
+
+                // Determine the maximum estimated cost
+                if (estimatedCosts.Count > 0)
+                {
+                    var maxCost = estimatedCosts.OrderByDescending(x => x.amount).First();
+                    minBalanceRequired = maxCost.amount;
+                    balanceRequirementSource = maxCost.source;
+                    _logger.LogInformation($"Calculated minimum balance: ₹{minBalanceRequired:F2} based on {balanceRequirementSource}. All estimates: {string.Join(", ", estimatedCosts.Select(x => $"{x.source}=₹{x.amount:F2}"))}");
+                }
+                else
+                {
+                    _logger.LogInformation($"No limits specified. Using default minimum balance: ₹{minBalanceRequired:F2}");
+                }
+
+                // Check if user balance is sufficient (block negative balance or insufficient funds)
+                if (currentBalance < 0)
+                {
+                    _logger.LogWarning($"User {userId} has negative balance: ₹{currentBalance:F2}");
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = $"Cannot start session. Your wallet balance is negative (₹{currentBalance:F2}). Please recharge your wallet to continue."
+                    });
+                }
+
+                if (currentBalance < minBalanceRequired)
+                {
+                    _logger.LogWarning($"User {userId} has insufficient balance for session. Balance: ₹{currentBalance:F2}, Required: ₹{minBalanceRequired:F2} (based on {balanceRequirementSource})");
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = $"Insufficient wallet balance. Minimum ₹{minBalanceRequired:F2} required to start charging (based on {balanceRequirementSource}). Your current balance: ₹{currentBalance:F2}. Please recharge your wallet."
+                    });
+                }
+
+                _logger.LogInformation($"User {userId} balance check passed. Balance: ₹{currentBalance:F2}, Required: ₹{minBalanceRequired:F2}");
 
                 // Call OCPP server to start transaction
                 var ocppResult = await CallOCPPStartTransaction(
@@ -551,56 +647,14 @@ namespace OCPP.Core.Management.Controllers
                     previousBalance = lastBalance;
                 }
 
-                // Check if user has sufficient balance
-                if (previousBalance < totalFee)
-                {
-                    _logger.LogWarning($"Insufficient wallet balance for user {session.UserId}. Required: ₹{totalFee:F2}, Available: ₹{previousBalance:F2}");
-
-                    // Still update the session
-                    session.UpdatedOn = DateTime.UtcNow;
-                    await _dbContext.SaveChangesAsync();
-
-                    // Calculate SoC gain for insufficient balance response
-                    double? socGainInsufficient = null;
-                    if (session.SoCStart.HasValue && session.SoCEnd.HasValue)
-                    {
-                        socGainInsufficient = session.SoCEnd.Value - session.SoCStart.Value;
-                    }
-
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"Insufficient wallet balance. Required: ₹{totalFee:F2}, Available: ₹{previousBalance:F2}. Please recharge your wallet.",
-                        Data = new
-                        {
-                            Session = await MapToChargingSessionDto(session),
-                            EnergyConsumed = energyTransmitted,
-                            Cost = totalFee,
-                            MeterStart = startReading,
-                            MeterStop = endReading,
-                            Duration = duration.TotalMinutes,
-                            BatteryStateOfCharge = new
-                            {
-                                StartSoC = session.SoCStart.HasValue ? Math.Round(session.SoCStart.Value, 1) : (double?)null,
-                                EndSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
-                                CurrentSoC = session.SoCEnd.HasValue ? Math.Round(session.SoCEnd.Value, 1) : (double?)null,
-                                SoCGain = socGainInsufficient.HasValue ? Math.Round(socGainInsufficient.Value, 1) : (double?)null,
-                                LastUpdate = session.SoCLastUpdate,
-                                Unit = "%",
-                                IsRealtime = false,
-                                DataSource = session.SoCEnd.HasValue ? "Database (Historical)" : "Not Available"
-                            },
-                            DataSource = new
-                            {
-                                TransactionFound = session.TransactionId.HasValue,
-                                ConnectorMeterUsed = realtimeMeterReading > 0,
-                                ManualMeterUsed = !string.IsNullOrEmpty(request.EndMeterReading)
-                            }
-                        }
-                    });
-                }
-
+                // Calculate new balance (allow negative balances)
                 decimal newBalance = previousBalance - totalFee;
+
+                // Log if balance goes negative
+                if (newBalance < 0)
+                {
+                    _logger.LogWarning($"User {session.UserId} balance went negative. Previous: ₹{previousBalance:F2}, Fee: ₹{totalFee:F2}, New: ₹{newBalance:F2}");
+                }
 
                 // Create wallet transaction log for charging payment
                 var walletTransaction = new Database.EVCDTO.WalletTransactionLog
@@ -631,10 +685,18 @@ namespace OCPP.Core.Management.Controllers
                     socGain = session.SoCEnd.Value - session.SoCStart.Value;
                 }
 
+                // Build success message
+                string successMessage = $"Charging session ended successfully. ₹{totalFee:F2} debited.";
+                if (newBalance < 0)
+                {
+                    successMessage += $" Warning: Your balance is now negative (₹{newBalance:F2}). Please recharge your wallet.";
+                }
+                successMessage += $" OCPP: {ocppResult.Message}";
+
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = $"Charging session ended successfully. ₹{totalFee:F2} debited. OCPP: {ocppResult.Message}",
+                    Message = successMessage,
                     Data = new
                     {
                         Session = await MapToChargingSessionDto(session),
@@ -1700,22 +1762,69 @@ namespace OCPP.Core.Management.Controllers
                                             .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
                                                 && cs.ConnectorId == connectorId && cs.Active == 1);
                                         
+                                        double startMeter = 0;
+                                        double endMeter = 0;
+                                        double energyConsumed = 0;
+                                        decimal totalFee = 0;
+                                        
                                         if (connectorStatus?.LastMeter != null)
                                         {
-                                            session.EndMeterReading = connectorStatus.LastMeter.Value.ToString("F2");
+                                            endMeter = connectorStatus.LastMeter.Value;
+                                            session.EndMeterReading = endMeter.ToString("F2");
                                             
-                                            if (double.TryParse(session.StartMeterReading, out double startMeter))
+                                            if (double.TryParse(session.StartMeterReading, out startMeter))
                                             {
-                                                var energyConsumed = connectorStatus.LastMeter.Value - startMeter;
+                                                energyConsumed = Math.Max(0, endMeter - startMeter);
                                                 session.EnergyTransmitted = energyConsumed.ToString("F2");
                                                 
                                                 if (double.TryParse(session.ChargingTariff, out double tariff))
                                                 {
-                                                    var totalFee = energyConsumed * tariff;
+                                                    totalFee = (decimal)(energyConsumed * tariff);
                                                     session.ChargingTotalFee = totalFee.ToString("F2");
                                                 }
                                             }
                                         }
+                                        
+                                        // Debit wallet for auto-stopped session
+                                        var lastTransaction = await _dbContext.WalletTransactionLogs
+                                            .Where(w => w.UserId == session.UserId && w.Active == 1)
+                                            .OrderByDescending(w => w.CreatedOn)
+                                            .FirstOrDefaultAsync();
+
+                                        decimal previousBalance = 0;
+                                        if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
+                                        {
+                                            previousBalance = lastBalance;
+                                        }
+
+                                        // Always debit, even if balance goes negative
+                                        decimal newBalance = previousBalance - totalFee;
+
+                                        // Log if balance goes negative
+                                        if (newBalance < 0)
+                                        {
+                                            _logger.LogWarning($"Auto-stopped session {session.RecId} - Balance went negative. Previous: ₹{previousBalance:F2}, Fee: ₹{totalFee:F2}, New: ₹{newBalance:F2}");
+                                        }
+
+                                        // Create wallet transaction log for auto-stopped charging payment
+                                        var walletTransaction = new Database.EVCDTO.WalletTransactionLog
+                                        {
+                                            RecId = Guid.NewGuid().ToString(),
+                                            UserId = session.UserId,
+                                            PreviousCreditBalance = previousBalance.ToString("F2"),
+                                            CurrentCreditBalance = newBalance.ToString("F2"),
+                                            TransactionType = "Debit",
+                                            ChargingSessionId = session.RecId,
+                                            AdditionalInfo1 = $"Auto-stopped at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
+                                            AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{session.ChargingTariff}/kWh = ₹{totalFee:F2}",
+                                            AdditionalInfo3 = $"Meter: {startMeter:F3} → {endMeter:F3} kWh | Reason: Limit violation",
+                                            Active = 1,
+                                            CreatedOn = DateTime.UtcNow,
+                                            UpdatedOn = DateTime.UtcNow
+                                        };
+
+                                        _dbContext.WalletTransactionLogs.Add(walletTransaction);
+                                        _logger.LogInformation($"Auto-stopped session {session.RecId} - Debited ₹{totalFee:F2}, New balance: ₹{newBalance:F2}");
                                         
                                         await _dbContext.SaveChangesAsync();
                                         autoStoppedSessions.Add(session.RecId);
