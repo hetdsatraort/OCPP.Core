@@ -1651,7 +1651,6 @@ namespace OCPP.Core.Management.Controllers
         /// Check active sessions for limit violations (designed to be called periodically)
         /// </summary>
         [HttpGet("check-session-limits")]
-        [Authorize]
         public async Task<IActionResult> CheckSessionLimits()
         {
             try
