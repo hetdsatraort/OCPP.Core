@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using OCPP.Core.Database;
+using OCPP.Core.Database.EVCDTO;
+using OCPP.Core.Management.Models.ChargingHub;
 using OCPP.Core.Management.Models.ChargingSession;
 using System;
 using System.Collections.Generic;
@@ -183,7 +185,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     // Get power output from charging gun to estimate energy consumption
                     double estimatedPowerKw = 7.0; // Default 7 kW if not available
-                    if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.PowerOutput) && 
+                    if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.PowerOutput) &&
                         double.TryParse(chargingGun.PowerOutput, out double gunPower))
                     {
                         estimatedPowerKw = gunPower;
@@ -755,9 +757,11 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                // Find active session for this gun
+                Database.EVCDTO.ChargingGuns chargingGun = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(g => g.RecId == chargingGunId && g.Active == 1);
+
                 var activeSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGunId &&
+                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGun.ConnectorId &&
                                              s.Active == 1 &&
                                              s.EndTime == DateTime.MinValue);
 
@@ -774,6 +778,7 @@ namespace OCPP.Core.Management.Controllers
                     ChargingGunId = chargingGunId,
                     ChargingStationId = chargingStation?.RecId,
                     ChargingStationName = chargingStation?.ChargingPointId,
+                    ConnectorId = chargingGun?.ConnectorId,
                     Status = activeSession != null ? "In Use" : "Available",
                     CurrentSessionId = activeSession?.RecId,
                     LastStatusUpdate = activeSession?.UpdatedOn ?? DateTime.UtcNow,
@@ -1460,7 +1465,8 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1 && s.UserId == userId);
 
                 if (!string.IsNullOrEmpty(stationId))
                 {
@@ -1480,7 +1486,7 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var totalRecords = await query.CountAsync();
-                
+
                 // Use database aggregation for summary calculations - MUCH faster!
                 var summaryData = await query.Select(s => new
                 {
@@ -1496,13 +1502,13 @@ namespace OCPP.Core.Management.Controllers
 
                 foreach (var item in summaryData)
                 {
-                    if (!string.IsNullOrEmpty(item.EnergyTransmitted) && 
+                    if (!string.IsNullOrEmpty(item.EnergyTransmitted) &&
                         double.TryParse(item.EnergyTransmitted, out double energy))
                     {
                         totalEnergyTransmitted += energy;
                     }
 
-                    if (!string.IsNullOrEmpty(item.ChargingTotalFee) && 
+                    if (!string.IsNullOrEmpty(item.ChargingTotalFee) &&
                         decimal.TryParse(item.ChargingTotalFee, out decimal fee))
                     {
                         totalChargingTotalFee += fee;
@@ -1727,56 +1733,56 @@ namespace OCPP.Core.Management.Controllers
                 foreach (var session in activeSessions)
                 {
                     var limitCheck = await CheckSessionLimitViolations(session);
-                    
+
                     if (limitCheck.HasViolations)
                     {
                         violatedSessions.Add(limitCheck);
-                        
+
                         // Auto-stop the session if it violates limits
                         _logger.LogWarning($"Session {session.RecId} has violated limits: {string.Join(", ", limitCheck.ViolatedLimits)}");
-                        
+
                         try
                         {
                             // Attempt to stop the session automatically
                             var chargingStation = await _dbContext.ChargingStations
                                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
-                            
+
                             if (chargingStation != null)
                             {
                                 var chargePoint = await _dbContext.ChargePoints
                                     .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
-                                
+
                                 if (chargePoint != null && int.TryParse(session.ChargingGunId, out int connectorId))
                                 {
                                     var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
-                                    
+
                                     if (ocppResult.Success)
                                     {
                                         // Update session status
                                         session.EndTime = DateTime.UtcNow;
                                         session.Active = 0;
                                         session.UpdatedOn = DateTime.UtcNow;
-                                        
+
                                         // Get final meter reading
                                         var connectorStatus = await _dbContext.ConnectorStatuses
-                                            .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                                            .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
                                                 && cs.ConnectorId == connectorId && cs.Active == 1);
-                                        
+
                                         double startMeter = 0;
                                         double endMeter = 0;
                                         double energyConsumed = 0;
                                         decimal totalFee = 0;
-                                        
+
                                         if (connectorStatus?.LastMeter != null)
                                         {
                                             endMeter = connectorStatus.LastMeter.Value;
                                             session.EndMeterReading = endMeter.ToString("F2");
-                                            
+
                                             if (double.TryParse(session.StartMeterReading, out startMeter))
                                             {
                                                 energyConsumed = Math.Max(0, endMeter - startMeter);
                                                 session.EnergyTransmitted = energyConsumed.ToString("F2");
-                                                
+
                                                 if (double.TryParse(session.ChargingTariff, out double tariff))
                                                 {
                                                     totalFee = (decimal)(energyConsumed * tariff);
@@ -1784,7 +1790,7 @@ namespace OCPP.Core.Management.Controllers
                                                 }
                                             }
                                         }
-                                        
+
                                         // Debit wallet for auto-stopped session
                                         var lastTransaction = await _dbContext.WalletTransactionLogs
                                             .Where(w => w.UserId == session.UserId && w.Active == 1)
@@ -1825,10 +1831,10 @@ namespace OCPP.Core.Management.Controllers
 
                                         _dbContext.WalletTransactionLogs.Add(walletTransaction);
                                         _logger.LogInformation($"Auto-stopped session {session.RecId} - Debited ₹{totalFee:F2}, New balance: ₹{newBalance:F2}");
-                                        
+
                                         await _dbContext.SaveChangesAsync();
                                         autoStoppedSessions.Add(session.RecId);
-                                        
+
                                         _logger.LogInformation($"Auto-stopped session {session.RecId} due to limit violations");
                                     }
                                     else
@@ -1895,8 +1901,8 @@ namespace OCPP.Core.Management.Controllers
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = limitCheck.HasViolations 
-                        ? "Session has violated one or more limits" 
+                    Message = limitCheck.HasViolations
+                        ? "Session has violated one or more limits"
                         : "Session is within all configured limits",
                     Data = limitCheck
                 });
@@ -1928,12 +1934,9 @@ namespace OCPP.Core.Management.Controllers
                         && cs.ConnectorId == int.Parse(chargingGun.ConnectorId) && cs.Active == 1);
 
             string chargingHubName = null;
-            if (chargingStation != null)
-            {
-                var chargingHub = await _dbContext.ChargingHubs
+            var chargingHub = await _dbContext.ChargingHubs
                     .FirstOrDefaultAsync(ch => ch.RecId == chargingStation.ChargingHubId);
-                chargingHubName = chargingHub?.City;
-            }
+            chargingHubName = chargingHub?.ChargingHubName;
 
             var isActive = session.EndTime == DateTime.MinValue;
             var endTime = session.EndTime == DateTime.MinValue ? (DateTime?)null : session.EndTime;
@@ -1954,6 +1957,16 @@ namespace OCPP.Core.Management.Controllers
                 ChargingStationId = session.ChargingStationID,
                 ChargingStationName = chargingStation?.ChargingPointId,
                 ChargingHubName = chargingHubName,
+                ChargingHub = chargingHub != null ? new ChargingHubDto
+                {
+                    RecId = chargingHub.RecId,
+                    ChargingHubName = chargingHub.ChargingHubName,
+                    Latitude = chargingHub.Latitude,
+                    Active = chargingHub.Active,
+                    CreatedOn = chargingHub.CreatedOn,
+                    UpdatedOn = chargingHub.UpdatedOn
+                } : new ChargingHubDto(),
+                ChargingGun = chargingGun,
                 ConnectorName = connectorStatus.ConnectorName,
                 StartMeterReading = session.StartMeterReading,
                 EndMeterReading = session.EndMeterReading,
@@ -2000,9 +2013,10 @@ namespace OCPP.Core.Management.Controllers
             }
 
             string chargingHubName = null;
-            if (chargingStation != null && hubs.TryGetValue(chargingStation.ChargingHubId, out var hub))
+            var hub = new ChargingHub();
+            if (chargingStation != null && hubs.TryGetValue(chargingStation.ChargingHubId, out hub))
             {
-                chargingHubName = hub.City;
+                chargingHubName = hub.ChargingHubName;
             }
 
             var isActive = session.EndTime == DateTime.MinValue;
@@ -2024,6 +2038,18 @@ namespace OCPP.Core.Management.Controllers
                 ChargingStationId = session.ChargingStationID,
                 ChargingStationName = chargingStation?.ChargingPointId,
                 ChargingHubName = chargingHubName,
+                ChargingHub = chargingStation != null && hub != null
+                    ? new ChargingHubDto
+                    {
+                        RecId = hub.RecId,
+                        ChargingHubName = hub.ChargingHubName,
+                        Latitude = hub.Latitude,
+                        Active = hub.Active,
+                        CreatedOn = hub.CreatedOn,
+                        UpdatedOn = hub.UpdatedOn
+                    }
+                    : new ChargingHubDto(),
+                ChargingGun = chargingGun,
                 ConnectorName = connectorStatus?.ConnectorName,
                 StartMeterReading = session.StartMeterReading,
                 EndMeterReading = session.EndMeterReading,
@@ -2424,13 +2450,13 @@ namespace OCPP.Core.Management.Controllers
             // Get charging station and connector status for real-time data
             var chargingStation = await _dbContext.ChargingStations
                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
-            
+
             ConnectorStatus connectorStatus = null;
             int connectorId = 0;
             if (chargingStation != null && int.TryParse(session.ChargingGunId, out connectorId))
             {
                 connectorStatus = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId 
+                    .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
                         && cs.ConnectorId == connectorId && cs.Active == 1);
             }
 
@@ -2438,7 +2464,7 @@ namespace OCPP.Core.Management.Controllers
             double energyConsumed = 0;
             double currentCost = 0;
             double.TryParse(session.StartMeterReading, out double startMeter);
-            
+
             if (connectorStatus?.LastMeter != null)
             {
                 energyConsumed = connectorStatus.LastMeter.Value - startMeter;
@@ -2485,7 +2511,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 result.LimitStatus.EnergyLimit = session.EnergyLimit.Value;
                 result.LimitStatus.EnergyPercentage = Math.Round((energyConsumed / session.EnergyLimit.Value) * 100, 1);
-                
+
                 if (energyConsumed >= session.EnergyLimit.Value)
                 {
                     result.HasViolations = true;
@@ -2498,7 +2524,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 result.LimitStatus.CostLimit = session.CostLimit.Value;
                 result.LimitStatus.CostPercentage = Math.Round((currentCost / session.CostLimit.Value) * 100, 1);
-                
+
                 if (currentCost >= session.CostLimit.Value)
                 {
                     result.HasViolations = true;
@@ -2511,7 +2537,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 result.LimitStatus.TimeLimit = session.TimeLimit.Value;
                 result.LimitStatus.TimePercentage = Math.Round((elapsedMinutes / (double)session.TimeLimit.Value) * 100, 1);
-                
+
                 if (elapsedMinutes >= session.TimeLimit.Value)
                 {
                     result.HasViolations = true;
@@ -2524,7 +2550,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 result.LimitStatus.BatteryIncreaseLimit = session.BatteryIncreaseLimit.Value;
                 result.LimitStatus.BatteryPercentage = Math.Round((batteryIncrease.Value / session.BatteryIncreaseLimit.Value) * 100, 1);
-                
+
                 if (batteryIncrease.Value >= session.BatteryIncreaseLimit.Value)
                 {
                     result.HasViolations = true;

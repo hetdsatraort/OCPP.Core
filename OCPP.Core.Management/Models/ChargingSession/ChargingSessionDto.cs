@@ -1,3 +1,5 @@
+using OCPP.Core.Database.EVCDTO;
+using OCPP.Core.Management.Models.ChargingHub;
 using System;
 using System.Collections.Generic;
 
@@ -40,6 +42,8 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public string ChargingStationId { get; set; }
         public string ChargingStationName { get; set; }
         public string ChargingHubName { get; set; }
+        public ChargingHubDto ChargingHub { get; set; }
+        public ChargingGuns ChargingGun { get; set; }
         public string StartMeterReading { get; set; }
         public string EndMeterReading { get; set; }
         public string EnergyTransmitted { get; set; }
@@ -69,6 +73,7 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public string ChargingGunId { get; set; }
         public string ChargingStationId { get; set; }
         public string ChargingStationName { get; set; }
+        public string ConnectorId { get; set; }
         public string Status { get; set; }
         public string CurrentSessionId { get; set; }
         public DateTime? LastStatusUpdate { get; set; }
