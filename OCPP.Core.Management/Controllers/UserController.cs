@@ -1144,6 +1144,279 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        #region OTP Authentication
+
+        /// <summary>
+        /// Send OTP to phone number for authentication
+        /// </summary>
+        [HttpPost("send-otp")]
+        [AllowAnonymous]
+        public async Task<IActionResult> SendOtp([FromBody] SendOtpRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new SendOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Check rate limiting - prevent abuse (max 3 OTPs per phone per 10 minutes)
+                var recentOtps = await _dbContext.OtpValidations
+                    .Where(o => o.PhoneNumber == request.PhoneNumber 
+                        && o.CreatedAt >= DateTime.UtcNow.AddMinutes(-10))
+                    .CountAsync();
+
+                if (recentOtps >= 3)
+                {
+                    return Ok(new SendOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Too many OTP requests. Please try again later."
+                    });
+                }
+
+                // Generate unique Auth ID
+                string authId = Guid.NewGuid().ToString();
+
+                // Generate 6-digit OTP
+                string otpCode = GenerateOtp();
+
+                // Create OTP validation record
+                var otpValidation = new OtpValidation
+                {
+                    RecId = Guid.NewGuid().ToString(),
+                    AuthId = authId,
+                    PhoneNumber = request.PhoneNumber,
+                    CountryCode = request.CountryCode,
+                    OtpCode = otpCode,
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(5), // OTP expires in 5 minutes
+                    IsVerified = false,
+                    AttemptCount = 0,
+                    RequestIp = GetIpAddress(),
+                    Purpose = request.Purpose
+                };
+
+                // Check if user exists
+                var existingUser = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
+
+                if (existingUser != null)
+                {
+                    otpValidation.UserId = existingUser.RecId;
+                }
+
+                _dbContext.OtpValidations.Add(otpValidation);
+                await _dbContext.SaveChangesAsync();
+
+                // Send SMS with OTP (placeholder - implement your SMS gateway logic here)
+                await SendOtpSms(request.CountryCode + request.PhoneNumber, otpCode, request.Purpose);
+
+                _logger.LogInformation($"OTP sent to {request.CountryCode}{request.PhoneNumber} with AuthID: {authId}");
+
+                // For development/testing, also log the OTP (remove in production!)
+                _logger.LogInformation($"[DEV] OTP Code: {otpCode}");
+
+                return Ok(new SendOtpResponseDto
+                {
+                    Success = true,
+                    Message = "OTP sent successfully." + "For implementation, code is: " + otpCode,
+                    //Message = "OTP sent successfully.",
+                    AuthId = authId,
+                    MaskedPhoneNumber = MaskPhoneNumber(request.CountryCode, request.PhoneNumber),
+                    ExpiresInSeconds = 300 // 5 minutes
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending OTP");
+                return Ok(new SendOtpResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while sending OTP"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Verify OTP and authenticate user
+        /// </summary>
+        [HttpPost("verify-otp")]
+        [AllowAnonymous]
+        public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Find OTP validation record
+                var otpValidation = await _dbContext.OtpValidations
+                    .FirstOrDefaultAsync(o => o.AuthId == request.AuthId 
+                        && o.PhoneNumber == request.PhoneNumber 
+                        && !o.IsVerified);
+
+                if (otpValidation == null)
+                {
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid or expired OTP session"
+                    });
+                }
+
+                // Check if OTP is expired
+                if (otpValidation.IsExpired)
+                {
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "OTP has expired. Please request a new one."
+                    });
+                }
+
+                // Check attempt limit
+                if (otpValidation.AttemptCount >= 5)
+                {
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Maximum verification attempts exceeded. Please request a new OTP."
+                    });
+                }
+
+                // Increment attempt count
+                otpValidation.AttemptCount++;
+                await _dbContext.SaveChangesAsync();
+
+                // Verify OTP code
+                if (otpValidation.OtpCode != request.OtpCode)
+                {
+                    _logger.LogWarning($"Invalid OTP attempt for AuthID: {request.AuthId}");
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = false,
+                        Message = $"Invalid OTP code. {5 - otpValidation.AttemptCount} attempts remaining."
+                    });
+                }
+
+                // Mark OTP as verified
+                otpValidation.IsVerified = true;
+                otpValidation.VerifiedAt = DateTime.UtcNow;
+                otpValidation.VerifyIp = GetIpAddress();
+                await _dbContext.SaveChangesAsync();
+
+                // Check if user exists
+                var user = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
+
+                if (user == null)
+                {
+                    // New user - registration required
+                    _logger.LogInformation($"OTP verified for new user: {request.PhoneNumber}");
+                    return Ok(new VerifyOtpResponseDto
+                    {
+                        Success = true,
+                        Message = "OTP verified. Please complete registration.",
+                        IsNewUser = true
+                    });
+                }
+
+                // Existing user - generate tokens and login
+                var accessToken = _jwtService.GenerateAccessToken(user);
+                var refreshToken = _jwtService.GenerateRefreshToken(GetIpAddress());
+                refreshToken.UserId = user.RecId;
+
+                // Save refresh token
+                _dbContext.RefreshTokens.Add(refreshToken);
+
+                // Update last login
+                user.LastLogin = DateTime.UtcNow.ToString("o");
+                user.UpdatedOn = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                // Set tokens as HTTP-only cookies
+                SetTokenCookies(accessToken, refreshToken.Token);
+
+                _logger.LogInformation($"User logged in via OTP: {user.PhoneNumber}");
+
+                return Ok(new VerifyOtpResponseDto
+                {
+                    Success = true,
+                    Message = "Login successful",
+                    AccessToken = accessToken,
+                    RefreshToken = refreshToken.Token,
+                    IsNewUser = false,
+                    User = new UserInfo
+                    {
+                        UserId = user.RecId,
+                        PhoneNumber = user.PhoneNumber,
+                        FirstName = user.FirstName,
+                        LastName = user.LastName,
+                        Email = user.EMailID,
+                        UserRole = user.UserRole,
+                        ProfileCompleted = user.ProfileCompleted == "Yes"
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error verifying OTP");
+                return Ok(new VerifyOtpResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred during OTP verification"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Resend OTP - invalidates previous OTP and sends new one
+        /// </summary>
+        [HttpPost("resend-otp")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ResendOtp([FromBody] SendOtpRequestDto request)
+        {
+            try
+            {
+                // Invalidate any existing non-verified OTPs for this phone number
+                var existingOtps = await _dbContext.OtpValidations
+                    .Where(o => o.PhoneNumber == request.PhoneNumber && !o.IsVerified)
+                    .ToListAsync();
+
+                // Mark them as expired (soft invalidation)
+                foreach (var otp in existingOtps)
+                {
+                    otp.ExpiresAt = DateTime.UtcNow.AddMinutes(-1);
+                }
+                await _dbContext.SaveChangesAsync();
+
+                // Send new OTP
+                return await SendOtp(request);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resending OTP");
+                return Ok(new SendOtpResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while resending OTP"
+                });
+            }
+        }
+
+        #endregion
+
         #region Helper Methods
 
         private string HashPassword(string password)
@@ -1244,6 +1517,47 @@ namespace OCPP.Core.Management.Controllers
                 AdditionalInfo3 = transaction.AdditionalInfo3,
                 CreatedOn = transaction.CreatedOn
             };
+        }
+
+        // OTP Helper Methods
+        private string GenerateOtp()
+        {
+            // Generate a random 6-digit OTP
+            var random = new Random();
+            return random.Next(100000, 999999).ToString();
+        }
+
+        private async Task SendOtpSms(string phoneNumber, string otpCode, string purpose)
+        {
+            // TODO: Implement SMS gateway integration
+            // This is a placeholder for SMS sending logic
+            // You can integrate services like:
+            // - Twilio
+            // - AWS SNS
+            // - MSG91
+            // - Fast2SMS (India)
+            // - TextLocal (India)
+            
+            _logger.LogInformation($"[SMS Gateway Placeholder] Sending OTP {otpCode} to {phoneNumber} for {purpose}");
+            
+            // Example integration would look like:
+            // await _smsService.SendAsync(phoneNumber, $"Your OTP for {purpose} is: {otpCode}. Valid for 5 minutes.");
+            
+            await Task.CompletedTask;
+        }
+
+        private string MaskPhoneNumber(string countryCode, string phoneNumber)
+        {
+            if (string.IsNullOrEmpty(phoneNumber) || phoneNumber.Length < 4)
+                return phoneNumber;
+
+            // Show first 5 digits and mask the rest
+            // Example: +91-98765***** 
+            int visibleDigits = Math.Min(5, phoneNumber.Length - 2);
+            string visible = phoneNumber.Substring(0, visibleDigits);
+            string masked = new string('*', phoneNumber.Length - visibleDigits);
+            
+            return $"{countryCode}-{visible}{masked}";
         }
 
         #endregion

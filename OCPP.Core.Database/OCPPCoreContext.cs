@@ -52,6 +52,7 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.WalletTransactionLog> WalletTransactionLogs { get; set; }
         public virtual DbSet<EVCDTO.FileMaster> FileMasters { get; set; }
         public virtual DbSet<EVCDTO.RefreshToken> RefreshTokens { get; set; }
+        public virtual DbSet<EVCDTO.OtpValidation> OtpValidations { get; set; }
         public virtual DbSet<EVCDTO.ChargerTypeMaster> ChargerTypeMasters { get; set; }
         public virtual DbSet<EVCDTO.BatteryTypeMaster> BatteryTypeMasters { get; set; }
         public virtual DbSet<EVCDTO.BatteryCapacityMaster> BatteryCapacityMasters { get; set; }
@@ -571,6 +572,45 @@ namespace OCPP.Core.Database
                     .HasConstraintName("FK_RefreshToken_Users");
 
                 entity.HasIndex(e => e.Token);
+            });
+
+            modelBuilder.Entity<EVCDTO.OtpValidation>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+
+                entity.Property(e => e.AuthId)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.PhoneNumber)
+                    .IsRequired()
+                    .HasMaxLength(20);
+
+                entity.Property(e => e.CountryCode)
+                    .HasMaxLength(10);
+
+                entity.Property(e => e.OtpCode)
+                    .IsRequired()
+                    .HasMaxLength(10);
+
+                entity.Property(e => e.Purpose)
+                    .HasMaxLength(50);
+
+                entity.Property(e => e.RequestIp).HasMaxLength(50);
+
+                entity.Property(e => e.VerifyIp).HasMaxLength(50);
+
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.IsVerified).HasDefaultValue(false);
+
+                entity.Property(e => e.AttemptCount).HasDefaultValue(0);
+
+                entity.HasIndex(e => e.AuthId);
+                entity.HasIndex(e => e.PhoneNumber);
+                entity.HasIndex(e => new { e.PhoneNumber, e.CreatedAt });
             });
 
             modelBuilder.Entity<EVCDTO.ChargerTypeMaster>(entity =>
