@@ -2561,5 +2561,182 @@ namespace OCPP.Core.Management.Controllers
             return result;
         }
         #endregion
+
+        #region Charging Estimation
+        /// <summary>
+        /// Get charging estimation for energy, cost, time, kilometres, and battery increase
+        /// </summary>
+        [HttpPost("estimate-charging")]
+        public async Task<IActionResult> EstimateCharging([FromBody] ChargingEstimationRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new ChargingEstimationResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Get charging gun details
+                var chargingGun = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(g => g.RecId == request.ChargingGunId 
+                        && g.ChargingStationId == request.ChargingStationId
+                        && g.ConnectorId == request.ConnectorId
+                        && g.Active == 1);
+
+                if (chargingGun == null)
+                {
+                    return Ok(new ChargingEstimationResponseDto
+                    {
+                        Success = false,
+                        Message = "Charging gun not found or inactive"
+                    });
+                }
+
+                // Parse charger capacity (power output)
+                if (!double.TryParse(chargingGun.PowerOutput, out double powerOutputKw) || powerOutputKw <= 0)
+                {
+                    return Ok(new ChargingEstimationResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid charger power output"
+                    });
+                }
+
+                // Parse tariff
+                if (!double.TryParse(chargingGun.ChargerTariff, out double tariff) || tariff < 0)
+                {
+                    tariff = 0; // Default to 0 if not available
+                }
+
+                // Get charger type if available
+                string chargerType = "Unknown";
+                if (!string.IsNullOrEmpty(chargingGun.ChargerTypeId))
+                {
+                    var chargerTypeMaster = await _dbContext.ChargerTypeMasters
+                        .FirstOrDefaultAsync(ct => ct.RecId == chargingGun.ChargerTypeId && ct.Active == 1);
+                    if (chargerTypeMaster != null)
+                    {
+                        chargerType = chargerTypeMaster.ChargerType;
+                    }
+                }
+
+                // Default car assumptions (typical electric vehicle in India)
+                double batteryCapacity = request.BatteryCapacity ?? 40.0; // Default 40 kWh
+                double efficiencyKmPerKwh = 4.5; // Average efficiency: 4.5 km/kWh
+                double chargingEfficiency = 0.90; // 90% charging efficiency (accounting for losses)
+
+                // Adjust charging efficiency based on charger type
+                if (chargerType.ToLower().Contains("dc") || chargerType.ToLower().Contains("fast"))
+                {
+                    chargingEfficiency = 0.87; // DC fast charging slightly less efficient
+                }
+
+                // Determine energy to be charged
+                double energyKwh = 0;
+                double timeHours = 0;
+                if (request.DesiredEnergy.HasValue && request.DesiredEnergy.Value > 0)
+                {
+                    energyKwh = request.DesiredEnergy.Value;
+                }
+                else if (request.DesiredDuration.HasValue && request.DesiredDuration.Value > 0)
+                {
+                    // Calculate energy based on duration: Energy = Power × Time
+                    timeHours = request.DesiredDuration.Value / 60.0;
+                    energyKwh = powerOutputKw * timeHours * chargingEfficiency;
+                }
+                else
+                {
+                    // Default: Estimate for 1 hour of charging
+                    energyKwh = powerOutputKw * 1.0 * chargingEfficiency;
+                }
+
+                // Cap energy at battery capacity if battery info is provided
+                if (request.CurrentBatteryPercentage.HasValue && request.CurrentBatteryPercentage.Value >= 0)
+                {
+                    double currentSoC = request.CurrentBatteryPercentage.Value;
+                    double availableCapacity = batteryCapacity * ((100 - currentSoC) / 100.0);
+                    energyKwh = Math.Min(energyKwh, availableCapacity);
+                }
+                else
+                {
+                    // If no current SoC, assume we can charge up to 80% of battery (20% to 100%)
+                    double maxChargeable = batteryCapacity * 0.80;
+                    energyKwh = Math.Min(energyKwh, maxChargeable);
+                }
+
+                // Calculate time required
+                timeHours = energyKwh / (powerOutputKw * chargingEfficiency);
+                double timeMinutes = timeHours * 60;
+
+                // Calculate cost
+                double energyCost = energyKwh * tariff;
+                double taxAmount = energyCost * 0.18; // 18% GST
+                double totalCostWithTax = energyCost + taxAmount;
+
+                // Calculate kilometres that can be added
+                double kilometres = energyKwh * efficiencyKmPerKwh;
+
+                // Calculate battery increase percentage
+                double batteryIncrease = (energyKwh / batteryCapacity) * 100;
+
+                // Calculate cost per kilometre
+                double costPerKm = kilometres > 0 ? totalCostWithTax / kilometres : 0;
+
+                var response = new ChargingEstimationResponseDto
+                {
+                    Success = true,
+                    Message = "Estimation calculated successfully",
+                    EstimatedEnergy = Math.Round(energyKwh, 2),
+                    EstimatedCost = Math.Round(energyCost, 2),
+                    EstimatedCostWithTax = Math.Round(totalCostWithTax, 2),
+                    EstimatedTimeMinutes = Math.Round(timeMinutes, 1),
+                    EstimatedTimeHours = Math.Round(timeHours, 2),
+                    EstimatedKilometres = Math.Round(kilometres, 1),
+                    EstimatedBatteryIncrease = Math.Round(batteryIncrease, 1),
+                    Charger = new ChargerDetails
+                    {
+                        PowerOutput = powerOutputKw,
+                        Tariff = tariff,
+                        ChargerType = chargerType,
+                        ConnectorId = chargingGun.ConnectorId
+                    },
+                    Car = new CarAssumptions
+                    {
+                        BatteryCapacity = batteryCapacity,
+                        Efficiency = efficiencyKmPerKwh,
+                        CurrentBatteryPercentage = request.CurrentBatteryPercentage,
+                        ChargingEfficiency = chargingEfficiency
+                    },
+                    CostDetails = new CostBreakdown
+                    {
+                        EnergyCost = Math.Round(energyCost, 2),
+                        TaxAmount = Math.Round(taxAmount, 2),
+                        TotalCost = Math.Round(totalCostWithTax, 2),
+                        CostPerKm = Math.Round(costPerKm, 2),
+                        TariffApplied = tariff,
+                        Currency = "₹"
+                    }
+                };
+
+                _logger.LogInformation($"Charging estimation calculated: {energyKwh:F2} kWh, ₹{totalCostWithTax:F2}, {timeMinutes:F1} min, {kilometres:F1} km, +{batteryIncrease:F1}%");
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calculating charging estimation");
+                return Ok(new ChargingEstimationResponseDto
+                {
+                    Success = false,
+                    Message = $"Error calculating estimation: {ex.Message}"
+                });
+            }
+        }
+        
+        #endregion
     }
 }
