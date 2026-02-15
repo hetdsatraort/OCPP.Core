@@ -2679,7 +2679,7 @@ namespace OCPP.Core.Management.Controllers
                 else
                 {
                     // If no current SoC, assume we can charge up to 80% of battery (20% to 100%)
-                    double maxChargeable = batteryCapacity * 0.80;
+                    double maxChargeable = batteryCapacity;
                     energyKwh = Math.Min(energyKwh, maxChargeable);
                 }
 
