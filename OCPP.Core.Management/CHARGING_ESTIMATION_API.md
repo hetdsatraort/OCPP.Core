@@ -17,6 +17,7 @@ The Charging Estimation API provides pre-charging estimates for energy consumpti
   "connectorId": "1",
   "batteryCapacity": 50.0,           // Optional: User's battery in kWh
   "desiredEnergy": 25.0,             // Optional: Energy to charge in kWh
+  "desiredCost": 500.0,              // Optional: Budget to spend
   "desiredDuration": 60,             // Optional: Duration in minutes
   "currentBatteryPercentage": 30.0   // Optional: Current SoC (0-100)
 }
@@ -31,6 +32,7 @@ The Charging Estimation API provides pre-charging estimates for energy consumpti
 | `connectorId` | string | ✅ Yes | Connector ID (e.g., "1", "2") |
 | `batteryCapacity` | double | ❌ No | User's battery capacity in kWh (default: 40 kWh) |
 | `desiredEnergy` | double | ❌ No | Desired energy to charge in kWh |
+| `desiredCost` | double | ❌ No | Desired budget/cost to spend (₹) |
 | `desiredDuration` | int | ❌ No | Desired charging duration in minutes |
 | `currentBatteryPercentage` | double | ❌ No | Current battery % (0-100) |
 
@@ -38,8 +40,11 @@ The Charging Estimation API provides pre-charging estimates for energy consumpti
 
 **Priority for Energy Calculation:**
 1. If `desiredEnergy` provided → Use that value
-2. If `desiredDuration` provided → Calculate: `Energy = Power × Time × Efficiency`
-3. Otherwise → Default to 1 hour: `Energy = Power × 1.0 × Efficiency`
+2. If `desiredCost` provided → Calculate: `Energy = Cost / (Tariff × 1.18)`
+3. If `desiredDuration` provided → Calculate: `Energy = Power × Time × Efficiency`
+4. Otherwise → Default to 1 hour: `Energy = Power × 1.0 × Efficiency`
+
+**Note:** The `desiredCost` is the total amount including 18% GST. The formula accounts for this by dividing by 1.18 to get the base energy cost before tax.
 
 **Caps Applied:**
 - If `currentBatteryPercentage` provided → Cap at available capacity
@@ -239,6 +244,37 @@ Cost per km (₹/km) = Total Cost (₹) / Kilometres
 - Range: 144 km
 - Battery: +80%
 
+### Example 5: Budget-Based Estimation (Cost Input)
+**Request:**
+```json
+{
+  "chargingGunId": "gun-123",
+  "chargingStationId": "station-456",
+  "connectorId": "1",
+  "batteryCapacity": 40.0,
+  "desiredCost": 500.0,
+  "currentBatteryPercentage": 20.0
+}
+```
+
+**Scenario:**
+- Charger: 7.4 kW AC Type 2
+- Tariff: ₹12.50/kWh
+- User's budget: ₹500
+
+**Calculation:**
+- Energy = 500 / (12.50 × 1.18) = 33.90 kWh
+- But capped at available capacity: (100-20)% of 40 kWh = 32 kWh
+
+**Estimation:**
+- Energy: 32.0 kWh (capped by battery)
+- Cost: ₹472.00 (₹400.00 + ₹72.00 GST)
+- Time: 256 minutes (4.3 hours)
+- Range: 144 km
+- Battery: +80%
+
+**Use Case:** User wants to know: "If I spend ₹500, how much range can I get?"
+
 ## Integration Notes
 
 ### Frontend Usage
@@ -251,7 +287,7 @@ estimateCharging(request: ChargingEstimationRequest): Observable<ChargingEstimat
   );
 }
 
-// Component Usage
+// Component Usage - Energy-based
 this.chargingService.estimateCharging({
   chargingGunId: this.selectedGun.recId,
   chargingStationId: this.stationId,
@@ -264,6 +300,21 @@ this.chargingService.estimateCharging({
     this.displayEstimation(response);
   }
 });
+
+// Component Usage - Cost/Budget-based
+this.chargingService.estimateCharging({
+  chargingGunId: this.selectedGun.recId,
+  chargingStationId: this.stationId,
+  connectorId: this.connectorId,
+  batteryCapacity: this.userCar.batteryCapacity,
+  desiredCost: this.budgetInput.value,  // User's budget
+  currentBatteryPercentage: this.currentSoC
+}).subscribe(response => {
+  if (response.success) {
+    // Show what user can get for their budget
+    this.displayEstimation(response);
+  }
+});
 ```
 
 ### Use Cases
@@ -272,6 +323,7 @@ this.chargingService.estimateCharging({
 3. **Cost Calculator:** Compare charging costs at different stations
 4. **Range Planning:** Calculate how much range they can add
 5. **Budget Planning:** Estimate costs for monthly charging needs
+6. **Budget-Based Charging:** Show what users can get for a specific budget (e.g., "What can I get for ₹500?")
 
 ## Error Handling
 

@@ -2638,13 +2638,28 @@ namespace OCPP.Core.Management.Controllers
                 // Determine energy to be charged
                 double energyKwh = 0;
                 double timeHours = 0;
+                
+                // Priority order for energy calculation:
+                // 1. Specific energy request (DesiredEnergy)
+                // 2. Budget/cost-based request (DesiredCost)
+                // 3. Time-based request (DesiredDuration)
+                // 4. Default to 1 hour
+                
                 if (request.DesiredEnergy.HasValue && request.DesiredEnergy.Value > 0)
                 {
+                    // User specified exact energy amount
                     energyKwh = request.DesiredEnergy.Value;
+                }
+                else if (request.DesiredCost.HasValue && request.DesiredCost.Value > 0 && tariff > 0)
+                {
+                    // Calculate energy based on budget: Energy = Cost / (Tariff × 1.18)
+                    // The 1.18 accounts for 18% GST on the energy cost
+                    double costBeforeTax = request.DesiredCost.Value / 1.18;
+                    energyKwh = costBeforeTax / tariff;
                 }
                 else if (request.DesiredDuration.HasValue && request.DesiredDuration.Value > 0)
                 {
-                    // Calculate energy based on duration: Energy = Power × Time
+                    // Calculate energy based on duration: Energy = Power × Time × Efficiency
                     timeHours = request.DesiredDuration.Value / 60.0;
                     energyKwh = powerOutputKw * timeHours * chargingEfficiency;
                 }
@@ -2736,7 +2751,7 @@ namespace OCPP.Core.Management.Controllers
                 });
             }
         }
-        
+
         #endregion
     }
 }

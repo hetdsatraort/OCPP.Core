@@ -48,5 +48,11 @@ namespace OCPP.Core.Management.Models.ChargingSession
         /// Used for more accurate battery increase calculation
         /// </summary>
         public double? CurrentBatteryPercentage { get; set; }
+
+        /// <summary>
+        /// Optional: Desired cost/budget to spend (in currency units)
+        /// If provided, estimation will calculate what you can get for this amount
+        /// </summary>
+        public double? DesiredCost { get; set; }
     }
 }
