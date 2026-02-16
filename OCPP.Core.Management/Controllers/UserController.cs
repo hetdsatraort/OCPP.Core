@@ -231,7 +231,7 @@ namespace OCPP.Core.Management.Controllers
         /// Reset password endpoint
         /// </summary>
         [HttpPost("reset-password")]
-        [Authorize]
+        [AllowAnonymous]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequestDto request)
         {
             try
@@ -1166,7 +1166,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Check rate limiting - prevent abuse (max 3 OTPs per phone per 10 minutes)
                 var recentOtps = await _dbContext.OtpValidations
-                    .Where(o => o.PhoneNumber == request.PhoneNumber 
+                    .Where(o => o.PhoneNumber == request.PhoneNumber
                         && o.CreatedAt >= DateTime.UtcNow.AddMinutes(-10))
                     .CountAsync();
 
@@ -1262,8 +1262,8 @@ namespace OCPP.Core.Management.Controllers
 
                 // Find OTP validation record
                 var otpValidation = await _dbContext.OtpValidations
-                    .FirstOrDefaultAsync(o => o.AuthId == request.AuthId 
-                        && o.PhoneNumber == request.PhoneNumber 
+                    .FirstOrDefaultAsync(o => o.AuthId == request.AuthId
+                        && o.PhoneNumber == request.PhoneNumber
                         && !o.IsVerified);
 
                 if (otpValidation == null)
@@ -1415,6 +1415,136 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// Forgot password - verify OTP and reset password without requiring old password
+        /// </summary>
+        [HttpPost("forgot-password")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                // Verify OTP
+                var otpValidation = await _dbContext.OtpValidations
+                    .FirstOrDefaultAsync(o => o.AuthId == request.AuthId && !o.IsVerified);
+
+                if (otpValidation == null)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid OTP authentication session"
+                    });
+                }
+
+                // Check if OTP is expired
+                if (otpValidation.IsExpired)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "OTP has expired. Please request a new one."
+                    });
+                }
+
+                // Check attempt count
+                if (otpValidation.AttemptCount >= 5)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Maximum OTP verification attempts exceeded. Please request a new OTP."
+                    });
+                }
+
+                // Increment attempt count
+                otpValidation.AttemptCount++;
+                await _dbContext.SaveChangesAsync();
+
+                // Verify OTP code
+                if (otpValidation.OtpCode != request.OtpCode)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = $"Invalid OTP code. {5 - otpValidation.AttemptCount} attempts remaining."
+                    });
+                }
+
+                // Find user by email or phone
+                var user = await _dbContext.Users
+                    .FirstOrDefaultAsync(u =>
+                        (u.EMailID == request.EmailOrPhone || u.PhoneNumber == request.EmailOrPhone)
+                        && u.Active == 1);
+
+                if (user == null)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found or inactive"
+                    });
+                }
+
+                // Verify that the phone number matches the OTP validation
+                if (user.PhoneNumber != otpValidation.PhoneNumber)
+                {
+                    return BadRequest(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Phone number mismatch"
+                    });
+                }
+
+                // Mark OTP as verified
+                otpValidation.IsVerified = true;
+                otpValidation.VerifiedAt = DateTime.UtcNow;
+
+                // Update password
+                user.Password = HashPassword(request.NewPassword);
+                user.UpdatedOn = DateTime.UtcNow;
+
+                // Revoke all existing refresh tokens for this user
+                var userTokens = await _dbContext.RefreshTokens
+                    .Where(t => t.UserId == user.RecId && t.RevokedAt == null)
+                    .ToListAsync();
+
+                foreach (var token in userTokens)
+                {
+                    token.RevokedAt = DateTime.UtcNow;
+                    token.RevokedByIp = GetIpAddress();
+                }
+
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Password reset via OTP for user: {user.EMailID}");
+
+                return Ok(new AuthResponseDto
+                {
+                    Success = true,
+                    Message = "Password reset successful. Please login with your new password."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during forgot password");
+                return Ok(new AuthResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred during password reset"
+                });
+            }
+        }
+
         #endregion
 
         #region Helper Methods
@@ -1453,10 +1583,24 @@ namespace OCPP.Core.Management.Controllers
 
         private string GetIpAddress()
         {
-            if (Request.Headers.ContainsKey("X-Forwarded-For"))
-                return Request.Headers["X-Forwarded-For"];
-            else
-                return HttpContext.Connection.RemoteIpAddress?.MapToIPv4()?.ToString();
+            try
+            {
+                if (Request.Headers.ContainsKey("X-Forwarded-For"))
+                {
+                    return Request.Headers["X-Forwarded-For"];
+                }
+                else
+                {
+                    return HttpContext.Connection.RemoteIpAddress?.MapToIPv4()?.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                {
+                    return string.Empty;
+                }
+
+            }
         }
 
         private UserDto MapToUserDto(Users user)
@@ -1537,12 +1681,12 @@ namespace OCPP.Core.Management.Controllers
             // - MSG91
             // - Fast2SMS (India)
             // - TextLocal (India)
-            
+
             _logger.LogInformation($"[SMS Gateway Placeholder] Sending OTP {otpCode} to {phoneNumber} for {purpose}");
-            
+
             // Example integration would look like:
             // await _smsService.SendAsync(phoneNumber, $"Your OTP for {purpose} is: {otpCode}. Valid for 5 minutes.");
-            
+
             await Task.CompletedTask;
         }
 
@@ -1556,7 +1700,7 @@ namespace OCPP.Core.Management.Controllers
             int visibleDigits = Math.Min(5, phoneNumber.Length - 2);
             string visible = phoneNumber.Substring(0, visibleDigits);
             string masked = new string('*', phoneNumber.Length - visibleDigits);
-            
+
             return $"{countryCode}-{visible}{masked}";
         }
 
