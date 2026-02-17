@@ -28,7 +28,7 @@ namespace OCPP.Core.Management.Controllers
         /// <returns>File ID if successful</returns>
         [HttpPost("upload")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] string remarks = null)
+        public async Task<IActionResult> UploadFile(IFormFile file, [FromForm] string remarks = null, [FromForm] bool isDP = false)
         {
             try
             {
@@ -42,6 +42,10 @@ namespace OCPP.Core.Management.Controllers
 
                 if (result.Success)
                 {
+                    if(isDP == true)
+                    {
+                       // update
+                    }
                     return Ok(new
                     {
                         success = true,

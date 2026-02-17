@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using DocumentFormat.OpenXml.Vml.Office;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -1164,6 +1165,19 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Check if user exists
+                var existingUser = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
+
+                if (existingUser == null)
+                {
+                    return Ok(new SendOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Please register to configure OTP Authentication"
+                    });
+                }
+
                 // Check rate limiting - prevent abuse (max 3 OTPs per phone per 10 minutes)
                 var recentOtps = await _dbContext.OtpValidations
                     .Where(o => o.PhoneNumber == request.PhoneNumber
@@ -1200,10 +1214,6 @@ namespace OCPP.Core.Management.Controllers
                     RequestIp = GetIpAddress(),
                     Purpose = request.Purpose
                 };
-
-                // Check if user exists
-                var existingUser = await _dbContext.Users
-                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
 
                 if (existingUser != null)
                 {
