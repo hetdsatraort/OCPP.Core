@@ -1760,7 +1760,6 @@ namespace OCPP.Core.Management.Controllers
                                     {
                                         // Update session status
                                         session.EndTime = DateTime.UtcNow;
-                                        session.Active = 0;
                                         session.UpdatedOn = DateTime.UtcNow;
 
                                         // Get final meter reading
