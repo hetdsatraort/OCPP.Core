@@ -351,9 +351,9 @@ namespace OCPP.Core.Management.Controllers
                     user.ProfileImageID = request.ProfileImageID;
                 if (!string.IsNullOrEmpty(request.AddressLine1))
                     user.AddressLine1 = request.AddressLine1;
-                if (!string.IsNullOrEmpty(request.AddressLine2))
+                if (!string.IsNullOrEmpty(request.AddressLine2)) // should allow empty?
                     user.AddressLine2 = request.AddressLine2;
-                if (!string.IsNullOrEmpty(request.AddressLine3))
+                if (!string.IsNullOrEmpty(request.AddressLine3)) // should allow empty?
                     user.AddressLine3 = request.AddressLine3;
                 if (!string.IsNullOrEmpty(request.State))
                     user.State = request.State;
