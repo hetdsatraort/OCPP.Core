@@ -29,7 +29,7 @@ namespace OCPP.Core.Server
             {
                 if (string.IsNullOrEmpty(chargePointId))
                 {
-                    return new BadRequestObjectResult(new { Success = false, Message = "ChargePointId is required" });
+                    return Ok(new { Success = false, Message = "ChargePointId is required" });
                 }
 
                 _logger.LogTrace("GetSoC => ChargePointId={0}, ConnectorId={1}, MaxAgeMinutes={2}",
@@ -85,7 +85,7 @@ namespace OCPP.Core.Server
             {
                 if (string.IsNullOrEmpty(request?.ChargePointId))
                 {
-                    return new BadRequestObjectResult(new { Success = false, Message = "ChargePointId is required" });
+                    return Ok(new { Success = false, Message = "ChargePointId is required" });
                 }
 
                 _logger.LogInformation("ClearSoC => ChargePointId={0}, ConnectorId={1}",

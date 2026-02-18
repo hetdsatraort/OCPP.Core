@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using OCPP.Core.Database;
 using OCPP.Core.Management.Services;
 using System;
 using System.Security.Claims;
@@ -14,10 +16,12 @@ namespace OCPP.Core.Management.Controllers
     public class FileStorageController : ControllerBase
     {
         private readonly IFileStorageService _fileStorageService;
+        private readonly OCPPCoreContext _dbContext;
 
-        public FileStorageController(IFileStorageService fileStorageService)
+        public FileStorageController(IFileStorageService fileStorageService, OCPPCoreContext dbContext)
         {
             _fileStorageService = fileStorageService;
+            _dbContext = dbContext;
         }
 
         /// <summary>
@@ -42,9 +46,15 @@ namespace OCPP.Core.Management.Controllers
 
                 if (result.Success)
                 {
-                    if(isDP == true)
+                    if (isDP == true)
                     {
-                       // update
+                        // update
+                        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId);
+                        if (user != null)
+                        {
+                            user.ProfileImageID = result.FileId;
+                            await _dbContext.SaveChangesAsync();
+                        }
                     }
                     return Ok(new
                     {

@@ -312,7 +312,12 @@ namespace OCPP.Core.Management.Controllers
                     .OrderByDescending(r => r.ReviewTime)
                     .ToListAsync();
 
-                var reviewDtos = reviews.Select(MapToReviewDto).ToList();
+                var reviewDtos = new List<ReviewDto>();
+                foreach (var r in reviews)
+                {
+                    var rdto = await MapToReviewDto(r);
+                    reviewDtos.Add(rdto);
+                };
 
                 double avgRating = reviews.Any() ? reviews.Average(r => r.Rating) : 0;
 
@@ -695,7 +700,12 @@ namespace OCPP.Core.Management.Controllers
                     .OrderByDescending(r => r.ReviewTime)
                     .ToListAsync();
 
-                var reviewDtos = reviews.Select(MapToReviewDto).ToList();
+                var reviewDtos = new List<ReviewDto>();
+                foreach (var r in reviews)
+                {
+                    var rdto = await MapToReviewDto(r);
+                    reviewDtos.Add(rdto);
+                };
 
                 return Ok(new ChargingStationDetailsResponseDto
                 {
@@ -1069,7 +1079,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ChargingHubComprehensiveResponseDto
+                    return Ok(new ChargingHubComprehensiveResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -1267,7 +1277,7 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving comprehensive list");
-                return StatusCode(500, new ChargingHubComprehensiveResponseDto
+                return Ok(new ChargingHubComprehensiveResponseDto
                 {
                     Success = false,
                     Message = "An error occurred while retrieving comprehensive list"
@@ -1292,7 +1302,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "User not authenticated"
@@ -1301,7 +1311,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -1310,7 +1320,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (string.IsNullOrEmpty(request.ChargingHubId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "ChargingHubId is required"
@@ -1344,7 +1354,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     Success = true,
                     Message = "Review added successfully",
-                    Review = MapToReviewDto(review)
+                    Review = await MapToReviewDto(review)
                 });
             }
             catch (Exception ex)
@@ -1371,7 +1381,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "User not authenticated"
@@ -1423,7 +1433,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     Success = true,
                     Message = "Review added successfully",
-                    Review = MapToReviewDto(review)
+                    Review = await MapToReviewDto(review)
                 });
             }
             catch (Exception ex)
@@ -1450,7 +1460,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "User not authenticated"
@@ -1503,7 +1513,7 @@ namespace OCPP.Core.Management.Controllers
                 {
                     Success = true,
                     Message = "Review updated successfully",
-                    Review = MapToReviewDto(review)
+                    Review = await MapToReviewDto(review)
                 });
             }
             catch (Exception ex)
@@ -1530,7 +1540,7 @@ namespace OCPP.Core.Management.Controllers
                 var userId = User.FindFirst("UserId")?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
-                    return BadRequest(new ReviewResponseDto
+                    return Ok(new ReviewResponseDto
                     {
                         Success = false,
                         Message = "User not authenticated"
@@ -1595,7 +1605,12 @@ namespace OCPP.Core.Management.Controllers
                     .OrderByDescending(r => r.ReviewTime)
                     .ToListAsync();
 
-                var reviewDtos = reviews.Select(MapToReviewDto).ToList();
+                var reviewDtos = new List<ReviewDto>();
+                foreach (var r in reviews)
+                {
+                    var rdto = await MapToReviewDto(r);
+                    reviewDtos.Add(rdto);
+                };
                 double avgRating = reviews.Any() ? reviews.Average(r => r.Rating) : 0;
 
                 return Ok(new ReviewListResponseDto
@@ -1743,12 +1758,15 @@ namespace OCPP.Core.Management.Controllers
             };
         }
 
-        private ReviewDto MapToReviewDto(Database.EVCDTO.ChargingHubReview review)
+        private async Task<ReviewDto> MapToReviewDto(Database.EVCDTO.ChargingHubReview review)
         {
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == review.UserId);
             return new ReviewDto
             {
                 RecId = review.RecId,
                 UserId = review.UserId,
+                UserName = user.FirstName + " " + user.LastName,
+                UserProfileImage = user.ProfileImageID,
                 ChargingHubId = review.ChargingHubId,
                 ChargingStationId = review.ChargingStationId,
                 Rating = review.Rating,

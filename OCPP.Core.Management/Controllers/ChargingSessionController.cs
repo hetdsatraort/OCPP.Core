@@ -612,7 +612,7 @@ namespace OCPP.Core.Management.Controllers
                 session.EnergyTransmitted = energyTransmitted.ToString("F3");
 
                 // Calculate total fee based on tariff and energy
-                totalFee = (decimal)(energyTransmitted * tariff);
+                totalFee = (decimal)(energyTransmitted * tariff * 1.18);
                 session.ChargingTariff = tariff.ToString("F2");
                 session.ChargingTotalFee = totalFee.ToString("F2");
 
@@ -1784,7 +1784,7 @@ namespace OCPP.Core.Management.Controllers
 
                                                 if (double.TryParse(session.ChargingTariff, out double tariff))
                                                 {
-                                                    totalFee = (decimal)(energyConsumed * tariff);
+                                                    totalFee = (decimal)(energyConsumed * tariff * 1.18);
                                                     session.ChargingTotalFee = totalFee.ToString("F2");
                                                 }
                                             }
