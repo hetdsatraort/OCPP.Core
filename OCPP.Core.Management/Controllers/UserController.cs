@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using DocumentFormat.OpenXml.Vml.Office;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -238,7 +239,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -253,7 +254,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (user == null || !VerifyPassword(request.OldPassword, user.Password))
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid credentials"
@@ -350,9 +351,9 @@ namespace OCPP.Core.Management.Controllers
                     user.ProfileImageID = request.ProfileImageID;
                 if (!string.IsNullOrEmpty(request.AddressLine1))
                     user.AddressLine1 = request.AddressLine1;
-                if (!string.IsNullOrEmpty(request.AddressLine2))
+                if (!string.IsNullOrEmpty(request.AddressLine2)) // should allow empty?
                     user.AddressLine2 = request.AddressLine2;
-                if (!string.IsNullOrEmpty(request.AddressLine3))
+                if (!string.IsNullOrEmpty(request.AddressLine3)) // should allow empty?
                     user.AddressLine3 = request.AddressLine3;
                 if (!string.IsNullOrEmpty(request.State))
                     user.State = request.State;
@@ -1164,13 +1165,26 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Check if user exists
+                var existingUser = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
+
+                if (existingUser == null)
+                {
+                    return Ok(new SendOtpResponseDto
+                    {
+                        Success = false,
+                        Message = "Please register to configure OTP Authentication"
+                    });
+                }
+
                 // Check rate limiting - prevent abuse (max 3 OTPs per phone per 10 minutes)
                 var recentOtps = await _dbContext.OtpValidations
                     .Where(o => o.PhoneNumber == request.PhoneNumber
-                        && o.CreatedAt >= DateTime.UtcNow.AddMinutes(-10))
+                        && o.CreatedAt >= DateTime.UtcNow.AddMinutes(-2))
                     .CountAsync();
 
-                if (recentOtps >= 3)
+                if (recentOtps >= 10)
                 {
                     return Ok(new SendOtpResponseDto
                     {
@@ -1200,10 +1214,6 @@ namespace OCPP.Core.Management.Controllers
                     RequestIp = GetIpAddress(),
                     Purpose = request.Purpose
                 };
-
-                // Check if user exists
-                var existingUser = await _dbContext.Users
-                    .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber && u.Active == 1);
 
                 if (existingUser != null)
                 {
@@ -1426,7 +1436,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 if (!ModelState.IsValid)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid request data"
@@ -1439,7 +1449,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (otpValidation == null)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Invalid OTP authentication session"
@@ -1449,7 +1459,7 @@ namespace OCPP.Core.Management.Controllers
                 // Check if OTP is expired
                 if (otpValidation.IsExpired)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "OTP has expired. Please request a new one."
@@ -1459,7 +1469,7 @@ namespace OCPP.Core.Management.Controllers
                 // Check attempt count
                 if (otpValidation.AttemptCount >= 5)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Maximum OTP verification attempts exceeded. Please request a new OTP."
@@ -1473,7 +1483,7 @@ namespace OCPP.Core.Management.Controllers
                 // Verify OTP code
                 if (otpValidation.OtpCode != request.OtpCode)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = $"Invalid OTP code. {5 - otpValidation.AttemptCount} attempts remaining."
@@ -1488,7 +1498,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (user == null)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "User not found or inactive"
@@ -1498,7 +1508,7 @@ namespace OCPP.Core.Management.Controllers
                 // Verify that the phone number matches the OTP validation
                 if (user.PhoneNumber != otpValidation.PhoneNumber)
                 {
-                    return BadRequest(new AuthResponseDto
+                    return Ok(new AuthResponseDto
                     {
                         Success = false,
                         Message = "Phone number mismatch"
