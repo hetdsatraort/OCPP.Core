@@ -310,7 +310,7 @@ namespace OCPP.Core.Management.Controllers
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
                     TransactionId = transactionId,
-                    ChargingGunId = request.ConnectorId.ToString(),
+                    ChargingGunId = request.ChargingGunId,
                     ChargingStationID = request.ChargingStationId,
                     StartMeterReading = meterStart.ToString("F2"),
                     EndMeterReading = "0",
@@ -470,10 +470,10 @@ namespace OCPP.Core.Management.Controllers
 
                 // Extract connector ID from charging gun ID
                 int connectorId = 1;
-                if (int.TryParse(session.ChargingGunId, out int extractedId))
-                {
-                    connectorId = extractedId;
-                }
+                var chargingGun = _dbContext.ChargingGuns.FirstOrDefault(g => g.ChargingStationId == chargingStation.RecId
+                    && g.RecId == session.ChargingGunId && g.Active == 1);
+
+                connectorId = Convert.ToInt32(chargingGun.ConnectorId);
 
                 // Get real-time connector status BEFORE calling stop transaction
                 var connectorStatus = await _dbContext.ConnectorStatuses
@@ -561,7 +561,7 @@ namespace OCPP.Core.Management.Controllers
                     endReading = startReading;
                 }
 
-                var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(session.ChargingGunId), maxAgeMinutes: 5);
+                var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId), maxAgeMinutes: 5);
                 if (socResult.Success && socResult.SoC.HasValue)
                 {
                     session.SoCEnd = socResult.SoC.Value;
@@ -576,17 +576,12 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     // Clear cache after capturing
-                    await ClearCachedSoC(chargingStation.ChargingPointId, int.Parse(session.ChargingGunId));
+                    await ClearCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId));
                 }
                 else
                 {
                     _logger.LogInformation("EndChargingSession => No recent SoC data available for final capture");
                 }
-
-                // Get charging gun for accurate tariff
-                var chargingGun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
-                        && g.ConnectorId == session.ChargingGunId && g.Active == 1);
 
                 double tariff = 0;
                 if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.ChargerTariff) &&
@@ -761,7 +756,7 @@ namespace OCPP.Core.Management.Controllers
                     .FirstOrDefaultAsync(g => g.RecId == chargingGunId && g.Active == 1);
 
                 var activeSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGun.ConnectorId &&
+                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGun.RecId &&
                                              s.Active == 1 &&
                                              s.EndTime == DateTime.MinValue);
 
@@ -840,7 +835,7 @@ namespace OCPP.Core.Management.Controllers
                     // Find the charging gun used in this session
                     chargingGun = await _dbContext.ChargingGuns
                         .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
-                            && g.ConnectorId == session.ChargingGunId && g.Active == 1);
+                            && g.RecId == session.ChargingGunId && g.Active == 1);
 
                     if (chargingGun != null)
                     {
@@ -931,10 +926,7 @@ namespace OCPP.Core.Management.Controllers
                 if (isActiveSession && chargingStation != null)
                 {
                     int connectorId = 1;
-                    if (int.TryParse(session.ChargingGunId, out int extractedId))
-                    {
-                        connectorId = extractedId;
-                    }
+                    connectorId = Convert.ToInt32(chargingGun.ConnectorId);
 
                     var connectorStatus = await _dbContext.ConnectorStatuses
                         .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
@@ -1112,9 +1104,9 @@ namespace OCPP.Core.Management.Controllers
 
                 double? currentSoC = null;
                 DateTime? currentSoCTime = null;
-                if (isActiveSession && int.TryParse(session.ChargingGunId, out int gunConnectorId))
+                if (isActiveSession && chargingGun.ConnectorId != null)
                 {
-                    var socResult = await GetCachedSoC(chargingStation.ChargingPointId, gunConnectorId, maxAgeMinutes: 5);
+                    var socResult = await GetCachedSoC(chargingStation.ChargingPointId, Convert.ToInt32(chargingGun.ConnectorId), maxAgeMinutes: 5);
                     if (socResult.Success && socResult.SoC.HasValue)
                     {
                         currentSoC = socResult.SoC.Value;
@@ -1338,8 +1330,13 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                var chargingGun = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(cg => cg.ChargingStationId == request.ChargingStationId &&
+                                               cg.ConnectorId == request.ConnectorId.ToString() &&
+                                               cg.Active == 1);
+
                 var stuckSessions = await _dbContext.ChargingSessions
-    .Where(s => s.ChargingGunId == request.ConnectorId.ToString() &&
+    .Where(s => s.ChargingGunId == chargingGun.RecId &&
                s.ChargingStationID == request.ChargingStationId &&
                s.Active == 1 &&
                s.EndTime == DateTime.MinValue)
@@ -1554,7 +1551,7 @@ namespace OCPP.Core.Management.Controllers
                 var guns = await _dbContext.ChargingGuns
                     .Where(cg => stationIds.Contains(cg.ChargingStationId))
                     .ToListAsync();
-                var gunsDict = guns.ToDictionary(g => $"{g.ChargingStationId}_{g.ConnectorId}", g => g);
+                var gunsDict = guns.ToDictionary(g => $"{g.ChargingStationId}_{g.RecId}", g => g);
 
                 var chargePointIds = stations.Values.Select(s => s.ChargingPointId).Distinct().ToList();
                 var connectorStatuses = await _dbContext.ConnectorStatuses
@@ -1637,10 +1634,15 @@ namespace OCPP.Core.Management.Controllers
                 var chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(s => s.ChargingPointId == chargePointId && s.Active == 1);
 
+                var chargingGun = await _dbContext.ChargingGuns
+                    .FirstOrDefaultAsync(cg => cg.ChargingStationId == chargingStation.RecId &&
+                                               cg.ConnectorId == connectorId.ToString() &&
+                                               cg.Active == 1);
+
                 var activeSession = chargingStation != null
                     ? await _dbContext.ChargingSessions
                         .FirstOrDefaultAsync(s => s.ChargingStationID == chargingStation.RecId
-                            && s.ChargingGunId == connectorId.ToString()
+                            && s.ChargingGunId == chargingGun.RecId
                             && s.Active == 1
                             && s.EndTime == DateTime.MinValue)
                     : null;
@@ -1747,12 +1749,17 @@ namespace OCPP.Core.Management.Controllers
                             var chargingStation = await _dbContext.ChargingStations
                                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
 
+                            var chargingGun = await _dbContext.ChargingGuns
+                                .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.RecId == session.ChargingGunId);
+
+                            int connectorId = Convert.ToInt32(chargingGun.ConnectorId);
+
                             if (chargingStation != null)
                             {
                                 var chargePoint = await _dbContext.ChargePoints
                                     .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
 
-                                if (chargePoint != null && int.TryParse(session.ChargingGunId, out int connectorId))
+                                if (chargePoint != null)
                                 {
                                     var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
 
@@ -1926,7 +1933,7 @@ namespace OCPP.Core.Management.Controllers
                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
 
             var chargingGun = await _dbContext.ChargingGuns
-                .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.ConnectorId == session.ChargingGunId);
+                .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.RecId == session.ChargingGunId);
 
             var connectorStatus = await _dbContext.ConnectorStatuses
                     .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
@@ -2452,9 +2459,12 @@ namespace OCPP.Core.Management.Controllers
             var chargingStation = await _dbContext.ChargingStations
                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
 
+            var chargingGun = await _dbContext.ChargingGuns
+                .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.RecId == session.ChargingGunId);
+
             ConnectorStatus connectorStatus = null;
-            int connectorId = 0;
-            if (chargingStation != null && int.TryParse(session.ChargingGunId, out connectorId))
+            int connectorId = Convert.ToInt32(chargingGun.ConnectorId);
+            if (chargingStation != null)
             {
                 connectorStatus = await _dbContext.ConnectorStatuses
                     .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
