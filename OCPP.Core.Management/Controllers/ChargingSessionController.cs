@@ -2043,6 +2043,8 @@ namespace OCPP.Core.Management.Controllers
                         RecId = hub.RecId,
                         ChargingHubName = hub.ChargingHubName,
                         Latitude = hub.Latitude,
+                        Longitude = hub.Longitude,
+                        AddressLine1 = hub.AddressLine1, // add more
                         Active = hub.Active,
                         CreatedOn = hub.CreatedOn,
                         UpdatedOn = hub.UpdatedOn
