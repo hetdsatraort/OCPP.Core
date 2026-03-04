@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Database.EVCDTO;
@@ -10,9 +11,12 @@ using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Services;
 using System;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -24,15 +28,21 @@ namespace OCPP.Core.Management.Controllers
         private readonly OCPPCoreContext _dbContext;
         private readonly IJwtService _jwtService;
         private readonly ILogger<UserController> _logger;
+        private readonly IConfiguration _configuration;
+        private readonly IHttpClientFactory _httpClientFactory;
 
         public UserController(
             OCPPCoreContext dbContext,
             IJwtService jwtService,
-            ILogger<UserController> logger)
+            ILogger<UserController> logger,
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory)
         {
             _dbContext = dbContext;
             _jwtService = jwtService;
             _logger = logger;
+            _configuration = configuration;
+            _httpClientFactory = httpClientFactory;
         }
 
         /// <summary>
@@ -1683,21 +1693,80 @@ namespace OCPP.Core.Management.Controllers
 
         private async Task SendOtpSms(string phoneNumber, string otpCode, string purpose)
         {
-            // TODO: Implement SMS gateway integration
-            // This is a placeholder for SMS sending logic
-            // You can integrate services like:
-            // - Twilio
-            // - AWS SNS
-            // - MSG91
-            // - Fast2SMS (India)
-            // - TextLocal (India)
+            try
+            {
+                // Get SMS API configuration
+                var apiUrl = _configuration["SMSAPIDetails:SMSAPIURL"];
+                var apiKey = _configuration["SMSAPIDetails:SMSAPIKey"];
+                var apiToken = _configuration["SMSAPIDetails:SMSAPIToken"];
+                var clientId = _configuration["SMSAPIDetails:SMSAPIClientId"];
+                var senderId = _configuration["SMSAPIDetails:SMSSenderId"];
+                var templateId = _configuration["SMSAPIDetails:OTPSMSTemplateId"];
 
-            _logger.LogInformation($"[SMS Gateway Placeholder] Sending OTP {otpCode} to {phoneNumber} for {purpose}");
+                if (string.IsNullOrEmpty(apiUrl) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiToken))
+                {
+                    _logger.LogError("SMS API configuration is missing in appsettings.json");
+                    return;
+                }
 
-            // Example integration would look like:
-            // await _smsService.SendAsync(phoneNumber, $"Your OTP for {purpose} is: {otpCode}. Valid for 5 minutes.");
+                // Extract country code from phone number if present, otherwise default to +91
+                string countryCode = "+91";
+                string mobile = phoneNumber;
+                
+                if (phoneNumber.StartsWith("+"))
+                {
+                    // Extract country code (assuming format like +91xxxxxxxxxx)
+                    int digitIndex = phoneNumber.IndexOfAny("0123456789".ToCharArray());
+                    if (digitIndex > 0)
+                    {
+                        countryCode = phoneNumber.Substring(0, digitIndex);
+                        mobile = phoneNumber.Substring(digitIndex);
+                    }
+                }
 
-            await Task.CompletedTask;
+                // Create message with OTP
+                string message = $"{otpCode} is OTP for {purpose} with EV Charging App. Do not disclose the OTP to anyone. {otpCode}";
+
+                // Prepare request body
+                var requestBody = new
+                {
+                    countryCode = countryCode,
+                    mobile = mobile,
+                    senderId = senderId,
+                    message = message,
+                    apiKey = apiKey,
+                    clientId = clientId,
+                    templateId = templateId
+                };
+
+                // Create HTTP client
+                var httpClient = _httpClientFactory.CreateClient();
+                httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiToken.Replace("Bearer ", ""));
+                httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                // Serialize request body
+                var jsonContent = JsonSerializer.Serialize(requestBody);
+                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+                _logger.LogInformation($"Sending OTP SMS to {countryCode}{mobile} for {purpose}");
+
+                // Send POST request
+                var response = await httpClient.PostAsync(apiUrl, content);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation($"OTP SMS sent successfully to {countryCode}{mobile}. Response: {responseContent}");
+                }
+                else
+                {
+                    _logger.LogError($"Failed to send OTP SMS to {countryCode}{mobile}. Status: {response.StatusCode}, Response: {responseContent}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error sending OTP SMS to {phoneNumber} for {purpose}");
+            }
         }
 
         private string MaskPhoneNumber(string countryCode, string phoneNumber)
