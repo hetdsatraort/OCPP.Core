@@ -62,11 +62,10 @@ namespace OCPP.Core.Management
             {
                 options.AddPolicy("AllowAngularApp", builder =>
                 {
-                    builder.WithOrigins("http://localhost:4200", "https://localhost:4200")
+                    builder.WithOrigins("http://localhost:4200", "https://evc-admin.ortdemo.com", "https://admin.hycharge.in")
                            .AllowCredentials()
                            .AllowAnyHeader()
-                           .AllowAnyMethod()
-                           .SetIsOriginAllowed(origin => true); // For development
+                           .AllowAnyMethod();
                 });
             });
 
