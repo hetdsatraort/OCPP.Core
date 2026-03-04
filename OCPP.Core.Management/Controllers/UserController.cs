@@ -16,6 +16,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -1239,13 +1240,13 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogInformation($"OTP sent to {request.CountryCode}{request.PhoneNumber} with AuthID: {authId}");
 
                 // For development/testing, also log the OTP (remove in production!)
-                _logger.LogInformation($"[DEV] OTP Code: {otpCode}");
+                //_logger.LogInformation($"[DEV] OTP Code: {otpCode}");
 
                 return Ok(new SendOtpResponseDto
                 {
                     Success = true,
-                    Message = "OTP sent successfully." + "For implementation, code is: " + otpCode,
-                    //Message = "OTP sent successfully.",
+                    //Message = "OTP sent successfully." + "For implementation, code is: " + otpCode,
+                    Message = "OTP sent successfully.",
                     AuthId = authId,
                     MaskedPhoneNumber = MaskPhoneNumber(request.CountryCode, request.PhoneNumber),
                     ExpiresInSeconds = 300 // 5 minutes
@@ -1701,9 +1702,25 @@ namespace OCPP.Core.Management.Controllers
                 var apiToken = _configuration["SMSAPIDetails:SMSAPIToken"];
                 var clientId = _configuration["SMSAPIDetails:SMSAPIClientId"];
                 var senderId = _configuration["SMSAPIDetails:SMSSenderId"];
-                var templateId = _configuration["SMSAPIDetails:OTPSMSTemplateId"];
+                
+                // Determine template and message based on purpose
+                string templateId;
+                string message;
+                
+                if (purpose.ToLower().Contains("password") || purpose.ToLower().Contains("reset") || purpose.ToLower().Contains("forgot"))
+                {
+                    // Password Reset Template
+                    templateId = _configuration["SMSAPIDetails:ResetemplateId"];
+                    message = $"HyCharge: Your OTP to reset your password is {otpCode}. Valid for 5 minutes. Do not share.";
+                }
+                else
+                {
+                    // Login/Authentication Template
+                    templateId = _configuration["SMSAPIDetails:LoginTemplateId"];
+                    message = $"HyCharge: Your login OTP is {otpCode}. It expires in 5 minutes. Do not share this code.";
+                }
 
-                if (string.IsNullOrEmpty(apiUrl) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiToken))
+                if (string.IsNullOrEmpty(apiUrl) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiToken) || string.IsNullOrEmpty(templateId))
                 {
                     _logger.LogError("SMS API configuration is missing in appsettings.json");
                     return;
@@ -1716,16 +1733,13 @@ namespace OCPP.Core.Management.Controllers
                 if (phoneNumber.StartsWith("+"))
                 {
                     // Extract country code (assuming format like +91xxxxxxxxxx)
-                    int digitIndex = phoneNumber.IndexOfAny("0123456789".ToCharArray());
+                    int digitIndex = phoneNumber.IndexOfAny("0123456789".ToCharArray()) + 2; // change this logic when more country codes are involved
                     if (digitIndex > 0)
                     {
                         countryCode = phoneNumber.Substring(0, digitIndex);
                         mobile = phoneNumber.Substring(digitIndex);
                     }
                 }
-
-                // Create message with OTP
-                string message = $"{otpCode} is OTP for {purpose} with EV Charging App. Do not disclose the OTP to anyone. {otpCode}";
 
                 // Prepare request body
                 var requestBody = new
@@ -1745,7 +1759,13 @@ namespace OCPP.Core.Management.Controllers
                 httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
                 // Serialize request body
-                var jsonContent = JsonSerializer.Serialize(requestBody);
+                var options = new JsonSerializerOptions
+                {
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                };
+
+                var jsonContent = JsonSerializer.Serialize(requestBody, options);
+
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
                 _logger.LogInformation($"Sending OTP SMS to {countryCode}{mobile} for {purpose}");

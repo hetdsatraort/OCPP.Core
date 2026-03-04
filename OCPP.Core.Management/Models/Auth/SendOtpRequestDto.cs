@@ -21,7 +21,7 @@ namespace OCPP.Core.Management.Models.Auth
         public string CountryCode { get; set; } = "+91";
 
         /// <summary>
-        /// Purpose of OTP: Login, Registration, PasswordReset
+        /// Purpose of OTP: /*Login, Registration, PasswordReset*/
         /// Default: Login
         /// </summary>
         public string Purpose { get; set; } = "Login";
