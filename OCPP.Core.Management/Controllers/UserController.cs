@@ -1710,8 +1710,13 @@ namespace OCPP.Core.Management.Controllers
                 if (purpose.ToLower().Contains("password") || purpose.ToLower().Contains("reset") || purpose.ToLower().Contains("forgot"))
                 {
                     // Password Reset Template
-                    templateId = _configuration["SMSAPIDetails:ResetemplateId"];
+                    templateId = _configuration["SMSAPIDetails:ResetTemplateId"];
                     message = $"HyCharge: Your OTP to reset your password is {otpCode}. Valid for 5 minutes. Do not share.";
+                }
+                else if (purpose.ToLower().Contains("registration"))
+                {
+                    templateId = _configuration["SMSAPIDetails:RegistrationTemplateId"];
+                    message = $"Your OTP for the HyCharge mobile app signup is {otpCode}. Valid for 5 minutes. Do not share this code.";
                 }
                 else
                 {
