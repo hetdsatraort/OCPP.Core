@@ -1464,7 +1464,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
-                if(!(User.IsInRole("Admin") || User.IsInRole("Administrator")))
+                if(!(User.IsInRole("Administrator")))
                 {
                     query = query.Where(s => s.UserId == userId);
                 }

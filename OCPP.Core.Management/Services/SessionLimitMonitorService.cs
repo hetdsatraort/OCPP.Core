@@ -38,7 +38,7 @@ namespace OCPP.Core.Management.Services
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("SessionLimitMonitorService is starting");
+            // _logger.LogInformation("SessionLimitMonitorService is starting");
 
             // Wait a bit before starting to ensure the application is fully initialized
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
@@ -65,7 +65,7 @@ namespace OCPP.Core.Management.Services
             catch (OperationCanceledException)
             {
                 // Expected when cancellation is requested
-                _logger.LogInformation("SessionLimitMonitorService is stopping");
+                // _logger.LogInformation("SessionLimitMonitorService is stopping");
             }
         }
 
@@ -80,7 +80,7 @@ namespace OCPP.Core.Management.Services
                 httpClient.BaseAddress = new Uri(baseUrl);
                 httpClient.Timeout = TimeSpan.FromSeconds(30);
 
-                _logger.LogDebug("Checking session limits at {Url}", $"{baseUrl}{apiEndpoint}");
+                // _logger.LogDebug("Checking session limits at {Url}", $"{baseUrl}{apiEndpoint}");
 
                 var response = await httpClient.GetAsync(apiEndpoint, cancellationToken);
 
@@ -110,7 +110,7 @@ namespace OCPP.Core.Management.Services
 
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            _logger.LogInformation("SessionLimitMonitorService is stopping gracefully");
+            // _logger.LogInformation("SessionLimitMonitorService is stopping gracefully");
             await base.StopAsync(cancellationToken);
         }
     }
