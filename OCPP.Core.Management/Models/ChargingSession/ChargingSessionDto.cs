@@ -66,6 +66,7 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public double? CostLimit { get; set; }  // Currency units
         public int? TimeLimit { get; set; }  // Minutes
         public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
+        public string UserId { get; set; } = string.Empty;
     }
 
     public class ChargingGunStatusDto

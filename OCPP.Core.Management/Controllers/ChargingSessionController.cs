@@ -1463,7 +1463,11 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1 && s.UserId == userId);
+                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
+                if(!(User.IsInRole("Admin") || User.IsInRole("Administrator")))
+                {
+                    query = query.Where(s => s.UserId == userId);
+                }
 
                 if (!string.IsNullOrEmpty(stationId))
                 {
@@ -1994,7 +1998,8 @@ namespace OCPP.Core.Management.Controllers
                 EnergyLimit = session.EnergyLimit,
                 CostLimit = session.CostLimit,
                 TimeLimit = session.TimeLimit,
-                BatteryIncreaseLimit = session.BatteryIncreaseLimit
+                BatteryIncreaseLimit = session.BatteryIncreaseLimit,
+                UserId = session.UserId
             };
         }
 
@@ -2079,7 +2084,8 @@ namespace OCPP.Core.Management.Controllers
                 EnergyLimit = session.EnergyLimit,
                 CostLimit = session.CostLimit,
                 TimeLimit = session.TimeLimit,
-                BatteryIncreaseLimit = session.BatteryIncreaseLimit
+                BatteryIncreaseLimit = session.BatteryIncreaseLimit,
+                UserId = session.UserId
             };
         }
 
@@ -2489,7 +2495,7 @@ namespace OCPP.Core.Management.Controllers
 
             if (double.TryParse(session.ChargingTariff, out double tariff))
             {
-                currentCost = energyConsumed * tariff;
+                currentCost = energyConsumed * tariff * 1.18;
                 result.LimitStatus.CurrentCost = Math.Round(currentCost, 2);
             }
 
