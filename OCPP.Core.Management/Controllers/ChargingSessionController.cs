@@ -584,105 +584,18 @@ namespace OCPP.Core.Management.Controllers
                     _logger.LogInformation($"Real-time meter from connector: {realtimeMeterReading:F3} kWh at {realtimeMeterTime}");
                 }
 
-                // SAFEGUARD 1: Verify session hasn't been charged already
-                if (!string.IsNullOrEmpty(session.ChargingTotalFee) && 
-                    decimal.TryParse(session.ChargingTotalFee, out var existingFee) && 
-                    existingFee > 0)
-                {
-                    _logger.LogError($"DUPLICATE CHARGE ATTEMPT BLOCKED: Session {session.RecId} already has fee ₹{existingFee:F2}");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"This session has already been charged (₹{existingFee:F2}). Cannot charge again."
-                    });
-                }
-
-                // SAFEGUARD 2: Call OCPP server to stop transaction
+                // Call OCPP server to stop transaction
                 var ocppResult = await CallOCPPStopTransaction(
                     chargePoint.ChargePointId,
                     connectorId);
 
                 if (!ocppResult.Success)
                 {
-                    _logger.LogError($"CRITICAL: OCPP stop transaction FAILED: {ocppResult.Message}");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"Unable to stop charging transaction: {ocppResult.Message}. Please try again or contact support."
-                    });
+                    _logger.LogWarning($"OCPP stop transaction failed: {ocppResult.Message}. Continuing with database update.");
                 }
 
-                // SAFEGUARD 3: Wait and verify transaction was actually stopped (with retry)
-                Transaction stoppedTransaction = null;
-                int verificationAttempts = 0;
-                int maxAttempts = 5;
-                
-                while (verificationAttempts < maxAttempts && stoppedTransaction == null)
-                {
-                    await Task.Delay(1000 * (verificationAttempts + 1)); // Exponential backoff
-                    
-                    if (session.TransactionId.HasValue)
-                    {
-                        stoppedTransaction = await _dbContext.Transactions
-                            .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
-                        
-                        if (stoppedTransaction != null && stoppedTransaction.StopTime.HasValue)
-                        {
-                            _logger.LogInformation($"Transaction {session.TransactionId} verified as stopped at attempt {verificationAttempts + 1}");
-                            break;
-                        }
-                        
-                        if (stoppedTransaction != null && !stoppedTransaction.StopTime.HasValue)
-                        {
-                            _logger.LogWarning($"Attempt {verificationAttempts + 1}: Transaction {session.TransactionId} found but not yet stopped");
-                            stoppedTransaction = null; // Reset for retry
-                        }
-                    }
-                    
-                    verificationAttempts++;
-                }
-
-                // SAFEGUARD 4: Verify transaction ownership and validity
-                if (!session.TransactionId.HasValue)
-                {
-                    _logger.LogError($"CRITICAL: Session {session.RecId} has no transaction ID! This should never happen.");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Invalid session state: No transaction associated. Cannot process charges. Contact support."
-                    });
-                }
-
-                if (stoppedTransaction == null)
-                {
-                    _logger.LogError($"CRITICAL: Transaction {session.TransactionId} not found in database after {maxAttempts} attempts!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Transaction verification failed. Unable to confirm charging data. Please contact support before retrying."
-                    });
-                }
-
-                if (!stoppedTransaction.StopTime.HasValue)
-                {
-                    _logger.LogError($"CRITICAL: Transaction {session.TransactionId} still active after {maxAttempts} stop attempts!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Transaction did not stop properly. Cannot charge without valid stop data. Please contact support."
-                    });
-                }
-
-                // SAFEGUARD 5: Verify transaction belongs to correct charge point
-                if (stoppedTransaction.ChargePointId != chargePoint.ChargePointId)
-                {
-                    _logger.LogError($"CRITICAL: Transaction mismatch! Session charger: {chargePoint.ChargePointId}, Transaction charger: {stoppedTransaction.ChargePointId}");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Transaction mismatch detected. Cannot process charges. Contact support."
-                    });
-                }
+                // Wait for transaction to be updated in database
+                await Task.Delay(1000);
 
                 // Get actual meter readings - use multiple sources for accuracy
                 double startReading = 0;
@@ -691,85 +604,55 @@ namespace OCPP.Core.Management.Controllers
                 DateTime actualEndTime = DateTime.UtcNow;
 
                 // Priority 1: OCPP Transaction (most authoritative after stop)
-                startReading = stoppedTransaction.MeterStart;
-                endReading = stoppedTransaction.MeterStop ?? 0;
-                actualStartTime = stoppedTransaction.StartTime;
-                actualEndTime = stoppedTransaction.StopTime.Value;
-
-                _logger.LogInformation($"Using OCPP transaction data: Start={startReading:F3}, Stop={endReading:F3}");
-
-                // SAFEGUARD 6: Validate meter readings are present and sane
-                if (endReading == 0)
+                if (session.TransactionId.HasValue)
                 {
-                    _logger.LogError($"CRITICAL: Transaction {session.TransactionId} has no stop meter reading!");
-                    
-                    // Try fallback to real-time connector meter as last resort
-                    if (realtimeMeterReading > 0)
+                    var transaction = await _dbContext.Transactions
+                        .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                    if (transaction != null)
                     {
-                        endReading = realtimeMeterReading;
-                        if (realtimeMeterTime.HasValue)
-                        {
-                            actualEndTime = realtimeMeterTime.Value;
-                        }
-                        _logger.LogWarning($"FALLBACK: Using real-time connector meter: {endReading:F3} kWh");
+                        startReading = transaction.MeterStart;
+                        endReading = transaction.MeterStop ?? endReading;
+                        actualStartTime = transaction.StartTime;
+                        actualEndTime = transaction.StopTime ?? DateTime.UtcNow;
+
+                        _logger.LogInformation($"Using OCPP transaction data: Start={startReading:F3}, Stop={endReading:F3}");
                     }
                     else
                     {
-                        _logger.LogError($"CRITICAL: No valid meter reading available!");
-                        return Ok(new ChargingSessionResponseDto
-                        {
-                            Success = false,
-                            Message = "Unable to determine energy consumption. No valid meter reading available. Cannot process charges."
-                        });
+                        _logger.LogWarning($"Transaction {session.TransactionId} not found in database");
                     }
                 }
 
-                // SAFEGUARD 7: Validate meter reading consistency
+                // Priority 2: If transaction stop meter not available, use real-time connector meter
+                if (endReading == 0 && realtimeMeterReading > 0)
+                {
+                    endReading = realtimeMeterReading;
+                    if (realtimeMeterTime.HasValue)
+                    {
+                        actualEndTime = realtimeMeterTime.Value;
+                    }
+                    _logger.LogInformation($"Using real-time connector meter: {endReading:F3} kWh");
+                }
+
+                // Priority 3: Fallback to session/manual readings
+                if (startReading == 0 && double.TryParse(session.StartMeterReading, out double sessionStart))
+                {
+                    startReading = sessionStart;
+                    _logger.LogInformation($"Using session start meter: {startReading:F3} kWh");
+                }
+
+                if (endReading == 0 && double.TryParse(request.EndMeterReading, out double manualEnd))
+                {
+                    endReading = manualEnd;
+                    _logger.LogInformation($"Using manual end meter: {endReading:F3} kWh");
+                }
+
+                // Validate meter readings
                 if (endReading < startReading)
                 {
-                    _logger.LogError($"CRITICAL: Invalid meter readings! End ({endReading:F3}) < Start ({startReading:F3}). This indicates a serious error.");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"Invalid meter data detected. End reading ({endReading:F3} kWh) is less than start reading ({startReading:F3} kWh). Cannot process charges."
-                    });
-                }
-
-                // SAFEGUARD 8: Validate meter readings are realistic (not absurdly high)
-                double energyTransmitted = endReading - startReading;
-                double maxReasonableEnergy = 200.0; // Maximum 200 kWh per session (covers even large batteries)
-                
-                if (energyTransmitted > maxReasonableEnergy)
-                {
-                    _logger.LogError($"CRITICAL: Unrealistic energy consumed: {energyTransmitted:F3} kWh exceeds maximum {maxReasonableEnergy} kWh!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"Unrealistic energy consumption detected ({energyTransmitted:F3} kWh). This appears to be a meter error. Cannot charge. Contact support."
-                    });
-                }
-
-                // SAFEGUARD 9: Validate session duration is reasonable
-                var duration = actualEndTime - actualStartTime;
-                if (duration.TotalSeconds < 0)
-                {
-                    _logger.LogError($"CRITICAL: Negative session duration! Start: {actualStartTime}, End: {actualEndTime}");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Invalid session timing detected. Cannot process charges. Contact support."
-                    });
-                }
-
-                double maxReasonableHours = 48.0; // Max 48 hours per session
-                if (duration.TotalHours > maxReasonableHours)
-                {
-                    _logger.LogError($"CRITICAL: Session duration exceeds maximum: {duration.TotalHours:F2} hours > {maxReasonableHours} hours");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = $"Session duration is unrealistic ({duration.TotalHours:F1} hours). This appears to be an error. Contact support."
-                    });
+                    _logger.LogError($"Invalid meter readings: End ({endReading}) < Start ({startReading}). Setting to start value.");
+                    endReading = startReading;
                 }
 
                 var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId), maxAgeMinutes: 5);
@@ -794,7 +677,6 @@ namespace OCPP.Core.Management.Controllers
                     _logger.LogInformation("EndChargingSession => No recent SoC data available for final capture");
                 }
 
-                // Get tariff for billing calculations
                 double tariff = 0;
                 if (chargingGun != null && !string.IsNullOrEmpty(chargingGun.ChargerTariff) &&
                     double.TryParse(chargingGun.ChargerTariff, out double gunTariff))
@@ -808,58 +690,23 @@ namespace OCPP.Core.Management.Controllers
                     _logger.LogInformation($"Using tariff from session: ₹{tariff:F2}/kWh");
                 }
 
-                // SAFEGUARD 10: Validate tariff is present
-                if (tariff <= 0)
-                {
-                    _logger.LogError($"CRITICAL: No valid tariff found for charging session!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Tariff information missing. Cannot calculate charges. Contact support."
-                    });
-                }
-
                 // Update session with end details
                 session.EndTime = actualEndTime;
                 session.EndMeterReading = endReading.ToString("F3");
                 session.StartMeterReading = startReading.ToString("F3");
 
                 decimal totalFee = 0;
+                double energyTransmitted = Math.Max(0, endReading - startReading);
+
                 session.EnergyTransmitted = energyTransmitted.ToString("F3");
 
-                // SAFEGUARD 11: ZERO ENERGY PROTECTION - Do not charge if no energy was transmitted
-                const double minimumChargeableEnergy = 0.01; // 10 Wh minimum (0.01 kWh)
-                
-                if (energyTransmitted < minimumChargeableEnergy)
-                {
-                    _logger.LogWarning($"ZERO ENERGY SESSION: Only {energyTransmitted:F3} kWh transmitted (below {minimumChargeableEnergy} kWh minimum). No charge will be applied.");
-                    
-                    // Check if it was a very short session (failed to start properly)
-                    if (duration.TotalMinutes < 1)
-                    {
-                        _logger.LogInformation($"Session lasted only {duration.TotalSeconds:F0} seconds with no energy. Likely a failed start.");
-                    }
-                    
-                    totalFee = 0;
-                    session.ChargingTariff = tariff.ToString("F2");
-                    session.ChargingTotalFee = "0.00";
-                    
-                    _logger.LogInformation($"✓ USER PROTECTION: Session {session.RecId} - No charge for zero energy consumption. Duration: {duration.TotalMinutes:F1}min");
-                }
-                else
-                {
-                    // Calculate total fee based on tariff and energy (with GST)
-                    decimal baseCharge = (decimal)(energyTransmitted * tariff);
-                    decimal gst = baseCharge * 0.18m; // 18% GST
-                    totalFee = baseCharge + gst;
-                    
-                    session.ChargingTariff = tariff.ToString("F2");
-                    session.ChargingTotalFee = totalFee.ToString("F2");
-                    
-                    _logger.LogInformation($"Charging calculation: {energyTransmitted:F3} kWh × ₹{tariff:F2}/kWh = ₹{baseCharge:F2} + GST ₹{gst:F2} = Total ₹{totalFee:F2}");
-                }
+                // Calculate total fee based on tariff and energy
+                totalFee = (decimal)(energyTransmitted * tariff * 1.18);
+                session.ChargingTariff = tariff.ToString("F2");
+                session.ChargingTotalFee = totalFee.ToString("F2");
 
-                // Calculate charging speed (kW) - duration already calculated during validation
+                // Calculate charging speed (kW)
+                var duration = actualEndTime - actualStartTime;
                 // Only calculate charging speed if duration is positive
                 if (duration.TotalSeconds > 0 && duration.TotalHours > 0)
                 {
@@ -879,86 +726,49 @@ namespace OCPP.Core.Management.Controllers
                     chargingGun.UpdatedOn = DateTime.UtcNow;
                 }
 
-                // SAFEGUARD 12: Only create wallet transaction if there's an actual charge
-                WalletTransactionLog walletTransaction = null;
+                // Get current wallet balance
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == session.UserId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
                 decimal previousBalance = 0;
-                decimal newBalance = 0;
-
-                if (totalFee > 0)
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
                 {
-                    // Get current wallet balance
-                    var lastTransaction = await _dbContext.WalletTransactionLogs
-                        .Where(w => w.UserId == session.UserId && w.Active == 1)
-                        .OrderByDescending(w => w.CreatedOn)
-                        .FirstOrDefaultAsync();
-
-                    if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
-                    {
-                        previousBalance = lastBalance;
-                    }
-
-                    // Calculate new balance
-                    newBalance = previousBalance - totalFee;
-
-                    // SAFEGUARD 13: Log comprehensive wallet deduction audit trail
-                    _logger.LogInformation($"WALLET DEDUCTION: User {session.UserId} | Previous: ₹{previousBalance:F2} | Charge: ₹{totalFee:F2} | New: ₹{newBalance:F2}");
-                    
-                    if (newBalance < 0 && previousBalance >= 0)
-                    {
-                        _logger.LogWarning($"⚠ BALANCE WARNING: User {session.UserId} balance went negative after this transaction!");
-                    }
-                    else if (newBalance < 0)
-                    {
-                        _logger.LogWarning($"User {session.UserId} balance remains negative: ₹{newBalance:F2}");
-                    }
-
-                    // Create wallet transaction log for charging payment
-                    walletTransaction = new Database.EVCDTO.WalletTransactionLog
-                    {
-                        RecId = Guid.NewGuid().ToString(),
-                        UserId = session.UserId,
-                        PreviousCreditBalance = previousBalance.ToString("F2"),
-                        CurrentCreditBalance = newBalance.ToString("F2"),
-                        TransactionType = "Debit",
-                        ChargingSessionId = session.RecId,
-                        AdditionalInfo1 = $"Charging at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
-                        AdditionalInfo2 = $"Energy: {energyTransmitted:F3} kWh @ ₹{tariff:F2}/kWh = ₹{totalFee:F2}",
-                        AdditionalInfo3 = $"Meter: {startReading:F3} → {endReading:F3} kWh | Duration: {duration.TotalMinutes:F0}min",
-                        Active = 1,
-                        CreatedOn = DateTime.UtcNow,
-                        UpdatedOn = DateTime.UtcNow
-                    };
-
-                    _dbContext.WalletTransactionLogs.Add(walletTransaction);
-                    
-                    _logger.LogInformation($"✓ Wallet transaction created: {walletTransaction.RecId} - Debit ₹{totalFee:F2}");
-                }
-                else
-                {
-                    // Zero charge - no wallet transaction needed
-                    _logger.LogInformation($"✓ No wallet transaction created - Zero charge for session {session.RecId}");
-                    
-                    // Get balance for display purposes only
-                    var lastTransaction = await _dbContext.WalletTransactionLogs
-                        .Where(w => w.UserId == session.UserId && w.Active == 1)
-                        .OrderByDescending(w => w.CreatedOn)
-                        .FirstOrDefaultAsync();
-
-                    if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
-                    {
-                        previousBalance = lastBalance;
-                    }
-                    
-                    newBalance = previousBalance; // Balance unchanged
+                    previousBalance = lastBalance;
                 }
 
-                user.CreditBalance = newBalance.ToString("F2");
-                user.UpdatedOn = DateTime.UtcNow;
+                // Calculate new balance (allow negative balances)
+                decimal newBalance = previousBalance - totalFee;
+
+                // Log if balance goes negative
+                if (newBalance < 0)
+                {
+                    _logger.LogWarning($"User {session.UserId} balance went negative. Previous: ₹{previousBalance:F2}, Fee: ₹{totalFee:F2}, New: ₹{newBalance:F2}");
+                }
+
+                // Create wallet transaction log for charging payment
+                var walletTransaction = new Database.EVCDTO.WalletTransactionLog
+                {
+                    RecId = Guid.NewGuid().ToString(),
+                    UserId = session.UserId,
+                    PreviousCreditBalance = previousBalance.ToString("F2"),
+                    CurrentCreditBalance = newBalance.ToString("F2"),
+                    TransactionType = "Debit",
+                    ChargingSessionId = session.RecId,
+                    AdditionalInfo1 = $"Charging at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
+                    AdditionalInfo2 = $"Energy: {energyTransmitted:F3} kWh @ ₹{tariff:F2}/kWh = ₹{totalFee:F2}",
+                    AdditionalInfo3 = $"Meter: {startReading:F3} → {endReading:F3} kWh | Duration: {duration.TotalMinutes:F0}min",
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                _dbContext.WalletTransactionLogs.Add(walletTransaction);
                 session.UpdatedOn = DateTime.UtcNow;
-                
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation($"✓ SESSION COMPLETED: {session.RecId} (Txn: {session.TransactionId}) | Energy: {energyTransmitted:F3}kWh | Fee: ₹{totalFee:F2} | User Balance: ₹{newBalance:F2}");
+                _logger.LogInformation($"Charging session ended: {session.RecId} (Txn: {session.TransactionId}). Energy: {energyTransmitted:F3}kWh, Fee: ₹{totalFee:F2}, Balance: ₹{newBalance:F2}");
 
                 // Calculate SoC gain for response
                 if (session.SoCStart.HasValue && session.SoCEnd.HasValue)
@@ -966,27 +776,13 @@ namespace OCPP.Core.Management.Controllers
                     socGain = session.SoCEnd.Value - session.SoCStart.Value;
                 }
 
-                // Build comprehensive success message
-                string successMessage;
-                
-                if (totalFee > 0)
+                // Build success message
+                string successMessage = $"Charging session ended successfully. ₹{totalFee:F2} debited.";
+                if (newBalance < 0)
                 {
-                    successMessage = $"Charging session ended. Energy consumed: {energyTransmitted:F3} kWh. ₹{totalFee:F2} debited from your wallet.";
-                    
-                    if (newBalance < 0)
-                    {
-                        successMessage += $" ⚠ Warning: Your wallet balance is now negative (₹{newBalance:F2}). Please recharge immediately.";
-                    }
+                    successMessage += $" Warning: Your balance is now negative (₹{newBalance:F2}). Please recharge your wallet.";
                 }
-                else
-                {
-                    successMessage = $"Charging session ended. No energy consumed ({energyTransmitted:F3} kWh). No charges applied.";
-                    
-                    if (duration.TotalMinutes < 1)
-                    {
-                        successMessage += " This appears to be a failed start attempt - you were not charged.";
-                    }
-                }
+                successMessage += $" OCPP: {ocppResult.Message}";
 
                 return Ok(new ChargingSessionResponseDto
                 {
@@ -1013,25 +809,19 @@ namespace OCPP.Core.Management.Controllers
                             IsRealtime = false,
                             DataSource = session.SoCEnd.HasValue ? "Database (Historical)" : "Not Available"
                         },
-                        ValidationPassed = new
+                        DataSource = new
                         {
-                            TransactionStopped = true,
-                            TransactionVerified = true,
-                            MeterReadingsValid = true,
-                            ChargeCalculated = true,
-                            WalletUpdated = totalFee > 0
+                            TransactionUsed = session.TransactionId.HasValue,
+                            ConnectorMeterUsed = realtimeMeterReading > 0 && endReading == realtimeMeterReading,
+                            ManualMeterUsed = !string.IsNullOrEmpty(request.EndMeterReading) && endReading.ToString("F3") == request.EndMeterReading,
+                            ConnectorMeterValue = realtimeMeterReading > 0 ? $"{realtimeMeterReading:F3} kWh" : "Not available",
+                            ConnectorMeterTime = realtimeMeterTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A"
                         },
-                        WalletTransaction = totalFee > 0 ? new
+                        WalletTransaction = new
                         {
-                            TransactionId = walletTransaction?.RecId,
+                            TransactionId = walletTransaction.RecId,
                             PreviousBalance = previousBalance,
                             AmountDebited = totalFee,
-                            NewBalance = newBalance
-                        } : new
-                        {
-                            TransactionId = (string)null,
-                            PreviousBalance = previousBalance,
-                            AmountDebited = 0m,
                             NewBalance = newBalance
                         }
                     }

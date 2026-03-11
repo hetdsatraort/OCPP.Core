@@ -601,8 +601,7 @@ namespace OCPP.Core.Management.Controllers
                     AdditionalInfo3 = $"ValidationId: {validationId}",
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
-                    UpdatedOn = DateTime.UtcNow,
-                    UserRemarks = $"Added credits via Razorpay - OrderId: {request.OrderId}, PaymentId: {request.PaymentId}, Username: {user.PhoneNumber}"
+                    UpdatedOn = DateTime.UtcNow
                 };
 
                 _dbContext.PaymentHistories.Add(paymentHistory);
