@@ -137,60 +137,6 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // CRITICAL: Check if there's already an active OCPP transaction on this connector
-                // This prevents creating orphaned transactions
-                var existingTransaction = await _dbContext.Transactions
-                    .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
-                               t.ConnectorId == request.ConnectorId &&
-                               t.StopTime == null)
-                    .OrderByDescending(t => t.TransactionId)
-                    .FirstOrDefaultAsync();
-
-                if (existingTransaction != null)
-                {
-                    _logger.LogWarning($"Active OCPP transaction {existingTransaction.TransactionId} found on connector. Checking for orphaned session...");
-                    
-                    // Check if there's a session for this transaction
-                    var sessionForTransaction = await _dbContext.ChargingSessions
-                        .FirstOrDefaultAsync(s => s.TransactionId == existingTransaction.TransactionId &&
-                                                 s.Active == 1 &&
-                                                 s.EndTime == DateTime.MinValue);
-                    
-                    if (sessionForTransaction != null)
-                    {
-                        // Transaction has a session - connector is in use
-                        _logger.LogWarning($"Transaction {existingTransaction.TransactionId} has active session {sessionForTransaction.RecId}");
-                        return Ok(new ChargingSessionResponseDto
-                        {
-                            Success = false,
-                            Message = "Connector is currently in use by another active transaction"
-                        });
-                    }
-                    else
-                    {
-                        // ZOMBIE TRANSACTION DETECTED - orphaned transaction without a session
-                        _logger.LogError($"ZOMBIE TRANSACTION DETECTED: Transaction {existingTransaction.TransactionId} has no session! Stopping it...");
-                        
-                        // Try to stop the orphaned transaction
-                        var stopResult = await CallOCPPStopTransaction(chargePoint.ChargePointId, request.ConnectorId);
-                        if (stopResult.Success)
-                        {
-                            _logger.LogInformation($"Successfully stopped zombie transaction {existingTransaction.TransactionId}");
-                            // Wait for transaction to be updated
-                            await Task.Delay(1000);
-                        }
-                        else
-                        {
-                            _logger.LogError($"Failed to stop zombie transaction {existingTransaction.TransactionId}: {stopResult.Message}");
-                            return Ok(new ChargingSessionResponseDto
-                            {
-                                Success = false,
-                                Message = "Connector has an orphaned transaction. Please contact support."
-                            });
-                        }
-                    }
-                }
-
                 // Get charging gun details to fetch the correct tariff
                 var chargingGun = await _dbContext.ChargingGuns
                     .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
@@ -310,55 +256,17 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 // Wait briefly for transaction to be recorded in database
-                await Task.Delay(2000);
+                await Task.Delay(1000);
 
                 // Get the actual OCPP transaction that was just created
-                // Use time-based filtering to ensure we get the most recent transaction
                 var ocppTransaction = await _dbContext.Transactions
                     .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
                                t.ConnectorId == request.ConnectorId &&
-                               t.StartTagId == request.ChargeTagId &&
-                               t.StartTime >= DateTime.UtcNow.AddMinutes(-2))
+                               t.StartTagId == request.ChargeTagId)
                     .OrderByDescending(t => t.TransactionId)
                     .FirstOrDefaultAsync();
 
                 int? transactionId = ocppTransaction?.TransactionId;
-
-                // CRITICAL: Validate transaction exists and is still active
-                if (ocppTransaction == null)
-                {
-                    _logger.LogError($"CRITICAL: OCPP transaction not found in database after successful start command!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Transaction not recorded. Please try again or contact support if the issue persists."
-                    });
-                }
-
-                if (ocppTransaction.StopTime.HasValue)
-                {
-                    _logger.LogError($"Transaction {transactionId} is already stopped! StopTime: {ocppTransaction.StopTime}");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Transaction was immediately stopped. Please check the charger status."
-                    });
-                }
-
-                // Check if a session already exists with this transaction ID
-                var existingSessionWithTransaction = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.TransactionId == transactionId.Value && s.Active == 1);
-
-                if (existingSessionWithTransaction != null)
-                {
-                    _logger.LogWarning($"RACE CONDITION: Session {existingSessionWithTransaction.RecId} already exists for transaction {transactionId}!");
-                    return Ok(new ChargingSessionResponseDto
-                    {
-                        Success = false,
-                        Message = "Session already exists for this transaction. Please refresh and try again."
-                    });
-                }
-
                 double meterStart = 0;
                 DateTime startTime = DateTime.UtcNow;
                 string meterSource = "Unknown";
@@ -424,8 +332,6 @@ namespace OCPP.Core.Management.Controllers
 
                 _dbContext.ChargingSessions.Add(session);
                 await _dbContext.SaveChangesAsync();
-                
-                // Get SoC data - ocppTransaction is guaranteed to be non-null here
                 var socResult = await GetCachedSoC(ocppTransaction.ChargePointId, request.ConnectorId, maxAgeMinutes: 2);
                 if (socResult.Success && socResult.SoC.HasValue)
                 {
