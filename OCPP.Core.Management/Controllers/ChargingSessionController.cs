@@ -672,6 +672,8 @@ namespace OCPP.Core.Management.Controllers
 
                 _dbContext.WalletTransactionLogs.Add(walletTransaction);
                 session.UpdatedOn = DateTime.UtcNow;
+                user.CreditBalance = newBalance.ToString("F2");
+                user.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
 
                 _logger.LogInformation($"Charging session ended: {session.RecId} (Txn: {session.TransactionId}). Energy: {energyTransmitted:F3}kWh, Fee: ₹{totalFee:F2}, Balance: ₹{newBalance:F2}");
@@ -1841,6 +1843,10 @@ namespace OCPP.Core.Management.Controllers
 
                                         _dbContext.WalletTransactionLogs.Add(walletTransaction);
                                         _logger.LogInformation($"Auto-stopped session {session.RecId} - Debited ₹{totalFee:F2}, New balance: ₹{newBalance:F2}");
+                                        session.UpdatedOn = DateTime.UtcNow;
+                                        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId);
+                                        user.CreditBalance = newBalance.ToString("F2");
+                                        user.UpdatedOn = DateTime.UtcNow;
 
                                         await _dbContext.SaveChangesAsync();
                                         autoStoppedSessions.Add(session.RecId);
