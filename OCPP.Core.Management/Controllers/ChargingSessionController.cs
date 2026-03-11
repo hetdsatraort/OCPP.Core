@@ -2053,15 +2053,6 @@ namespace OCPP.Core.Management.Controllers
 
                         try
                         {
-                            // AUTO-STOP SAFEGUARD 1: Verify session hasn't been charged already
-                            if (!string.IsNullOrEmpty(session.ChargingTotalFee) && 
-                                decimal.TryParse(session.ChargingTotalFee, out var existingFee) && 
-                                existingFee > 0)
-                            {
-                                _logger.LogError($"AUTO-STOP DUPLICATE CHARGE BLOCKED: Session {session.RecId} already has fee ₹{existingFee:F2}");
-                                continue; // Skip this session
-                            }
-
                             // Attempt to stop the session automatically
                             var chargingStation = await _dbContext.ChargingStations
                                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
@@ -2069,271 +2060,103 @@ namespace OCPP.Core.Management.Controllers
                             var chargingGun = await _dbContext.ChargingGuns
                                 .FirstOrDefaultAsync(cg => cg.ChargingStationId == session.ChargingStationID && cg.RecId == session.ChargingGunId);
 
-                            if (chargingStation == null || chargingGun == null)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Charging station or gun not found for session {session.RecId}");
-                                continue;
-                            }
-
                             int connectorId = Convert.ToInt32(chargingGun.ConnectorId);
 
-                            var chargePoint = await _dbContext.ChargePoints
-                                .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
-
-                            if (chargePoint == null)
+                            if (chargingStation != null)
                             {
-                                _logger.LogError($"AUTO-STOP FAILED: Charge point not found for session {session.RecId}");
-                                continue;
-                            }
+                                var chargePoint = await _dbContext.ChargePoints
+                                    .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
 
-                            // AUTO-STOP SAFEGUARD 2: Call OCPP server to stop transaction
-                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
-
-                            if (!ocppResult.Success)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: OCPP stop transaction failed for session {session.RecId}: {ocppResult.Message}");
-                                continue; // Skip to next session
-                            }
-
-                            // AUTO-STOP SAFEGUARD 3: Wait and verify transaction was actually stopped (with retry)
-                            Transaction stoppedTransaction = null;
-                            int verificationAttempts = 0;
-                            int maxAttempts = 3; // Fewer attempts for auto-stop to avoid blocking other sessions
-                            
-                            while (verificationAttempts < maxAttempts && stoppedTransaction == null)
-                            {
-                                await Task.Delay(1000 * (verificationAttempts + 1)); // Exponential backoff
-                                
-                                if (session.TransactionId.HasValue)
+                                if (chargePoint != null)
                                 {
-                                    stoppedTransaction = await _dbContext.Transactions
-                                        .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
-                                    
-                                    if (stoppedTransaction != null && stoppedTransaction.StopTime.HasValue)
+                                    var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+
+                                    if (ocppResult.Success)
                                     {
-                                        _logger.LogInformation($"AUTO-STOP: Transaction {session.TransactionId} verified as stopped at attempt {verificationAttempts + 1}");
-                                        break;
+                                        // Update session status
+                                        session.EndTime = DateTime.UtcNow;
+                                        session.UpdatedOn = DateTime.UtcNow;
+
+                                        // Get final meter reading
+                                        var connectorStatus = await _dbContext.ConnectorStatuses
+                                            .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
+                                                && cs.ConnectorId == connectorId && cs.Active == 1);
+
+                                        double startMeter = 0;
+                                        double endMeter = 0;
+                                        double energyConsumed = 0;
+                                        decimal totalFee = 0;
+
+                                        if (connectorStatus?.LastMeter != null)
+                                        {
+                                            endMeter = connectorStatus.LastMeter.Value;
+                                            session.EndMeterReading = endMeter.ToString("F2");
+
+                                            if (double.TryParse(session.StartMeterReading, out startMeter))
+                                            {
+                                                energyConsumed = Math.Max(0, endMeter - startMeter);
+                                                session.EnergyTransmitted = energyConsumed.ToString("F2");
+
+                                                if (double.TryParse(session.ChargingTariff, out double tariff))
+                                                {
+                                                    totalFee = (decimal)(energyConsumed * tariff * 1.18);
+                                                    session.ChargingTotalFee = totalFee.ToString("F2");
+                                                }
+                                            }
+                                        }
+
+                                        // Debit wallet for auto-stopped session
+                                        var lastTransaction = await _dbContext.WalletTransactionLogs
+                                            .Where(w => w.UserId == session.UserId && w.Active == 1)
+                                            .OrderByDescending(w => w.CreatedOn)
+                                            .FirstOrDefaultAsync();
+
+                                        decimal previousBalance = 0;
+                                        if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
+                                        {
+                                            previousBalance = lastBalance;
+                                        }
+
+                                        // Always debit, even if balance goes negative
+                                        decimal newBalance = previousBalance - totalFee;
+
+                                        // Log if balance goes negative
+                                        if (newBalance < 0)
+                                        {
+                                            _logger.LogWarning($"Auto-stopped session {session.RecId} - Balance went negative. Previous: ₹{previousBalance:F2}, Fee: ₹{totalFee:F2}, New: ₹{newBalance:F2}");
+                                        }
+
+                                        // Create wallet transaction log for auto-stopped charging payment
+                                        var walletTransaction = new Database.EVCDTO.WalletTransactionLog
+                                        {
+                                            RecId = Guid.NewGuid().ToString(),
+                                            UserId = session.UserId,
+                                            PreviousCreditBalance = previousBalance.ToString("F2"),
+                                            CurrentCreditBalance = newBalance.ToString("F2"),
+                                            TransactionType = "Debit",
+                                            ChargingSessionId = session.RecId,
+                                            AdditionalInfo1 = $"Auto-stopped at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
+                                            AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{session.ChargingTariff}/kWh = ₹{totalFee:F2}",
+                                            AdditionalInfo3 = $"Meter: {startMeter:F3} → {endMeter:F3} kWh | Reason: Limit violation",
+                                            Active = 1,
+                                            CreatedOn = DateTime.UtcNow,
+                                            UpdatedOn = DateTime.UtcNow
+                                        };
+
+                                        _dbContext.WalletTransactionLogs.Add(walletTransaction);
+                                        _logger.LogInformation($"Auto-stopped session {session.RecId} - Debited ₹{totalFee:F2}, New balance: ₹{newBalance:F2}");
+
+                                        await _dbContext.SaveChangesAsync();
+                                        autoStoppedSessions.Add(session.RecId);
+
+                                        _logger.LogInformation($"Auto-stopped session {session.RecId} due to limit violations");
                                     }
-                                    
-                                    if (stoppedTransaction != null && !stoppedTransaction.StopTime.HasValue)
+                                    else
                                     {
-                                        _logger.LogWarning($"AUTO-STOP: Attempt {verificationAttempts + 1}: Transaction {session.TransactionId} found but not yet stopped");
-                                        stoppedTransaction = null; // Reset for retry
+                                        _logger.LogWarning($"Failed to auto-stop session {session.RecId}: {ocppResult.Message}");
                                     }
                                 }
-                                
-                                verificationAttempts++;
                             }
-
-                            // AUTO-STOP SAFEGUARD 4: Validate transaction
-                            if (!session.TransactionId.HasValue)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Session {session.RecId} has no transaction ID!");
-                                continue;
-                            }
-
-                            if (stoppedTransaction == null)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Transaction {session.TransactionId} not found after {maxAttempts} attempts!");
-                                continue;
-                            }
-
-                            if (!stoppedTransaction.StopTime.HasValue)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Transaction {session.TransactionId} still active after {maxAttempts} stop attempts!");
-                                continue;
-                            }
-
-                            // AUTO-STOP SAFEGUARD 5: Verify transaction ownership
-                            if (stoppedTransaction.ChargePointId != chargePoint.ChargePointId)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Transaction mismatch! Session charger: {chargePoint.ChargePointId}, Transaction charger: {stoppedTransaction.ChargePointId}");
-                                continue;
-                            }
-
-                            // Get meter readings from transaction
-                            double startReading = stoppedTransaction.MeterStart;
-                            double endReading = stoppedTransaction.MeterStop ?? 0;
-                            DateTime actualStartTime = stoppedTransaction.StartTime;
-                            DateTime actualEndTime = stoppedTransaction.StopTime.Value;
-
-                            // AUTO-STOP SAFEGUARD 6: Validate meter readings
-                            if (endReading == 0)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Transaction {session.TransactionId} has no stop meter reading!");
-                                continue;
-                            }
-
-                            if (endReading < startReading)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Invalid meter! End ({endReading:F3}) < Start ({startReading:F3})");
-                                continue;
-                            }
-
-                            // AUTO-STOP SAFEGUARD 7: Validate energy is realistic
-                            double energyConsumed = endReading - startReading;
-                            const double maxReasonableEnergy = 200.0;
-                            
-                            if (energyConsumed > maxReasonableEnergy)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Unrealistic energy {energyConsumed:F3} kWh exceeds {maxReasonableEnergy} kWh!");
-                                continue;
-                            }
-
-                            // AUTO-STOP SAFEGUARD 8: Validate duration
-                            var duration = actualEndTime - actualStartTime;
-                            if (duration.TotalSeconds < 0)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Negative duration! Start: {actualStartTime}, End: {actualEndTime}");
-                                continue;
-                            }
-
-                            const double maxReasonableHours = 48.0;
-                            if (duration.TotalHours > maxReasonableHours)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: Duration {duration.TotalHours:F2} hours exceeds {maxReasonableHours} hours!");
-                                continue;
-                            }
-
-                            // Get tariff
-                            double tariff = 0;
-                            if (!string.IsNullOrEmpty(chargingGun.ChargerTariff) && double.TryParse(chargingGun.ChargerTariff, out double gunTariff))
-                            {
-                                tariff = gunTariff;
-                            }
-                            else if (double.TryParse(session.ChargingTariff, out double sessionTariff))
-                            {
-                                tariff = sessionTariff;
-                            }
-
-                            // AUTO-STOP SAFEGUARD 9: Validate tariff
-                            if (tariff <= 0)
-                            {
-                                _logger.LogError($"AUTO-STOP FAILED: No valid tariff for session {session.RecId}!");
-                                continue;
-                            }
-
-                            // Update session
-                            session.EndTime = actualEndTime;
-                            session.EndMeterReading = endReading.ToString("F3");
-                            session.StartMeterReading = startReading.ToString("F3");
-                            session.EnergyTransmitted = energyConsumed.ToString("F3");
-
-                            decimal totalFee = 0;
-                            WalletTransactionLog walletTransaction = null;
-
-                            // AUTO-STOP SAFEGUARD 10: ZERO ENERGY PROTECTION
-                            const double minimumChargeableEnergy = 0.01; // 10 Wh minimum
-                            
-                            if (energyConsumed < minimumChargeableEnergy)
-                            {
-                                _logger.LogWarning($"AUTO-STOP ZERO ENERGY: Session {session.RecId} - Only {energyConsumed:F3} kWh (below {minimumChargeableEnergy} kWh). No charge applied.");
-                                
-                                totalFee = 0;
-                                session.ChargingTariff = tariff.ToString("F2");
-                                session.ChargingTotalFee = "0.00";
-                                
-                                _logger.LogInformation($"✓ AUTO-STOP USER PROTECTION: Session {session.RecId} - No charge for zero energy. Duration: {duration.TotalMinutes:F1}min");
-                            }
-                            else
-                            {
-                                // Calculate fee
-                                decimal baseCharge = (decimal)(energyConsumed * tariff);
-                                decimal gst = baseCharge * 0.18m;
-                                totalFee = baseCharge + gst;
-                                
-                                session.ChargingTariff = tariff.ToString("F2");
-                                session.ChargingTotalFee = totalFee.ToString("F2");
-                                
-                                _logger.LogInformation($"AUTO-STOP CHARGE: {energyConsumed:F3} kWh × ₹{tariff:F2}/kWh = ₹{baseCharge:F2} + GST ₹{gst:F2} = Total ₹{totalFee:F2}");
-                            }
-
-                            // Calculate charging speed
-                            if (duration.TotalHours > 0)
-                            {
-                                double chargingSpeed = energyConsumed / duration.TotalHours;
-                                session.ChargingSpeed = chargingSpeed.ToString("F2");
-                            }
-                            else
-                            {
-                                session.ChargingSpeed = "0";
-                            }
-
-                            // Update gun meter
-                            chargingGun.ChargerMeterReading = endReading.ToString("F3");
-                            chargingGun.UpdatedOn = DateTime.UtcNow;
-
-                            // AUTO-STOP SAFEGUARD 11: Only create wallet transaction if there's an actual charge
-                            decimal previousBalance = 0;
-                            decimal newBalance = 0;
-
-                            if (totalFee > 0)
-                            {
-                                var lastTransaction = await _dbContext.WalletTransactionLogs
-                                    .Where(w => w.UserId == session.UserId && w.Active == 1)
-                                    .OrderByDescending(w => w.CreatedOn)
-                                    .FirstOrDefaultAsync();
-
-                                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
-                                {
-                                    previousBalance = lastBalance;
-                                }
-
-                                newBalance = previousBalance - totalFee;
-
-                                _logger.LogInformation($"AUTO-STOP WALLET: User {session.UserId} | Previous: ₹{previousBalance:F2} | Charge: ₹{totalFee:F2} | New: ₹{newBalance:F2}");
-                                
-                                if (newBalance < 0 && previousBalance >= 0)
-                                {
-                                    _logger.LogWarning($"⚠ AUTO-STOP: User {session.UserId} balance went negative!");
-                                }
-
-                                walletTransaction = new Database.EVCDTO.WalletTransactionLog
-                                {
-                                    RecId = Guid.NewGuid().ToString(),
-                                    UserId = session.UserId,
-                                    PreviousCreditBalance = previousBalance.ToString("F2"),
-                                    CurrentCreditBalance = newBalance.ToString("F2"),
-                                    TransactionType = "Debit",
-                                    ChargingSessionId = session.RecId,
-                                    AdditionalInfo1 = $"Auto-stopped at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
-                                    AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{tariff:F2}/kWh = ₹{totalFee:F2}",
-                                    AdditionalInfo3 = $"Meter: {startReading:F3} → {endReading:F3} kWh | Reason: {string.Join(", ", limitCheck.ViolatedLimits)}",
-                                    Active = 1,
-                                    CreatedOn = DateTime.UtcNow,
-                                    UpdatedOn = DateTime.UtcNow
-                                };
-
-                                _dbContext.WalletTransactionLogs.Add(walletTransaction);
-                                _logger.LogInformation($"✓ AUTO-STOP: Wallet transaction created - Debit ₹{totalFee:F2}");
-                            }
-                            else
-                            {
-                                _logger.LogInformation($"✓ AUTO-STOP: No wallet transaction - Zero charge for session {session.RecId}");
-                                
-                                var lastTransaction = await _dbContext.WalletTransactionLogs
-                                    .Where(w => w.UserId == session.UserId && w.Active == 1)
-                                    .OrderByDescending(w => w.CreatedOn)
-                                    .FirstOrDefaultAsync();
-
-                                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lastBalance))
-                                {
-                                    previousBalance = lastBalance;
-                                }
-                                
-                                newBalance = previousBalance;
-                            }
-
-                            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId);
-
-                            user.CreditBalance = newBalance.ToString("F2");
-                            user.UpdatedOn = DateTime.UtcNow;
-
-                            session.UpdatedOn = DateTime.UtcNow;
-                            await _dbContext.SaveChangesAsync();
-                            autoStoppedSessions.Add(session.RecId);
-
-                            _logger.LogInformation($"✓ AUTO-STOP COMPLETED: Session {session.RecId} (Txn: {session.TransactionId}) | Energy: {energyConsumed:F3}kWh | Fee: ₹{totalFee:F2} | Balance: ₹{newBalance:F2} | Reason: {string.Join(", ", limitCheck.ViolatedLimits)}");
                         }
                         catch (Exception stopEx)
                         {
