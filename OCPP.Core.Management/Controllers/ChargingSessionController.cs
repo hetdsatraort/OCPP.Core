@@ -122,19 +122,72 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Check if there's already an active session for this charging gun
-                var existingSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == request.ChargingGunId &&
-                                             s.Active == 1 &&
-                                             s.EndTime == DateTime.MinValue);
+                // Check for existing active sessions for this charging gun and handle zombie sessions
+                var existingSessions = await _dbContext.ChargingSessions
+                    .Where(s => s.ChargingGunId == request.ChargingGunId &&
+                                s.Active == 1 &&
+                                s.EndTime == DateTime.MinValue)
+                    .ToListAsync();
 
-                if (existingSession != null)
+                if (existingSessions.Any())
                 {
-                    return Ok(new ChargingSessionResponseDto
+                    var zombiesToClose = new List<Database.EVCDTO.ChargingSession>();
+
+                    foreach (var existingSession in existingSessions)
                     {
-                        Success = false,
-                        Message = "Charging gun is already in use"
-                    });
+                        bool isGenuinelyActive = false;
+
+                        if (existingSession.TransactionId.HasValue)
+                        {
+                            var existingTransaction = await _dbContext.Transactions
+                                .FirstOrDefaultAsync(t => t.TransactionId == existingSession.TransactionId.Value);
+
+                            // Transaction exists and has no stop time → charger is genuinely in use
+                            if (existingTransaction != null && !existingTransaction.StopTime.HasValue)
+                            {
+                                isGenuinelyActive = true;
+                            }
+                        }
+
+                        if (isGenuinelyActive)
+                        {
+                            _logger.LogWarning($"StartChargingSession: Blocked — active session {existingSession.RecId} with ongoing transaction {existingSession.TransactionId} already exists for gun {request.ChargingGunId}");
+                            return Ok(new ChargingSessionResponseDto
+                            {
+                                Success = false,
+                                Message = "Charging gun is currently in use with an active transaction. Please wait for the current session to end."
+                            });
+                        }
+
+                        // No active OCPP transaction backing this session — it is a zombie
+                        zombiesToClose.Add(existingSession);
+                    }
+
+                    // Close all zombie sessions
+                    foreach (var zombie in zombiesToClose)
+                    {
+                        _logger.LogWarning($"StartChargingSession: Closing zombie session {zombie.RecId} for gun {request.ChargingGunId}");
+
+                        zombie.EndTime = DateTime.UtcNow;
+                        zombie.UpdatedOn = DateTime.UtcNow;
+
+                        if (zombie.TransactionId.HasValue)
+                        {
+                            var zombieTransaction = await _dbContext.Transactions
+                                .FirstOrDefaultAsync(t => t.TransactionId == zombie.TransactionId.Value);
+
+                            if (zombieTransaction != null)
+                            {
+                                double meterStop = zombieTransaction.MeterStop ?? zombieTransaction.MeterStart;
+                                zombie.EndMeterReading = meterStop.ToString("F2");
+                                double zombieEnergy = Math.Max(0, meterStop - zombieTransaction.MeterStart);
+                                zombie.EnergyTransmitted = zombieEnergy.ToString("F2");
+                            }
+                        }
+                    }
+
+                    await _dbContext.SaveChangesAsync();
+                    _logger.LogInformation($"StartChargingSession: Closed {zombiesToClose.Count} zombie session(s) for gun {request.ChargingGunId}");
                 }
 
                 // Get charging gun details to fetch the correct tariff
@@ -240,6 +293,19 @@ namespace OCPP.Core.Management.Controllers
 
                 _logger.LogInformation($"User {userId} balance check passed. Balance: ₹{currentBalance:F2}, Required: ₹{minBalanceRequired:F2}");
 
+                // Snapshot the highest TransactionId currently in the DB for this chargepoint/connector
+                // BEFORE sending the OCPP command. This is the baseline we compare against so we can
+                // identify the *new* transaction that is created after the chargepoint fires StartTransaction,
+                // and avoid two concurrent sessions latching onto the same existing row.
+                int baselineTransactionId = await _dbContext.Transactions
+                    .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
+                               t.ConnectorId == request.ConnectorId)
+                    .OrderByDescending(t => t.TransactionId)
+                    .Select(t => t.TransactionId)
+                    .FirstOrDefaultAsync(); // returns 0 if no rows
+
+                _logger.LogInformation($"BaselineTransactionId for {chargePoint.ChargePointId}/{request.ConnectorId}: {baselineTransactionId}");
+
                 // Call OCPP server to start transaction
                 var ocppResult = await CallOCPPStartTransaction(
                     chargePoint.ChargePointId,
@@ -255,16 +321,38 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // Wait briefly for transaction to be recorded in database
-                await Task.Delay(1000);
+                // Poll until the chargepoint sends its StartTransaction message back and the OCPP server
+                // writes a NEW transaction row (TransactionId > baseline). This prevents two concurrent
+                // start-session requests from binding to the same transaction row.
+                Database.Transaction ocppTransaction = null;
+                const int maxPollAttempts = 10;
+                const int pollIntervalMs = 1500;
 
-                // Get the actual OCPP transaction that was just created
-                var ocppTransaction = await _dbContext.Transactions
-                    .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
-                               t.ConnectorId == request.ConnectorId &&
-                               t.StartTagId == request.ChargeTagId)
-                    .OrderByDescending(t => t.TransactionId)
-                    .FirstOrDefaultAsync();
+                for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
+                {
+                    await Task.Delay(pollIntervalMs);
+
+                    ocppTransaction = await _dbContext.Transactions
+                        .Where(t => t.ChargePointId == chargePoint.ChargePointId &&
+                                   t.ConnectorId == request.ConnectorId &&
+                                   t.StartTagId == request.ChargeTagId &&
+                                   t.TransactionId > baselineTransactionId)
+                        .OrderByDescending(t => t.TransactionId)
+                        .FirstOrDefaultAsync();
+
+                    if (ocppTransaction != null)
+                    {
+                        _logger.LogInformation($"New OCPP transaction found on attempt {attempt}: TransactionId={ocppTransaction.TransactionId}");
+                        break;
+                    }
+
+                    _logger.LogInformation($"Poll attempt {attempt}/{maxPollAttempts}: no new transaction yet for {chargePoint.ChargePointId}/{request.ConnectorId} (baseline: {baselineTransactionId})");
+                }
+
+                if (ocppTransaction == null)
+                {
+                    _logger.LogWarning($"No new OCPP transaction appeared after {maxPollAttempts} attempts for {chargePoint.ChargePointId}/{request.ConnectorId}. Continuing without a TransactionId.");
+                }
 
                 int? transactionId = ocppTransaction?.TransactionId;
                 double meterStart = 0;
@@ -630,6 +718,22 @@ namespace OCPP.Core.Management.Controllers
                 {
                     chargingGun.ChargerMeterReading = endReading.ToString("F3");
                     chargingGun.UpdatedOn = DateTime.UtcNow;
+                }
+
+                // Guard against duplicate billing — if a debit already exists for this session, do not charge again
+                var existingCharge = await _dbContext.WalletTransactionLogs
+                    .FirstOrDefaultAsync(w => w.ChargingSessionId == session.RecId &&
+                                             w.TransactionType == "Debit" &&
+                                             w.Active == 1);
+
+                if (existingCharge != null)
+                {
+                    _logger.LogWarning($"EndChargingSession: Duplicate charge prevented for session {session.RecId}. A debit of ₹{totalFee:F2} was already recorded.");
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "This session has already been billed. Duplicate charge prevented. Please contact support if you believe this is an error."
+                    });
                 }
 
                 // Get current wallet balance
