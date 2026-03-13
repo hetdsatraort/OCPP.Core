@@ -29,11 +29,11 @@ namespace OCPP.Core.Management.Services
             _configuration = configuration;
             _httpClientFactory = httpClientFactory;
 
-            // Get check interval from configuration, default to 2 minutes
-            var intervalMinutes = _configuration.GetValue<int>("SessionLimits:CheckIntervalMinutes", 2);
-            _checkInterval = TimeSpan.FromMinutes(intervalMinutes);
+            // Get check interval from configuration, default to 30 secs
+            var intervalSeconds = _configuration.GetValue<int>("SessionLimits:CheckIntervalSeconds", 30);
+            _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
 
-            _logger.LogInformation("SessionLimitMonitorService initialized with check interval: {Interval} minutes", intervalMinutes);
+            _logger.LogInformation("SessionLimitMonitorService initialized with check interval: {Interval} seconds", intervalSeconds);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)

@@ -1228,6 +1228,10 @@ namespace OCPP.Core.Management.Controllers
                     double endValue = session.SoCEnd ?? currentSoC.Value;
                     socGain = endValue - session.SoCStart.Value;
                 }
+                else if (!session.SoCStart.HasValue && currentSoC.HasValue)
+                {
+                    session.SoCStart = currentSoC;
+                }
 
                 bool isActive = session.EndTime == DateTime.MinValue;
 
@@ -1236,6 +1240,8 @@ namespace OCPP.Core.Management.Controllers
                 var serviceFee = 0.0; // Can add service fee logic here
                 var taxes = energyCost * 0.18; // Assuming 18% GST
                 var totalCost = energyCost + serviceFee + taxes;
+
+                await _dbContext.SaveChangesAsync();
 
                 return Ok(new ChargingSessionResponseDto
                 {
@@ -1325,6 +1331,8 @@ namespace OCPP.Core.Management.Controllers
                             ServiceFee = Math.Round(serviceFee, 2),
                             Taxes = Math.Round(taxes, 2),
                             TotalCost = Math.Round(totalCost, 2),
+                            CGST = Math.Round(taxes / 2, 2),
+                            SGST = Math.Round(taxes / 2, 2),
                             Currency = "₹",
                             TariffApplied = Math.Round(actualTariff, 2),
                             TariffUnit = "₹/kWh",
@@ -2220,7 +2228,7 @@ namespace OCPP.Core.Management.Controllers
                     }
                     Uri uri = new Uri(serverApiUrl);
                     uri = new Uri(uri, $"StartTransaction/{Uri.EscapeDataString(chargePointId)}/{connectorId}/{Uri.EscapeDataString(chargeTagId)}");
-                    httpClient.Timeout = new TimeSpan(0, 0, 15);
+                    httpClient.Timeout = new TimeSpan(0, 0, 60);
 
                     if (!string.IsNullOrWhiteSpace(apiKeyConfig))
                     {
@@ -2292,7 +2300,7 @@ namespace OCPP.Core.Management.Controllers
                     }
                     Uri uri = new Uri(serverApiUrl);
                     uri = new Uri(uri, $"StopTransaction/{Uri.EscapeDataString(chargePointId)}/{connectorId}");
-                    httpClient.Timeout = new TimeSpan(0, 0, 15);
+                    httpClient.Timeout = new TimeSpan(0, 0, 60);
 
                     if (!string.IsNullOrWhiteSpace(apiKeyConfig))
                     {
@@ -2364,7 +2372,7 @@ namespace OCPP.Core.Management.Controllers
                     }
                     Uri uri = new Uri(serverApiUrl);
                     uri = new Uri(uri, $"UnlockConnector/{Uri.EscapeDataString(chargePointId)}/{connectorId}");
-                    httpClient.Timeout = new TimeSpan(0, 0, 15);
+                    httpClient.Timeout = new TimeSpan(0, 0, 60);
 
                     if (!string.IsNullOrWhiteSpace(apiKeyConfig))
                     {
@@ -2860,7 +2868,9 @@ namespace OCPP.Core.Management.Controllers
                         TotalCost = Math.Round(totalCostWithTax, 2),
                         CostPerKm = Math.Round(costPerKm, 2),
                         TariffApplied = tariff,
-                        Currency = "₹"
+                        Currency = "₹",
+                        CGST = Math.Round(taxAmount/2, 2),
+                        SGST = Math.Round(taxAmount/2, 2)
                     }
                 };
 

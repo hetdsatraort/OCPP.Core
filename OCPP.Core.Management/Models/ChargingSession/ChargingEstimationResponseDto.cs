@@ -155,5 +155,8 @@ namespace OCPP.Core.Management.Models.ChargingSession
         /// Currency symbol
         /// </summary>
         public string Currency { get; set; } = "₹";
+        public double CGST { get; set; }
+        public double SGST { get; set; }
+
     }
 }

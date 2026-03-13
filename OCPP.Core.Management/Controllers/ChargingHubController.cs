@@ -1171,6 +1171,7 @@ namespace OCPP.Core.Management.Controllers
                             chargers = chargers
                                 .Where(c => c.ChargerStatus.Equals(request.ChargerStatus, StringComparison.OrdinalIgnoreCase))
                                 .ToList();
+                            chargers = chargers.OrderBy(c => c.CreatedOn).ToList();
                         }
 
                         var chargerDtos = new List<ChargerDto>();
@@ -1180,7 +1181,8 @@ namespace OCPP.Core.Management.Controllers
                         {
                             var chargerDto = await MapToChargerDtoAsync(charger);
                             chargerDtos.Add(chargerDto);
-                            
+                            chargerDtos = chargerDtos.OrderBy(c => c.CreatedOn).ToList();
+
                             // Count available based on ChargerStatus or LastStatus from connector
                             if (charger.ChargerStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true ||
                                 chargerDto.LastStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true)
