@@ -216,7 +216,7 @@ namespace OCPP.Core.Management.Controllers
                 double.TryParse(tariffToUse, out tariff);
 
                 // Calculate minimum required balance based on session limits
-                decimal minBalanceRequired = 100m; // Default minimum
+                decimal minBalanceRequired = 20m; // Default minimum
                 string balanceRequirementSource = "default minimum";
                 var estimatedCosts = new List<(string source, decimal amount)>();
 
@@ -283,7 +283,7 @@ namespace OCPP.Core.Management.Controllers
 
                 if (currentBalance < minBalanceRequired)
                 {
-                    _logger.LogWarning($"User {userId} has insufficient balance for session. Balance: ₹{currentBalance:F2}, Required: ₹{minBalanceRequired:F2} (based on {balanceRequirementSource})");
+                    _logger.LogWarning($"User {user.FirstName} {user.LastName} {userId} has insufficient balance for session. Balance: ₹{currentBalance:F2}, Required: ₹{minBalanceRequired:F2} (based on {balanceRequirementSource})");
                     return Ok(new ChargingSessionResponseDto
                     {
                         Success = false,
@@ -1979,15 +1979,146 @@ namespace OCPP.Core.Management.Controllers
                     }
                 }
 
+                var cutoffTime = DateTime.UtcNow.AddMinutes(-1);
+                var orphanTransactionsStopped = new List<string>();
+                var orphanSessionsClosed = new List<string>();
+
+                if (_config.GetValue<string>("SLMBFFlag", "1") == "1")
+                {
+                    // Check 1: Sessions that are stopped but whose OCPP transaction is still running (for >= 1 minute)
+                    var stoppedSessionsWithRunningTxns = await _dbContext.ChargingSessions
+                    .Where(s => s.EndTime != DateTime.MinValue && s.TransactionId.HasValue && s.EndTime <= cutoffTime)
+                    .ToListAsync();
+
+                    foreach (var session in stoppedSessionsWithRunningTxns)
+                    {
+                        try
+                        {
+                            var transaction = await _dbContext.Transactions
+                                .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                            if (transaction == null || transaction.StopTime.HasValue)
+                                continue;
+
+                            // Transaction is still running but the session was stopped >= 1 minute ago — force-stop the transaction
+                            var chargingStation = await _dbContext.ChargingStations
+                                .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
+
+                            var chargingGun = await _dbContext.ChargingGuns
+                                .FirstOrDefaultAsync(cg => cg.RecId == session.ChargingGunId);
+
+                            if (chargingStation == null || chargingGun == null)
+                                continue;
+
+                            int connectorId = Convert.ToInt32(chargingGun.ConnectorId);
+                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+
+                            if (ocppResult.Success)
+                            {
+                                orphanTransactionsStopped.Add(session.RecId);
+                                _logger.LogInformation($"Stopped orphan OCPP transaction {session.TransactionId} for already-stopped session {session.RecId}");
+                            }
+                            else
+                            {
+                                _logger.LogWarning($"Failed to stop orphan OCPP transaction {session.TransactionId} for session {session.RecId}: {ocppResult.Message}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error stopping orphan OCPP transaction for session {session.RecId}");
+                        }
+                    }
+
+                    // Check 2: Sessions that are still active but whose OCPP transaction has already been stopped
+
+                    foreach (var session in activeSessions.Where(s => s.TransactionId.HasValue && !autoStoppedSessions.Contains(s.RecId)))
+                    {
+                        try
+                        {
+                            var transaction = await _dbContext.Transactions
+                                .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                            if (transaction == null || !transaction.StopTime.HasValue)
+                                continue;
+
+                            // Session is still active but the OCPP transaction has been stopped — close the session
+                            _logger.LogWarning($"Session {session.RecId} is still active but its OCPP transaction {session.TransactionId} was stopped at {transaction.StopTime}. Auto-closing session.");
+
+                            session.EndTime = transaction.StopTime.Value;
+                            session.UpdatedOn = DateTime.UtcNow;
+                            double startMeter = transaction.MeterStart;
+                            double endMeter = transaction.MeterStop ?? startMeter;
+                            double energyConsumed = Math.Max(0, endMeter - startMeter);
+                            session.EndMeterReading = endMeter.ToString("F2");
+                            session.EnergyTransmitted = energyConsumed.ToString("F2");
+                            decimal totalFee = 0;
+                            double tariffValue = 0;
+                            if (double.TryParse(session.ChargingTariff, out tariffValue) && tariffValue > 0)
+                            {
+                                totalFee = (decimal)(energyConsumed * tariffValue * 1.18);
+                                session.ChargingTotalFee = totalFee.ToString("F2");
+                            }
+
+                            var lastWalletTransaction = await _dbContext.WalletTransactionLogs
+                                .Where(w => w.UserId == session.UserId && w.Active == 1)
+                                .OrderByDescending(w => w.CreatedOn)
+                                .FirstOrDefaultAsync();
+
+                            decimal previousBalance = 0;
+                            if (lastWalletTransaction != null && decimal.TryParse(lastWalletTransaction.CurrentCreditBalance, out var lb))
+                                previousBalance = lb;
+
+                            decimal newBalance = previousBalance - totalFee;
+
+                            if (newBalance < 0)
+                                _logger.LogWarning($"Auto-closing orphan session {session.RecId} - balance went negative. Previous: ₹{previousBalance:F2}, Fee: ₹{totalFee:F2}, New: ₹{newBalance:F2}");
+
+                            var walletTx = new Database.EVCDTO.WalletTransactionLog
+                            {
+                                RecId = Guid.NewGuid().ToString(),
+                                UserId = session.UserId,
+                                PreviousCreditBalance = previousBalance.ToString("F2"),
+                                CurrentCreditBalance = newBalance.ToString("F2"),
+                                TransactionType = "Debit",
+                                ChargingSessionId = session.RecId,
+                                AdditionalInfo1 = $"Session auto-closed - OCPP transaction {session.TransactionId} already stopped",
+                                AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{tariffValue}/kWh = ₹{totalFee:F2}",
+                                AdditionalInfo3 = $"Meter: {startMeter:F3} → {endMeter:F3} kWh",
+                                Active = 1,
+                                CreatedOn = DateTime.UtcNow,
+                                UpdatedOn = DateTime.UtcNow
+                            };
+
+                            _dbContext.WalletTransactionLogs.Add(walletTx);
+
+                            var orphanUser = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId);
+                            if (orphanUser != null)
+                            {
+                                orphanUser.CreditBalance = newBalance.ToString("F2");
+                                orphanUser.UpdatedOn = DateTime.UtcNow;
+                            }
+
+                            await _dbContext.SaveChangesAsync();
+                            orphanSessionsClosed.Add(session.RecId);
+                            _logger.LogInformation($"Auto-closed orphan session {session.RecId} (OCPP transaction {session.TransactionId} stopped at {transaction.StopTime})");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error auto-closing orphan active session {session.RecId}");
+                        }
+                    }
+                }
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = $"Checked {activeSessions.Count} active sessions. Found {violatedSessions.Count} with limit violations. Auto-stopped {autoStoppedSessions.Count} sessions.",
+                    Message = $"Checked {activeSessions.Count} active sessions. Found {violatedSessions.Count} with limit violations. Auto-stopped {autoStoppedSessions.Count} sessions. Stopped {orphanTransactionsStopped.Count} orphan OCPP transactions. Closed {orphanSessionsClosed.Count} orphan active sessions.",
                     Data = new
                     {
                         TotalActiveSessions = activeSessions.Count,
                         ViolatedSessions = violatedSessions,
                         AutoStoppedSessionIds = autoStoppedSessions,
+                        OrphanTransactionsStopped = orphanTransactionsStopped,
+                        OrphanSessionsClosed = orphanSessionsClosed,
                         CheckedAt = DateTime.UtcNow
                     }
                 });
