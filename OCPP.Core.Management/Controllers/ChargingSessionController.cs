@@ -2109,11 +2109,10 @@ namespace OCPP.Core.Management.Controllers
                         }
                     }
 
-                    // Check 3: Active sessions + running transactions with no meter movement for >= 3 minutes
+                    // Check 3: Active sessions (with or without a TransactionId) that have delivered zero energy for >= 3 minutes
                     var zeroEnergyThreshold = DateTime.UtcNow.AddMinutes(-3);
                     var candidatesForZeroEnergyCheck = activeSessions
-                        .Where(s => s.TransactionId.HasValue
-                                    && s.StartTime <= zeroEnergyThreshold
+                        .Where(s => s.StartTime <= zeroEnergyThreshold
                                     && !autoStoppedSessions.Contains(s.RecId)
                                     && !orphanSessionsClosed.Contains(s.RecId))
                         .ToList();
@@ -2122,13 +2121,6 @@ namespace OCPP.Core.Management.Controllers
                     {
                         try
                         {
-                            var transaction = await _dbContext.Transactions
-                                .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
-
-                            // Only act if the transaction is still running
-                            if (transaction == null || transaction.StopTime.HasValue)
-                                continue;
-
                             var chargingStation = await _dbContext.ChargingStations
                                 .FirstOrDefaultAsync(cs => cs.RecId == session.ChargingStationID);
 
@@ -2144,27 +2136,57 @@ namespace OCPP.Core.Management.Controllers
                                 .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
                                     && cs.ConnectorId == connectorId && cs.Active == 1);
 
-                            // Determine current meter value: prefer live connector status, fall back to transaction start
-                            double currentMeter = connectorStatus?.LastMeter ?? transaction.MeterStart;
-                            double meterDelta = Math.Abs(currentMeter - transaction.MeterStart);
+                            double meterBaseline;
+                            double currentMeter;
+                            string meterBaselineStr;
 
-                            // If meter has not moved (within a negligible 0.001 kWh rounding tolerance), treat as zero energy
-                            if (meterDelta >= 0.001)
-                                continue;
-
-                            _logger.LogWarning($"Session {session.RecId} (OCPP transaction {session.TransactionId}) has been running for {(DateTime.UtcNow - session.StartTime).TotalMinutes:F1} min with zero energy delivered. Auto-closing.");
-
-                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
-
-                            if (!ocppResult.Success)
+                            if (session.TransactionId.HasValue)
                             {
-                                _logger.LogWarning($"Failed to stop OCPP transaction for zero-energy session {session.RecId}: {ocppResult.Message}");
-                                continue;
+                                var transaction = await _dbContext.Transactions
+                                    .FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value);
+
+                                // Only act on sessions whose OCPP transaction is still running
+                                if (transaction == null || transaction.StopTime.HasValue)
+                                    continue;
+
+                                meterBaseline = transaction.MeterStart;
+                                currentMeter = connectorStatus?.LastMeter ?? transaction.MeterStart;
+                                meterBaselineStr = transaction.MeterStart.ToString("F3");
+                                double meterDelta = Math.Abs(currentMeter - meterBaseline);
+
+                                // If meter has not moved (within a negligible 0.001 kWh rounding tolerance), treat as zero energy
+                                if (meterDelta >= 0.001)
+                                    continue;
+
+                                var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+
+                                if (!ocppResult.Success && session.TransactionId.HasValue)
+                                {
+                                    // For sessions with a transaction we require a clean OCPP stop; without one just close the record
+                                    _logger.LogWarning($"Failed to stop OCPP transaction for zero-energy session {session.RecId}: {ocppResult.Message}");
+                                    continue;
+                                }
+
                             }
+                            else
+                            {
+                                // No transaction — use the session's recorded start meter vs live connector meter
+                                if (!double.TryParse(session.StartMeterReading, out meterBaseline))
+                                    meterBaseline = 0;
+
+                                // Without a live connector reading we cannot confirm zero energy — skip
+                                if (connectorStatus?.LastMeter == null)
+                                    continue;
+
+                                currentMeter = connectorStatus.LastMeter.Value;
+                                meterBaselineStr = meterBaseline.ToString("F3");
+                            }
+
+                            _logger.LogWarning($"Session {session.RecId} (OCPP Txn: {session.TransactionId?.ToString() ?? "none"}) has been running for {(DateTime.UtcNow - session.StartTime).TotalMinutes:F1} min with zero energy delivered. Auto-closing.");
 
                             session.EndTime = DateTime.UtcNow;
                             session.UpdatedOn = DateTime.UtcNow;
-                            session.EndMeterReading = transaction.MeterStart.ToString("F2");
+                            session.EndMeterReading = meterBaseline.ToString("F2");
                             session.EnergyTransmitted = "0.00";
                             session.ChargingTotalFee = "0.00";
 
@@ -2188,7 +2210,7 @@ namespace OCPP.Core.Management.Controllers
                                 ChargingSessionId = session.RecId,
                                 AdditionalInfo1 = $"Session auto-closed - zero energy delivered after {(DateTime.UtcNow - session.StartTime).TotalMinutes:F1} min at {chargingStation.ChargingPointId}",
                                 AdditionalInfo2 = $"Energy: 0.000 kWh | No charge applied",
-                                AdditionalInfo3 = $"Meter: {transaction.MeterStart:F3} → {transaction.MeterStart:F3} kWh | OCPP Txn: {session.TransactionId}",
+                                AdditionalInfo3 = $"Meter: {meterBaselineStr} → {meterBaselineStr} kWh | OCPP Txn: {session.TransactionId?.ToString() ?? "none"}",
                                 Active = 1,
                                 CreatedOn = DateTime.UtcNow,
                                 UpdatedOn = DateTime.UtcNow
@@ -2197,7 +2219,7 @@ namespace OCPP.Core.Management.Controllers
                             _dbContext.WalletTransactionLogs.Add(zeroWalletTx);
                             await _dbContext.SaveChangesAsync();
                             zeroEnergySessionsClosed.Add(session.RecId);
-                            _logger.LogInformation($"Auto-closed zero-energy session {session.RecId} (OCPP transaction {session.TransactionId})");
+                            _logger.LogInformation($"Auto-closed zero-energy session {session.RecId} (OCPP Txn: {session.TransactionId?.ToString() ?? "none"})");
                         }
                         catch (Exception ex)
                         {
