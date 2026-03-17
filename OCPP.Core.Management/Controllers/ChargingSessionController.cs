@@ -325,7 +325,7 @@ namespace OCPP.Core.Management.Controllers
                 // writes a NEW transaction row (TransactionId > baseline). This prevents two concurrent
                 // start-session requests from binding to the same transaction row.
                 Database.Transaction ocppTransaction = null;
-                const int maxPollAttempts = 10;
+                const int maxPollAttempts = 16;
                 const int pollIntervalMs = 1500;
 
                 for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
@@ -352,6 +352,12 @@ namespace OCPP.Core.Management.Controllers
                 if (ocppTransaction == null)
                 {
                     _logger.LogWarning($"No new OCPP transaction appeared after {maxPollAttempts} attempts for {chargePoint.ChargePointId}/{request.ConnectorId}. Continuing without a TransactionId.");
+                    var noTransactionMessage = $"No transaction record found for this session after {maxPollAttempts} attempts. Please retry in a minute or contact support. Apologies for the inconvenience";
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = noTransactionMessage
+                    });
                 }
 
                 int? transactionId = ocppTransaction?.TransactionId;
