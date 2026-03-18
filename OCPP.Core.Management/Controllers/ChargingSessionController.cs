@@ -1958,6 +1958,28 @@ namespace OCPP.Core.Management.Controllers
                                             CreatedOn = DateTime.UtcNow,
                                             UpdatedOn = DateTime.UtcNow
                                         };
+                                        
+                                        var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId), maxAgeMinutes: 5);
+                                        if (socResult.Success && socResult.SoC.HasValue)
+                                        {
+                                            session.SoCEnd = socResult.SoC.Value;
+                                            session.SoCLastUpdate = socResult.Timestamp;
+
+                                            // Calculate SoC gain if we have both start and end
+                                            if (session.SoCStart.HasValue)
+                                            {
+                                                var socGain = session.SoCEnd.Value - session.SoCStart.Value;
+                                                _logger.LogInformation("EndChargingSession => SoC Gain: {0}% (Start: {1}%, End: {2}%)",
+                                                    socGain, session.SoCStart.Value, session.SoCEnd.Value);
+                                            }
+
+                                            // Clear cache after capturing
+                                            await ClearCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId));
+                                        }
+                                        else
+                                        {
+                                            _logger.LogInformation("EndChargingSession => No recent SoC data available for final capture");
+                                        }
 
                                         _dbContext.WalletTransactionLogs.Add(walletTransaction);
                                         _logger.LogInformation($"Auto-stopped session {session.RecId} - Debited ₹{totalFee:F2}, New balance: ₹{newBalance:F2}");
@@ -2023,6 +2045,27 @@ namespace OCPP.Core.Management.Controllers
                             if (ocppResult.Success)
                             {
                                 orphanTransactionsStopped.Add(session.RecId);
+                                var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId), maxAgeMinutes: 5);
+                                if (socResult.Success && socResult.SoC.HasValue)
+                                {
+                                    session.SoCEnd = socResult.SoC.Value;
+                                    session.SoCLastUpdate = socResult.Timestamp;
+
+                                    // Calculate SoC gain if we have both start and end
+                                    if (session.SoCStart.HasValue)
+                                    {
+                                        var socGain = session.SoCEnd.Value - session.SoCStart.Value;
+                                        _logger.LogInformation("EndChargingSession => SoC Gain: {0}% (Start: {1}%, End: {2}%)",
+                                            socGain, session.SoCStart.Value, session.SoCEnd.Value);
+                                    }
+
+                                    // Clear cache after capturing
+                                    await ClearCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId));
+                                }
+                                else
+                                {
+                                    _logger.LogInformation("EndChargingSession => No recent SoC data available for final capture");
+                                }
                                 _logger.LogInformation($"Stopped orphan OCPP transaction {session.TransactionId} for already-stopped session {session.RecId}");
                             }
                             else
@@ -2892,7 +2935,7 @@ namespace OCPP.Core.Management.Controllers
                         session.SoCStart = socResult.SoC;
                         session.SoCLastUpdate = socResult.Timestamp;
                     }
-                    else if (session.SoCStart.HasValue && !session.SoCEnd.HasValue)
+                    else
                     {
                         session.SoCLastUpdate = socResult.Timestamp;
                         session.SoCEnd = socResult.SoC;
