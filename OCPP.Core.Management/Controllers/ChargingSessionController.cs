@@ -1512,6 +1512,16 @@ namespace OCPP.Core.Management.Controllers
                         }
                     }
 
+                    var transactions = _dbContext.Transactions.Where(t => t.ChargePointId == chargingStation.ChargingPointId && t.ConnectorId.ToString() == chargingGun.ConnectorId && !t.StopTime.HasValue)
+                            .ToList();
+                    foreach (var t in transactions)
+                    {
+                        t.StopTime = DateTime.UtcNow;
+                        t.StopReason = "Connector unlocked";
+                        t.StartTagId = t.StartTagId ?? "unknown";
+                    };
+
+
                     await _dbContext.SaveChangesAsync();
                 }
 
@@ -1584,7 +1594,7 @@ namespace OCPP.Core.Management.Controllers
             {
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
-                if(!(User.IsInRole("Administrator")))
+                if (!(User.IsInRole("Administrator")))
                 {
                     query = query.Where(s => s.UserId == userId);
                 }
@@ -1958,7 +1968,7 @@ namespace OCPP.Core.Management.Controllers
                                             CreatedOn = DateTime.UtcNow,
                                             UpdatedOn = DateTime.UtcNow
                                         };
-                                        
+
                                         var socResult = await GetCachedSoC(chargingStation.ChargingPointId, int.Parse(chargingGun.ConnectorId), maxAgeMinutes: 5);
                                         if (socResult.Success && socResult.SoC.HasValue)
                                         {
@@ -3028,7 +3038,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get charging gun details
                 var chargingGun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.RecId == request.ChargingGunId 
+                    .FirstOrDefaultAsync(g => g.RecId == request.ChargingGunId
                         && g.ChargingStationId == request.ChargingStationId
                         && g.ConnectorId == request.ConnectorId
                         && g.Active == 1);
@@ -3084,13 +3094,13 @@ namespace OCPP.Core.Management.Controllers
                 // Determine energy to be charged
                 double energyKwh = 0;
                 double timeHours = 0;
-                
+
                 // Priority order for energy calculation:
                 // 1. Specific energy request (DesiredEnergy)
                 // 2. Budget/cost-based request (DesiredCost)
                 // 3. Time-based request (DesiredDuration)
                 // 4. Default to 1 hour
-                
+
                 if (request.DesiredEnergy.HasValue && request.DesiredEnergy.Value > 0)
                 {
                     // User specified exact energy amount
@@ -3180,8 +3190,8 @@ namespace OCPP.Core.Management.Controllers
                         CostPerKm = Math.Round(costPerKm, 2),
                         TariffApplied = tariff,
                         Currency = "₹",
-                        CGST = Math.Round(taxAmount/2, 2),
-                        SGST = Math.Round(taxAmount/2, 2)
+                        CGST = Math.Round(taxAmount / 2, 2),
+                        SGST = Math.Round(taxAmount / 2, 2)
                     }
                 };
 
