@@ -2879,23 +2879,34 @@ namespace OCPP.Core.Management.Controllers
             result.LimitStatus.ElapsedMinutes = elapsedMinutes;
 
             double? batteryIncrease = null;
-            if (session.SoCStart.HasValue)
+
+            // Try to get current SoC
+            if (chargingStation != null && connectorId > 0)
             {
-                // Try to get current SoC
-                if (chargingStation != null && connectorId > 0)
+                var socResult = await GetCachedSoC(chargingStation.ChargingPointId, connectorId, maxAgeMinutes: 5);
+
+                if (socResult.Success && socResult.SoC.HasValue)
                 {
-                    var socResult = await GetCachedSoC(chargingStation.ChargingPointId, connectorId, maxAgeMinutes: 5);
-                    if (socResult.Success && socResult.SoC.HasValue)
+                    if (!session.SoCStart.HasValue)
                     {
-                        batteryIncrease = socResult.SoC.Value - session.SoCStart.Value;
-                        result.LimitStatus.BatteryIncrease = Math.Round(batteryIncrease.Value, 1);
+                        session.SoCStart = socResult.SoC;
+                        session.SoCLastUpdate = socResult.Timestamp;
                     }
-                }
-                else if (session.SoCEnd.HasValue)
-                {
-                    batteryIncrease = session.SoCEnd.Value - session.SoCStart.Value;
+                    else if (session.SoCStart.HasValue && !session.SoCEnd.HasValue)
+                    {
+                        session.SoCLastUpdate = socResult.Timestamp;
+                        session.SoCEnd = socResult.SoC;
+                    }
+                    _dbContext.ChargingSessions.Update(session);
+                    await _dbContext.SaveChangesAsync();
+                    batteryIncrease = socResult.SoC.Value - session.SoCStart.Value;
                     result.LimitStatus.BatteryIncrease = Math.Round(batteryIncrease.Value, 1);
                 }
+            }
+            else if (session.SoCEnd.HasValue)
+            {
+                batteryIncrease = session.SoCEnd.Value - session.SoCStart.Value;
+                result.LimitStatus.BatteryIncrease = Math.Round(batteryIncrease.Value, 1);
             }
 
             // Check Energy Limit
