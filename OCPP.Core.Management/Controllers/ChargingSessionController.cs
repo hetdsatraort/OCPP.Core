@@ -872,13 +872,41 @@ namespace OCPP.Core.Management.Controllers
                                              s.Active == 1 &&
                                              s.EndTime == DateTime.MinValue);
 
-                // Get charging station info
-                Database.EVCDTO.ChargingStation chargingStation = null;
-                if (activeSession != null)
+                // Always resolve the charging station so we can look up the OCPP connector status
+                Database.EVCDTO.ChargingStation chargingStation = await _dbContext.ChargingStations
+                    .FirstOrDefaultAsync(cs => cs.RecId == chargingGun.ChargingStationId);
+
+                // Fetch and apply the latest OCPP connector status
+                Database.ConnectorStatus connectorStatus = null;
+                if (chargingStation != null && int.TryParse(chargingGun?.ConnectorId, out int connectorIdInt))
                 {
-                    chargingStation = await _dbContext.ChargingStations
-                        .FirstOrDefaultAsync(cs => cs.RecId == activeSession.ChargingStationID);
+                    connectorStatus = await _dbContext.ConnectorStatuses
+                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
+                            && cs.ConnectorId == connectorIdInt && cs.Active == 1);
+
+                    if (connectorStatus != null && !string.IsNullOrEmpty(connectorStatus.LastStatus))
+                    {
+                        // Sync the gun's stored status with the latest OCPP-reported status
+                        if (chargingGun.ChargerStatus != connectorStatus.LastStatus)
+                        {
+                            chargingGun.ChargerStatus = connectorStatus.LastStatus;
+                            chargingGun.UpdatedOn = DateTime.UtcNow;
+                            await _dbContext.SaveChangesAsync();
+                            _logger.LogInformation(
+                                "GetChargingGunStatus: Updated ChargerStatus for gun {GunId} to '{Status}' from OCPP connector status",
+                                chargingGunId, connectorStatus.LastStatus);
+                        }
+                    }
                 }
+
+                // Derive the effective status: prefer live OCPP status, fall back to session-based
+                string effectiveStatus = connectorStatus?.LastStatus;
+                if (string.IsNullOrEmpty(effectiveStatus))
+                    effectiveStatus = activeSession != null ? "In Use" : "Available";
+
+                bool isAvailable = connectorStatus != null
+                    ? connectorStatus.LastStatus == "Available"
+                    : activeSession == null;
 
                 var status = new ChargingGunStatusDto
                 {
@@ -886,10 +914,14 @@ namespace OCPP.Core.Management.Controllers
                     ChargingStationId = chargingStation?.RecId,
                     ChargingStationName = chargingStation?.ChargingPointId,
                     ConnectorId = chargingGun?.ConnectorId,
-                    Status = activeSession != null ? "In Use" : "Available",
+                    Status = effectiveStatus,
                     CurrentSessionId = activeSession?.RecId,
-                    LastStatusUpdate = activeSession?.UpdatedOn ?? DateTime.UtcNow,
-                    IsAvailable = activeSession == null
+                    LastStatusUpdate = connectorStatus?.LastStatusTime ?? activeSession?.UpdatedOn ?? DateTime.UtcNow,
+                    IsAvailable = isAvailable,
+                    OcppStatus = connectorStatus?.LastStatus,
+                    LastOcppStatusTime = connectorStatus?.LastStatusTime,
+                    LastMeter = connectorStatus?.LastMeter,
+                    LastMeterTime = connectorStatus?.LastMeterTime
                 };
 
                 return Ok(new ChargingSessionResponseDto
