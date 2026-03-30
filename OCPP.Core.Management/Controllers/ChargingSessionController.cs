@@ -2285,6 +2285,42 @@ namespace OCPP.Core.Management.Controllers
                             _logger.LogError(ex, $"Error auto-closing zero-energy session {session.RecId}");
                         }
                     }
+
+                    // Check 4: Transactions that are active that do not have a session linked to them.
+                    var allSessionLessTransactions = await _dbContext.Transactions.Where(t => !_dbContext.ChargingSessions.Any(s => s.TransactionId == t.TransactionId)).ToListAsync();
+                    var candidatesForTransactionCheck = await _dbContext.Transactions
+                        .Where(t => 
+                        (!t.StopTime.HasValue || t.StopTime == DateTime.MinValue || t.StopTime == null) &&
+                        !_dbContext.ChargingSessions.Any(s => s.TransactionId == t.TransactionId))
+                        .ToListAsync();
+
+                    foreach (var transaction in candidatesForTransactionCheck)
+                    {
+                        try
+                        {
+                            var chargingStation = await _dbContext.ChargingStations
+                                .FirstOrDefaultAsync(cs => cs.ChargingPointId == transaction.ChargePointId);
+                            if (chargingStation == null)
+                                continue;
+
+                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, transaction.ConnectorId);
+                            if (ocppResult.Success)
+                            {
+                                orphanTransactionsStopped.Add($"Orphan Txn {transaction.TransactionId} at {chargingStation.ChargingPointId}");
+                                _logger.LogInformation($"Stopped orphan OCPP transaction {transaction.TransactionId} with no linked session at {chargingStation.ChargingPointId}");
+                            }
+                            else
+                            {
+                                transaction.StopTime = DateTime.UtcNow;
+                                await _dbContext.SaveChangesAsync();
+                                _logger.LogWarning($"Failed to stop orphan OCPP transaction {transaction.TransactionId} with no linked session at {chargingStation.ChargingPointId}: {ocppResult.Message}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Error stopping orphan OCPP transaction with no linked session for transaction {transaction.TransactionId}");
+                        }
+                    }
                 }
                 return Ok(new ChargingSessionResponseDto
                 {
