@@ -2388,6 +2388,73 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// Reset a charge point (soft reset via OCPP)
+        /// </summary>
+        [HttpPost("reset-charge-point")]
+        [Authorize]
+        public async Task<IActionResult> ResetChargePoint([FromBody] ResetChargePointRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                var chargingStation = await _dbContext.ChargingStations
+                    .FirstOrDefaultAsync(cs => cs.RecId == request.ChargingStationId && cs.Active == 1);
+
+                if (chargingStation == null)
+                {
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "Charging station not found or inactive"
+                    });
+                }
+
+                var chargePoint = await _dbContext.ChargePoints
+                    .FirstOrDefaultAsync(cp => cp.ChargePointId == chargingStation.ChargingPointId);
+
+                if (chargePoint == null)
+                {
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = false,
+                        Message = "Charge point not found"
+                    });
+                }
+
+                var ocppResult = await CallOCPPReset(chargePoint.ChargePointId);
+
+                return Ok(new ChargingSessionResponseDto
+                {
+                    Success = ocppResult.Success,
+                    Message = ocppResult.Message,
+                    Data = new
+                    {
+                        ChargingStationId = request.ChargingStationId,
+                        ChargePointId = chargePoint.ChargePointId
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resetting charge point");
+                return Ok(new ChargingSessionResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while resetting the charge point"
+                });
+            }
+        }
+
+
 
         #region Helper Methods
 
@@ -2767,6 +2834,80 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error calling OCPP UnlockConnector API");
+                return (false, $"Error communicating with OCPP server: {ex.Message}");
+            }
+        }
+
+        private async Task<(bool Success, string Message)> CallOCPPReset(string chargePointId)
+        {
+            string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+            string apiKeyConfig = _config.GetValue<string>("ApiKey");
+
+            if (string.IsNullOrEmpty(serverApiUrl))
+            {
+                _logger.LogWarning("CallOCPPReset: ServerApiUrl not configured");
+                return (false, "OCPP server URL not configured");
+            }
+
+            try
+            {
+                using (var httpClient = new HttpClient())
+                {
+                    if (!serverApiUrl.EndsWith('/'))
+                    {
+                        serverApiUrl += "/";
+                    }
+                    Uri uri = new Uri(serverApiUrl);
+                    uri = new Uri(uri, $"Reset/{Uri.EscapeDataString(chargePointId)}");
+                    httpClient.Timeout = new TimeSpan(0, 0, 60);
+
+                    if (!string.IsNullOrWhiteSpace(apiKeyConfig))
+                    {
+                        httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKeyConfig);
+                    }
+
+                    HttpResponseMessage response = await httpClient.GetAsync(uri);
+
+                    if (response.StatusCode == HttpStatusCode.OK)
+                    {
+                        string jsonResult = await response.Content.ReadAsStringAsync();
+                        if (!string.IsNullOrEmpty(jsonResult))
+                        {
+                            dynamic jsonObject = JsonConvert.DeserializeObject(jsonResult);
+                            string status = jsonObject.status;
+
+                            _logger.LogInformation($"OCPP Reset result: {status}");
+
+                            switch (status)
+                            {
+                                case "Accepted":
+                                    return (true, "Reset accepted by charge point");
+                                case "Rejected":
+                                    return (false, "Reset rejected by charge point");
+                                case "Scheduled":
+                                    return (true, "Reset scheduled by charge point");
+                                case "Timeout":
+                                    return (false, "Charge point did not respond in time");
+                                default:
+                                    return (false, $"Unknown status: {status}");
+                            }
+                        }
+                        return (false, "Empty response from OCPP server");
+                    }
+                    else if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        return (false, "Charge point is offline");
+                    }
+                    else
+                    {
+                        _logger.LogError($"OCPP API returned status: {response.StatusCode}");
+                        return (false, "OCPP server returned error");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calling OCPP Reset API");
                 return (false, $"Error communicating with OCPP server: {ex.Message}");
             }
         }

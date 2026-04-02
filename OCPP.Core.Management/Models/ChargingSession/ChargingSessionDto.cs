@@ -34,6 +34,11 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public int ConnectorId { get; set; }
     }
 
+    public class ResetChargePointRequestDto
+    {
+        public string ChargingStationId { get; set; }
+    }
+
     public class ChargingSessionDto
     {
         public string RecId { get; set; }
