@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
-using OCPI.Core.Roaming.Models.OCPI;
 
 namespace OCPI.Core.Roaming.Controllers
 {
