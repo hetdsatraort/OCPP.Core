@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OCPI.Core.Roaming.Models.OCPI;
-using OCPI.Core.Roaming.Services.Interfaces;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;

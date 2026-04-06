@@ -1,21 +1,20 @@
-using OCPI.Core.Roaming.Services;
-using OCPI.Core.Roaming.Services.Interfaces;
+using OCPI;
+using OCPP.Core.Database;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-builder.Services.AddControllers()
-    .AddJsonOptions(options =>
-    {
-        options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
-        options.JsonSerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
-    });
+// Add all required OCPI services to the application
+// This automatically registers all OCPI.Net services including:
+// - IOcpiVersionService (auto-scans controllers and generates version endpoints)
+// - Exception handling middleware
+// - Validation services
+// - Authorization services
+builder.AddOcpi();
 
-// Register OCPI Services
-builder.Services.AddScoped<IOcpiLocationService, OcpiLocationService>();
-builder.Services.AddScoped<IOcpiSessionService, OcpiSessionService>();
-builder.Services.AddScoped<IOcpiCredentialsService, OcpiCredentialsService>();
-builder.Services.AddScoped<IOcpiVersionService, OcpiVersionService>();
+// Add Database Context (for future integration with OCPP.Core.Database)
+builder.Services.AddDbContext<OCPPCoreContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
 // Add CORS
 builder.Services.AddCors(options =>
@@ -28,7 +27,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// Add Swagger/OpenAPI
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -44,18 +43,10 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Add XML comments if available
-    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-    if (File.Exists(xmlPath))
-    {
-        c.IncludeXmlComments(xmlPath);
-    }
-
     // Add OCPI Authorization header
     c.AddSecurityDefinition("OCPI-Token", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        Description = "OCPI Authorization Token",
+        Description = "OCPI Authorization Token (format: 'Token <your-token>')",
         Name = "Authorization",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
         Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,

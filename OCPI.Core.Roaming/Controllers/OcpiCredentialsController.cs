@@ -1,241 +1,114 @@
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using OCPI.Core.Roaming.Models.OCPI;
-using OCPI.Core.Roaming.Services.Interfaces;
-using System;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using OCPI.Contracts;
 
 namespace OCPI.Core.Roaming.Controllers
 {
     /// <summary>
     /// OCPI Credentials Controller - Handles credential registration and updates
     /// </summary>
-    [Route("ocpi/2.2.1/credentials")]
-    [ApiController]
-    public class OcpiCredentialsController : ControllerBase
+    [OcpiEndpoint(OcpiModule.Credentials, "Receiver", "2.2.1")]
+    [Route("2.2.1/credentials")]
+    [OcpiAuthorize]
+    public class OcpiCredentialsController : OcpiController
     {
-        private readonly IOcpiCredentialsService _credentialsService;
-        private readonly ILogger<OcpiCredentialsController> _logger;
+        private readonly IConfiguration _configuration;
 
-        public OcpiCredentialsController(
-            IOcpiCredentialsService credentialsService,
-            ILogger<OcpiCredentialsController> logger)
+        public OcpiCredentialsController(IConfiguration configuration)
         {
-            _credentialsService = credentialsService;
-            _logger = logger;
+            _configuration = configuration;
         }
 
         /// <summary>
         /// Get current credentials
         /// </summary>
         [HttpGet]
-        [ProducesResponseType(typeof(OcpiResponseDto<OcpiCredentialsResponseDto>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> GetCredentials()
+        public IActionResult Get()
         {
-            try
-            {
-                _logger.LogInformation("OCPI GetCredentials called");
-
-                var credentials = await _credentialsService.GetCredentialsAsync();
-
-                var response = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 1000,
-                    StatusMessage = "Success",
-                    Data = credentials,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in GetCredentials");
-
-                var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 2000,
-                    StatusMessage = $"Server error: {ex.Message}",
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return StatusCode(StatusCodes.Status500InternalServerError, errorResponse);
-            }
+            // Return your platform's credentials
+            var credentials = GetPlatformCredentials();
+            return OcpiOk(credentials);
         }
 
         /// <summary>
-        /// Register new credentials
+        /// Register new partner credentials
         /// </summary>
         [HttpPost]
-        [ProducesResponseType(typeof(OcpiResponseDto<OcpiCredentialsResponseDto>), StatusCodes.Status201Created)]
-        [ProducesResponseType(typeof(OcpiResponseDto<OcpiCredentialsResponseDto>), StatusCodes.Status400BadRequest)]
-        public async Task<IActionResult> RegisterCredentials([FromBody] OcpiCredentialsRequestDto request)
+        public IActionResult Post([FromBody] OcpiCredentials partnerCredentials)
         {
-            try
-            {
-                _logger.LogInformation("OCPI RegisterCredentials called");
+            // Validate incoming credentials
+            OcpiValidate(partnerCredentials);
 
-                if (!ModelState.IsValid)
-                {
-                    var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                    {
-                        StatusCode = 2001,
-                        StatusMessage = "Invalid or missing parameters",
-                        Data = null,
-                        Timestamp = DateTime.UtcNow
-                    };
+            // TODO: Check if platform is already registered
+            // if (IsAlreadyRegistered(partnerCredentials.Token))
+            //     throw OcpiException.MethodNotAllowed("Platform is already registered");
 
-                    return BadRequest(errorResponse);
-                }
+            // TODO: Store partner credentials in database
+            // SavePartnerCredentials(partnerCredentials);
 
-                var credentials = await _credentialsService.RegisterCredentialsAsync(request);
-
-                var response = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 1000,
-                    StatusMessage = "Success",
-                    Data = credentials,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return StatusCode(StatusCodes.Status201Created, response);
-            }
-            catch (ArgumentException ex)
-            {
-                _logger.LogWarning(ex, "Invalid credentials registration request");
-
-                var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 2001,
-                    StatusMessage = ex.Message,
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return BadRequest(errorResponse);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in RegisterCredentials");
-
-                var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 2000,
-                    StatusMessage = $"Server error: {ex.Message}",
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return StatusCode(StatusCodes.Status500InternalServerError, errorResponse);
-            }
+            // Return your platform's credentials
+            var credentials = GetPlatformCredentials();
+            return OcpiOk(credentials);
         }
 
         /// <summary>
-        /// Update existing credentials
+        /// Update existing partner credentials
         /// </summary>
         [HttpPut]
-        [ProducesResponseType(typeof(OcpiResponseDto<OcpiCredentialsResponseDto>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> UpdateCredentials([FromBody] OcpiCredentialsRequestDto request)
+        public IActionResult Put([FromBody] OcpiCredentials partnerCredentials)
         {
-            try
-            {
-                _logger.LogInformation("OCPI UpdateCredentials called");
+            // Validate incoming credentials
+            OcpiValidate(partnerCredentials);
 
-                if (!ModelState.IsValid)
-                {
-                    var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                    {
-                        StatusCode = 2001,
-                        StatusMessage = "Invalid or missing parameters",
-                        Data = null,
-                        Timestamp = DateTime.UtcNow
-                    };
+            // TODO: Check if platform is registered
+            // if (!IsRegistered(partnerCredentials.Token))
+            //     throw OcpiException.MethodNotAllowed("Platform must be registered first");
 
-                    return BadRequest(errorResponse);
-                }
+            // TODO: Update partner credentials in database
+            // UpdatePartnerCredentials(partnerCredentials);
 
-                var credentials = await _credentialsService.UpdateCredentialsAsync(request);
-
-                var response = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 1000,
-                    StatusMessage = "Success",
-                    Data = credentials,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return Ok(response);
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogWarning(ex, "Invalid credentials update request");
-
-                var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 3001,
-                    StatusMessage = ex.Message,
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return NotFound(errorResponse);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in UpdateCredentials");
-
-                var errorResponse = new OcpiResponseDto<OcpiCredentialsResponseDto>
-                {
-                    StatusCode = 2000,
-                    StatusMessage = $"Server error: {ex.Message}",
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return StatusCode(StatusCodes.Status500InternalServerError, errorResponse);
-            }
+            // Return your platform's credentials (can be updated/rotated)
+            var credentials = GetPlatformCredentials();
+            return OcpiOk(credentials);
         }
 
         /// <summary>
-        /// Delete credentials (unregister)
+        /// Unregister partner
         /// </summary>
         [HttpDelete]
-        [ProducesResponseType(typeof(OcpiResponseDto<object>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> DeleteCredentials()
+        public IActionResult Delete()
         {
-            try
+            // TODO: Check if platform is registered
+            // if (!IsRegistered())
+            //     throw OcpiException.MethodNotAllowed("Platform must be registered first");
+
+            // TODO: Remove partner credentials from database
+            // DeletePartnerCredentials();
+
+            return OcpiOk("Successfully unregistered");
+        }
+
+        private OcpiCredentials GetPlatformCredentials()
+        {
+            return new OcpiCredentials
             {
-                _logger.LogInformation("OCPI DeleteCredentials called");
-
-                var success = await _credentialsService.DeleteCredentialsAsync();
-
-                var response = new OcpiResponseDto<object>
+                Token = _configuration["OCPI:Token"] ?? Guid.NewGuid().ToString(),
+                Url = _configuration["OCPI:BaseUrl"] ?? "https://localhost:5001/versions",
+                Roles = new List<OcpiCredentialsRole>
                 {
-                    StatusCode = 1000,
-                    StatusMessage = success ? "Credentials deleted successfully" : "No credentials to delete",
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in DeleteCredentials");
-
-                var errorResponse = new OcpiResponseDto<object>
-                {
-                    StatusCode = 2000,
-                    StatusMessage = $"Server error: {ex.Message}",
-                    Data = null,
-                    Timestamp = DateTime.UtcNow
-                };
-
-                return StatusCode(StatusCodes.Status500InternalServerError, errorResponse);
-            }
+                    new OcpiCredentialsRole
+                    {
+                        CountryCode = CountryCode.India,
+                        PartyId = _configuration["OCPI:PartyId"] ?? "CPO",
+                        Role = PartyRole.Cpo,
+                        BusinessDetails = new OcpiBusinessDetails
+                        {
+                            Name = _configuration["OCPI:BusinessName"] ?? "EV Charging Platform",
+                            Website = _configuration["OCPI:Website"] ?? "https://evcharging.com"
+                        }
+                    }
+                }
+            };
         }
     }
 }
