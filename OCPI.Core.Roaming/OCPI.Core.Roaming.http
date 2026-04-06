@@ -1,0 +1,269 @@
+### OCPI Roaming API Test Endpoints
+### Base URL: https://localhost:5001
+
+### ===========================
+### VERSION ENDPOINTS
+### ===========================
+
+### Get all supported OCPI versions
+GET https://localhost:5001/ocpi/versions
+Accept: application/json
+
+### Get details for OCPI version 2.2.1
+GET https://localhost:5001/ocpi/versions/2.2.1
+Accept: application/json
+
+### ===========================
+### CREDENTIALS ENDPOINTS
+### ===========================
+
+### Get current credentials
+GET https://localhost:5001/ocpi/2.2.1/credentials
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Register new credentials
+POST https://localhost:5001/ocpi/2.2.1/credentials
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "token": "partner-token-12345",
+  "url": "https://partner.example.com/ocpi/versions",
+  "businessDetails": {
+    "name": "Partner Charging Network",
+    "website": "https://partner.example.com"
+  },
+  "countryCode": "US",
+  "partyId": "EMSP"
+}
+
+### Update existing credentials
+PUT https://localhost:5001/ocpi/2.2.1/credentials
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "token": "updated-partner-token",
+  "url": "https://partner.example.com/ocpi/versions",
+  "businessDetails": {
+    "name": "Partner Charging Network Updated",
+    "website": "https://partner.example.com"
+  }
+}
+
+### Delete credentials
+DELETE https://localhost:5001/ocpi/2.2.1/credentials
+Authorization: Token YOUR_OCPI_TOKEN
+
+### ===========================
+### LOCATION ENDPOINTS
+### ===========================
+
+### Get all locations
+GET https://localhost:5001/ocpi/2.2.1/locations
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Get all locations with filters
+GET https://localhost:5001/ocpi/2.2.1/locations?countryCode=US&limit=50&offset=0
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Get specific location
+GET https://localhost:5001/ocpi/2.2.1/locations/LOC001
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Create or update location
+PUT https://localhost:5001/ocpi/2.2.1/locations/LOC001
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "id": "LOC001",
+  "type": "ON_STREET",
+  "name": "Main Street Charging Hub",
+  "address": "123 Main Street",
+  "city": "San Francisco",
+  "postalCode": "94102",
+  "state": "CA",
+  "country": "USA",
+  "coordinates": {
+    "latitude": 37.7749,
+    "longitude": -122.4194
+  },
+  "timeZone": "America/Los_Angeles",
+  "openingTimes": {
+    "twentyFourSeven": true
+  },
+  "evses": [
+    {
+      "uid": "EVSE001",
+      "evseId": "US*CPO*EVSE001",
+      "status": "AVAILABLE",
+      "capabilities": ["CHARGING_PROFILE_CAPABLE", "RFID_READER"],
+      "connectors": [
+        {
+          "id": "1",
+          "standard": "IEC_62196_T2",
+          "format": "SOCKET",
+          "powerType": "AC_3_PHASE",
+          "maxVoltage": 230,
+          "maxAmperage": 32,
+          "maxElectricPower": 22000,
+          "lastUpdated": "2026-04-06T10:00:00Z"
+        }
+      ],
+      "physicalReference": "Pole 1",
+      "lastUpdated": "2026-04-06T10:00:00Z"
+    }
+  ],
+  "publish": true,
+  "lastUpdated": "2026-04-06T10:00:00Z"
+}
+
+### Get specific EVSE
+GET https://localhost:5001/ocpi/2.2.1/locations/LOC001/EVSE001
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Get specific connector
+GET https://localhost:5001/ocpi/2.2.1/locations/LOC001/EVSE001/1
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### ===========================
+### SESSION ENDPOINTS
+### ===========================
+
+### Get all sessions
+GET https://localhost:5001/ocpi/2.2.1/sessions
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Get specific session
+GET https://localhost:5001/ocpi/2.2.1/sessions/SESSION-UUID-123
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Create or update session
+PUT https://localhost:5001/ocpi/2.2.1/sessions/SESSION-UUID-123
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "id": "SESSION-UUID-123",
+  "startDateTime": "2026-04-06T10:00:00Z",
+  "kWh": 15.5,
+  "cdrToken": {
+    "uid": "USER123",
+    "type": "APP_USER",
+    "contractId": "CONTRACT-456"
+  },
+  "authMethod": "AUTH_REQUEST",
+  "locationId": "LOC001",
+  "evseUid": "EVSE001",
+  "connectorId": "1",
+  "currency": "USD",
+  "status": "ACTIVE",
+  "lastUpdated": "2026-04-06T10:30:00Z"
+}
+
+### Start a new charging session
+POST https://localhost:5001/ocpi/2.2.1/sessions/start
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "locationId": "LOC001",
+  "evseUid": "EVSE001",
+  "connectorId": "1",
+  "tokenUid": "USER123",
+  "authorizationReference": "AUTH-REF-789"
+}
+
+### Stop an active charging session
+POST https://localhost:5001/ocpi/2.2.1/sessions/stop
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "sessionId": "SESSION-UUID-123"
+}
+
+### ===========================
+### TEST SCENARIOS
+### ===========================
+
+### Scenario 1: Complete Location Creation
+# Step 1: Create location with EVSE and connector
+PUT https://localhost:5001/ocpi/2.2.1/locations/TEST-LOC-001
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "id": "TEST-LOC-001",
+  "type": "PARKING_GARAGE",
+  "name": "Test Parking Garage",
+  "address": "456 Test Avenue",
+  "city": "Test City",
+  "postalCode": "12345",
+  "country": "US",
+  "coordinates": {
+    "latitude": 40.7128,
+    "longitude": -74.0060
+  },
+  "evses": [
+    {
+      "uid": "TEST-EVSE-001",
+      "status": "AVAILABLE",
+      "connectors": [
+        {
+          "id": "1",
+          "standard": "IEC_62196_T2",
+          "format": "CABLE",
+          "powerType": "AC_1_PHASE",
+          "maxVoltage": 230,
+          "maxAmperage": 16,
+          "maxElectricPower": 3680,
+          "lastUpdated": "2026-04-06T10:00:00Z"
+        }
+      ],
+      "lastUpdated": "2026-04-06T10:00:00Z"
+    }
+  ],
+  "lastUpdated": "2026-04-06T10:00:00Z"
+}
+
+# Step 2: Verify location was created
+GET https://localhost:5001/ocpi/2.2.1/locations/TEST-LOC-001
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+### Scenario 2: Complete Session Flow
+# Step 1: Start session
+POST https://localhost:5001/ocpi/2.2.1/sessions/start
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "locationId": "TEST-LOC-001",
+  "evseUid": "TEST-EVSE-001",
+  "connectorId": "1",
+  "tokenUid": "TEST-USER-001"
+}
+
+# Step 2: Check session status (use sessionId from step 1 response)
+GET https://localhost:5001/ocpi/2.2.1/sessions/SESSION-ID-FROM-STEP-1
+Accept: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+# Step 3: Stop session (use sessionId from step 1 response)
+POST https://localhost:5001/ocpi/2.2.1/sessions/stop
+Content-Type: application/json
+Authorization: Token YOUR_OCPI_TOKEN
+
+{
+  "sessionId": "SESSION-ID-FROM-STEP-1"
+}
