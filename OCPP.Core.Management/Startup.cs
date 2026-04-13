@@ -220,6 +220,8 @@ namespace OCPP.Core.Management
                 app.UseExceptionHandler("/Home/Error");
             }
 
+            app.UseMiddleware<CorrelationIdMiddleware>();
+
             app.UseStaticFiles();
 
             app.UseCors("AllowAngularApp");
