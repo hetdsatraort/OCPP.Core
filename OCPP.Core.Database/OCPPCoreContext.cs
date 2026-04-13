@@ -59,6 +59,16 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.CarManufacturerMaster> CarManufacturerMasters { get; set; }
         public virtual DbSet<EVCDTO.PaymentValidation> PaymentValidations { get; set; }
 
+        // OCPI Tables
+        public virtual DbSet<OCPIDTO.OcpiPartnerCredential> OcpiPartnerCredentials { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerLocation> OcpiPartnerLocations { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerEvse> OcpiPartnerEvses { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerConnector> OcpiPartnerConnectors { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerSession> OcpiPartnerSessions { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiCdr> OcpiCdrs { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiTariff> OcpiTariffs { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiToken> OcpiTokens { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<ChargePoint>(entity =>
@@ -741,6 +751,222 @@ namespace OCPP.Core.Database
                     .HasForeignKey(d => d.UserId)
                     .OnDelete(DeleteBehavior.Restrict)
                     .HasConstraintName("FK_PaymentValidation_Users");
+            });
+
+            // OCPI Model Configuration
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerCredential>(entity =>
+            {
+                entity.ToTable("OcpiPartnerCredential");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerCredential_CountryCode_PartyId");
+                
+                entity.HasIndex(e => e.Token)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerCredential_Token");
+
+                entity.Property(e => e.Token).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.Url).IsRequired().HasMaxLength(500);
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.BusinessName).HasMaxLength(200);
+                entity.Property(e => e.Role).HasMaxLength(50);
+                entity.Property(e => e.Version).HasMaxLength(10);
+                entity.Property(e => e.IsActive).HasDefaultValue(true);
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerLocation>(entity =>
+            {
+                entity.ToTable("OcpiPartnerLocation");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.LocationId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerLocation_CountryCode_PartyId_LocationId");
+
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.LocationId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.Name).HasMaxLength(255);
+                entity.Property(e => e.Address).HasMaxLength(500);
+                entity.Property(e => e.City).HasMaxLength(100);
+                entity.Property(e => e.PostalCode).HasMaxLength(20);
+                entity.Property(e => e.Country).HasMaxLength(3);
+                entity.Property(e => e.Latitude).HasMaxLength(20);
+                entity.Property(e => e.Longitude).HasMaxLength(20);
+                entity.Property(e => e.LocationType).HasMaxLength(50);
+
+                entity.HasOne(d => d.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerCredentialId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiPartnerLocation_PartnerCredential");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerEvse>(entity =>
+            {
+                entity.ToTable("OcpiPartnerEvse");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => e.EvseUid)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerEvse_EvseUid");
+
+                entity.Property(e => e.EvseUid).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.EvseId).HasMaxLength(48);
+                entity.Property(e => e.Status).HasMaxLength(50);
+                entity.Property(e => e.FloorLevel).HasMaxLength(10);
+                entity.Property(e => e.PhysicalReference).HasMaxLength(50);
+
+                entity.HasOne(d => d.PartnerLocation)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerLocationId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiPartnerEvse_PartnerLocation");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerConnector>(entity =>
+            {
+                entity.ToTable("OcpiPartnerConnector");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.PartnerEvseId, e.ConnectorId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerConnector_EvseId_ConnectorId");
+
+                entity.Property(e => e.ConnectorId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.Standard).HasMaxLength(50);
+                entity.Property(e => e.Format).HasMaxLength(20);
+                entity.Property(e => e.PowerType).HasMaxLength(50);
+
+                entity.HasOne(d => d.PartnerEvse)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerEvseId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiPartnerConnector_PartnerEvse");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerSession>(entity =>
+            {
+                entity.ToTable("OcpiPartnerSession");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.SessionId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerSession_CountryCode_PartyId_SessionId");
+
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.SessionId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.Status).HasMaxLength(50);
+                entity.Property(e => e.LocationId).HasMaxLength(36);
+                entity.Property(e => e.EvseUid).HasMaxLength(36);
+                entity.Property(e => e.ConnectorId).HasMaxLength(36);
+                entity.Property(e => e.AuthorizationReference).HasMaxLength(36);
+                entity.Property(e => e.TokenUid).HasMaxLength(36);
+                entity.Property(e => e.Currency).HasMaxLength(3);
+                entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
+
+                entity.HasOne(d => d.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerCredentialId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiPartnerSession_PartnerCredential");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiCdr>(entity =>
+            {
+                entity.ToTable("OcpiCdr");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.CdrId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiCdr_CountryCode_PartyId_CdrId");
+
+                entity.HasIndex(e => e.LocalSessionId)
+                    .HasDatabaseName("IX_OcpiCdr_LocalSessionId");
+
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.CdrId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.SessionId).HasMaxLength(36);
+                entity.Property(e => e.AuthorizationReference).HasMaxLength(36);
+                entity.Property(e => e.AuthMethod).HasMaxLength(50);
+                entity.Property(e => e.LocationId).HasMaxLength(36);
+                entity.Property(e => e.EvseUid).HasMaxLength(36);
+                entity.Property(e => e.ConnectorId).HasMaxLength(36);
+                entity.Property(e => e.MeterId).HasMaxLength(255);
+                entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.TokenUid).HasMaxLength(36);
+                entity.Property(e => e.LocalSessionId).HasMaxLength(255);
+                entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TotalTime).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TotalParkingTime).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TotalCostExclVat).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.TotalCostInclVat).HasColumnType("decimal(18,2)");
+
+                entity.HasOne(d => d.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerCredentialId)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .HasConstraintName("FK_OcpiCdr_PartnerCredential");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiTariff>(entity =>
+            {
+                entity.ToTable("OcpiTariff");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.TariffId })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiTariff_CountryCode_PartyId_TariffId");
+
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.TariffId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.Type).HasMaxLength(50);
+                entity.Property(e => e.EnergyPrice).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TimePrice).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.SessionFee).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.MinKwh).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.MaxKwh).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.IsActive).HasDefaultValue(true);
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiToken>(entity =>
+            {
+                entity.ToTable("OcpiToken");
+                entity.HasKey(e => e.Id);
+                
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.TokenUid })
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiToken_CountryCode_PartyId_TokenUid");
+
+                entity.HasIndex(e => e.TokenUid)
+                    .HasDatabaseName("IX_OcpiToken_TokenUid");
+
+                entity.Property(e => e.CountryCode).IsRequired().HasMaxLength(2);
+                entity.Property(e => e.PartyId).IsRequired().HasMaxLength(3);
+                entity.Property(e => e.TokenUid).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.Type).IsRequired().HasMaxLength(50);
+                entity.Property(e => e.VisualNumber).HasMaxLength(64);
+                entity.Property(e => e.Issuer).HasMaxLength(64);
+                entity.Property(e => e.GroupId).HasMaxLength(36);
+                entity.Property(e => e.Whitelist).HasMaxLength(50);
+                entity.Property(e => e.Language).HasMaxLength(2);
+                entity.Property(e => e.DefaultProfileType).HasMaxLength(50);
+                entity.Property(e => e.EnergyContract).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.Valid).HasDefaultValue(true);
+
+                entity.HasOne(d => d.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerCredentialId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiToken_PartnerCredential");
             });
 
             OnModelCreatingPartial(modelBuilder);

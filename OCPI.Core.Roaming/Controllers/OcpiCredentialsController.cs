@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -13,10 +14,17 @@ namespace OCPI.Core.Roaming.Controllers
     public class OcpiCredentialsController : OcpiController
     {
         private readonly IConfiguration _configuration;
+        private readonly IOcpiCredentialsService _credentialsService;
+        private readonly ILogger<OcpiCredentialsController> _logger;
 
-        public OcpiCredentialsController(IConfiguration configuration)
+        public OcpiCredentialsController(
+            IConfiguration configuration,
+            IOcpiCredentialsService credentialsService,
+            ILogger<OcpiCredentialsController> logger)
         {
             _configuration = configuration;
+            _credentialsService = credentialsService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -34,17 +42,36 @@ namespace OCPI.Core.Roaming.Controllers
         /// Register new partner credentials
         /// </summary>
         [HttpPost]
-        public IActionResult Post([FromBody] OcpiCredentials partnerCredentials)
+        public async Task<IActionResult> Post([FromBody] OcpiCredentials partnerCredentials)
         {
             // Validate incoming credentials
             OcpiValidate(partnerCredentials);
 
-            // TODO: Check if platform is already registered
-            // if (IsAlreadyRegistered(partnerCredentials.Token))
-            //     throw OcpiException.MethodNotAllowed("Platform is already registered");
+            var firstRole = partnerCredentials.Roles?.FirstOrDefault();
+            if (firstRole == null)
+                throw OcpiException.InvalidParameters("At least one role is required");
 
-            // TODO: Store partner credentials in database
-            // SavePartnerCredentials(partnerCredentials);
+            // Check if platform is already registered
+            var existing = await _credentialsService.GetPartnerByCountryAndPartyAsync(
+                firstRole.CountryCode.ToString(),
+                firstRole.PartyId);
+
+            if (existing != null)
+                throw OcpiException.InvalidParameters("Platform is already registered");
+
+            // Store partner credentials in database
+            await _credentialsService.CreateOrUpdatePartnerAsync(
+                partnerCredentials.Token,
+                partnerCredentials.Url,
+                firstRole.CountryCode.ToString(),
+                firstRole.PartyId,
+                firstRole.BusinessDetails?.Name,
+                firstRole.Role.ToString(),
+                "2.2.1"
+            );
+
+            _logger.LogInformation("Registered new OCPI partner: {BusinessName}", 
+                firstRole.BusinessDetails?.Name);
 
             // Return your platform's credentials
             var credentials = GetPlatformCredentials();
@@ -55,19 +82,38 @@ namespace OCPI.Core.Roaming.Controllers
         /// Update existing partner credentials
         /// </summary>
         [HttpPut]
-        public IActionResult Put([FromBody] OcpiCredentials partnerCredentials)
+        public async Task<IActionResult> Put([FromBody] OcpiCredentials partnerCredentials)
         {
             // Validate incoming credentials
             OcpiValidate(partnerCredentials);
 
-            // TODO: Check if platform is registered
-            // if (!IsRegistered(partnerCredentials.Token))
-            //     throw OcpiException.MethodNotAllowed("Platform must be registered first");
+            var firstRole = partnerCredentials.Roles?.FirstOrDefault();
+            if (firstRole == null)
+                throw OcpiException.InvalidParameters("At least one role is required");
 
-            // TODO: Update partner credentials in database
-            // UpdatePartnerCredentials(partnerCredentials);
+            // Check if platform is registered
+            var existing = await _credentialsService.GetPartnerByCountryAndPartyAsync(
+                firstRole.CountryCode.ToString(),
+                firstRole.PartyId);
 
-            // Return your platform's credentials (can be updated/rotated)
+            if (existing == null)
+                throw OcpiException.InvalidParameters("Platform must be registered first");
+
+            // Update partner credentials in database
+            await _credentialsService.CreateOrUpdatePartnerAsync(
+                partnerCredentials.Token,
+                partnerCredentials.Url,
+                firstRole.CountryCode.ToString(),
+                firstRole.PartyId,
+                firstRole.BusinessDetails?.Name,
+                firstRole.Role.ToString(),
+                "2.2.1"
+            );
+
+            _logger.LogInformation("Updated OCPI partner credentials: {BusinessName}", 
+                firstRole.BusinessDetails?.Name);
+
+            // Return your platform's credentials
             var credentials = GetPlatformCredentials();
             return OcpiOk(credentials);
         }
@@ -76,14 +122,21 @@ namespace OCPI.Core.Roaming.Controllers
         /// Unregister partner
         /// </summary>
         [HttpDelete]
-        public IActionResult Delete()
+        public async Task<IActionResult> Delete()
         {
-            // TODO: Check if platform is registered
-            // if (!IsRegistered())
-            //     throw OcpiException.MethodNotAllowed("Platform must be registered first");
+            // Get partner token from Authorization header
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
 
-            // TODO: Remove partner credentials from database
-            // DeletePartnerCredentials();
+            var existing = await _credentialsService.GetPartnerByTokenAsync(token);
+            
+            if (existing == null)
+                throw OcpiException.InvalidParameters("Platform must be registered first");
+
+            // Remove partner credentials from database
+            await _credentialsService.DeletePartnerAsync(token);
+
+            _logger.LogInformation("Unregistered OCPI partner: {CountryCode}-{PartyId}", 
+                existing.CountryCode, existing.PartyId);
 
             return OcpiOk("Successfully unregistered");
         }

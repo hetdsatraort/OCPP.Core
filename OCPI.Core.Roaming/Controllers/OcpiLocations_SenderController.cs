@@ -3,6 +3,7 @@ using OCPI.Contracts;
 using OCPP.Core.Database;
 using Microsoft.EntityFrameworkCore;
 using BitzArt.Pagination;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -14,11 +15,15 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiLocations_SenderController : OcpiController
     {
-        private readonly OCPPCoreContext _dbContext;
+        private readonly IOcpiLocationService _locationService;
+        private readonly ILogger<OcpiLocations_SenderController> _logger;
 
-        public OcpiLocations_SenderController(OCPPCoreContext dbContext)
+        public OcpiLocations_SenderController(
+            IOcpiLocationService locationService,
+            ILogger<OcpiLocations_SenderController> logger)
         {
-            _dbContext = dbContext;
+            _locationService = locationService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -30,21 +35,13 @@ namespace OCPI.Core.Roaming.Controllers
             // Set maximum Limit value (required for OCPI.Net PageResult handling)
             SetMaxLimit(pageRequest, 100);
 
-            // TODO: Fetch from database and map to OCPI.Contracts.OcpiLocation
-            // For now, returning sample data
-            var locations = new List<OcpiLocation>
-            {
-                CreateSampleLocation("LOC001", "Main Charging Hub"),
-                CreateSampleLocation("LOC002", "Downtown Station")
-            };
+            var offset = pageRequest.Offset ?? 0;
+            var limit = pageRequest.Limit ?? 100;
 
-            // Apply pagination
-            var pagedResult = locations
-                .Skip(pageRequest.Offset ?? 0)
-                .Take(pageRequest.Limit ?? 100)
-                .ToList();
+            // Fetch from database
+            var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-            var result = new PageResult<OcpiLocation>(pagedResult, locations.Count, pagedResult.Count);
+            var result = new PageResult<OcpiLocation>(locations, locations.Count, locations.Count);
             // OcpiOk with PageResult automatically adds pagination headers
             return OcpiOk(result);
         }
@@ -53,14 +50,16 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get a specific location
         /// </summary>
         [HttpGet("{countryCode}/{partyId}/{locationId}")]
-        public IActionResult GetLocation(
+        public async Task<IActionResult> GetLocation(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId)
         {
-            // TODO: Fetch from database
-            var location = CreateSampleLocation(locationId, $"Location {locationId}");
+            var location = await _locationService.GetOurLocationAsync(locationId);
             
+            if (location == null)
+                throw OcpiException.UnknownLocation($"Location not found: {locationId}");
+
             return OcpiOk(location);
         }
 
@@ -68,14 +67,16 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get a specific EVSE within a location
         /// </summary>
         [HttpGet("{countryCode}/{partyId}/{locationId}/{evseUid}")]
-        public IActionResult GetEvse(
+        public async Task<IActionResult> GetEvse(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
             [FromRoute] string evseUid)
         {
-            // TODO: Fetch from database
-            var evse = CreateSampleEvse(evseUid);
+            var evse = await _locationService.GetOurEvseAsync(locationId, evseUid);
+            
+            if (evse == null)
+                throw OcpiException.UnknownLocation($"EVSE not found: {evseUid}");
             
             return OcpiOk(evse);
         }
@@ -84,74 +85,19 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get a specific connector within an EVSE
         /// </summary>
         [HttpGet("{countryCode}/{partyId}/{locationId}/{evseUid}/{connectorId}")]
-        public IActionResult GetConnector(
+        public async Task<IActionResult> GetConnector(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
             [FromRoute] string evseUid,
             [FromRoute] string connectorId)
         {
-            // TODO: Fetch from database
-            var connector = CreateSampleConnector(connectorId);
+            var connector = await _locationService.GetOurConnectorAsync(locationId, evseUid, connectorId);
             
+            if (connector == null)
+                throw OcpiException.UnknownLocation($"Connector not found: {connectorId}");
+
             return OcpiOk(connector);
-        }
-
-        private OcpiLocation CreateSampleLocation(string id, string name)
-        {
-            return new OcpiLocation
-            {
-                CountryCode = CountryCode.India,
-                PartyId = "CPO",
-                Id = id,
-                Publish = true,
-                Name = name,
-                Address = "123 Main Street",
-                City = "Los Angeles",
-                PostalCode = "90001",
-                Country = "India",
-                Coordinates = new OcpiGeolocation
-                {
-                    Latitude = "34.0522",
-                    Longitude = "-118.2437"
-                },
-                TimeZone = "America/Los_Angeles",
-                LastUpdated = DateTime.UtcNow,
-                Evses = new List<OcpiEvse>
-                {
-                    CreateSampleEvse("EVSE-001")
-                }
-            };
-        }
-
-        private OcpiEvse CreateSampleEvse(string uid)
-        {
-            return new OcpiEvse
-            {
-                Uid = uid,
-                EvseId = $"US*CPO*{uid}",
-                Status = EvseStatus.Available,
-                LastUpdated = DateTime.UtcNow,
-                Connectors = new List<OcpiConnector>
-                {
-                    CreateSampleConnector("1")
-                }
-            };
-        }
-
-        private OcpiConnector CreateSampleConnector(string id)
-        {
-            return new OcpiConnector
-            {
-                Id = id,
-                Standard = ConnectorType.IEC_62196_T2_Combo,
-                Format = ConnectorFormat.Socket,
-                PowerType = PowerType.Ac3Phase,
-                MaxVoltage = 230,
-                MaxAmperage = 32,
-                MaxElectricPower = 22000,
-                LastUpdated = DateTime.UtcNow
-            };
         }
     }
 }

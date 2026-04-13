@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -11,34 +12,34 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiTokensController : OcpiController
     {
+        private readonly IOcpiTokenService _tokenService;
+        private readonly IOcpiCredentialsService _credentialsService;
+        private readonly ILogger<OcpiTokensController> _logger;
+
+        public OcpiTokensController(
+            IOcpiTokenService tokenService,
+            IOcpiCredentialsService credentialsService,
+            ILogger<OcpiTokensController> logger)
+        {
+            _tokenService = tokenService;
+            _credentialsService = credentialsService;
+            _logger = logger;
+        }
         /// <summary>
         /// Real-time authorization request
         /// </summary>
         [HttpPost("{countryCode}/{partyId}/{tokenUid}/authorize")]
-        public IActionResult AuthorizeToken(
+        public async Task<IActionResult> AuthorizeToken(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string tokenUid,
             [FromBody] OcpiLocationReferences? locationReferences = null)
         {
-            // TODO: Check if token is valid in database
-            // var token = await _dbContext.Tokens.FirstOrDefaultAsync(t => t.Uid == tokenUid);
-            // if (token == null || token.Valid == false)
-            // {
-            //     return OcpiOk(new OcpiAuthorizationInfo { Allowed = OcpiAllowed.NotAllowed });
-            // }
+            // Check if token is valid in database
+            var authInfo = await _tokenService.AuthorizeTokenAsync(tokenUid, locationReferences);
 
-            // Return authorization decision
-            var authInfo = new OcpiAuthorizationInfo
-            {
-                Allowed = AllowedType.Allowed, 
-                LocationReferences = locationReferences,
-                Info = new OcpiDisplayText
-                {
-                    Language = "en",
-                    Text = "Authorized successfully"
-                }
-            };
+            _logger.LogInformation("Token authorization request for {TokenUid}: {Allowed}", 
+                tokenUid, authInfo.Allowed);
 
             return OcpiOk(authInfo);
         }
@@ -47,7 +48,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Receive token information from partner
         /// </summary>
         [HttpPut("{countryCode}/{partyId}/{tokenUid}")]
-        public IActionResult PutToken(
+        public async Task<IActionResult> PutToken(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string tokenUid,
@@ -56,9 +57,17 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate token data
             OcpiValidate(token);
 
-            // TODO: Store/update token in database
-            // _dbContext.Tokens.Update(MapToDbToken(token));
-            // await _dbContext.SaveChangesAsync();
+            // Get partner credential from Authorization header
+            var authToken = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(authToken);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
+            // Store/update token in database
+            await _tokenService.StorePartnerTokenAsync(partner.Id, token);
+
+            _logger.LogInformation("Stored partner token {TokenUid}", tokenUid);
 
             return OcpiOk(token);
         }
@@ -67,7 +76,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Partially update token information
         /// </summary>
         [HttpPatch("{countryCode}/{partyId}/{tokenUid}")]
-        public IActionResult PatchToken(
+        public async Task<IActionResult> PatchToken(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string tokenUid,
@@ -76,11 +85,14 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate token data
             OcpiValidate(token);
 
-            // TODO: Partially update token in database
-            // var existing = await _dbContext.Tokens.FindAsync(tokenUid);
-            // if (existing == null) throw OcpiException.UnknownLocation($"Token not found: {tokenUid}");
-            // UpdatePartialToken(existing, token);
-            // await _dbContext.SaveChangesAsync();
+            // Partially update token in database
+            var existing = await _tokenService.GetPartnerTokenAsync(tokenUid);
+            if (existing == null)
+                throw OcpiException.UnknownLocation($"Token not found: {tokenUid}");
+
+            await _tokenService.UpdatePartnerTokenAsync(tokenUid, token);
+
+            _logger.LogInformation("Updated partner token {TokenUid}", tokenUid);
 
             return OcpiOk(token);
         }
