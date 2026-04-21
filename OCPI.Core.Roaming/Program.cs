@@ -16,6 +16,17 @@ builder.AddOcpi();
 builder.Services.AddDbContext<OCPPCoreContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
+// Register OCPI Services
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCredentialsService, OCPI.Core.Roaming.Services.OcpiCredentialsService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiLocationService, OCPI.Core.Roaming.Services.OcpiLocationService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiSessionService, OCPI.Core.Roaming.Services.OcpiSessionService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCdrService, OCPI.Core.Roaming.Services.OcpiCdrService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiTariffService, OCPI.Core.Roaming.Services.OcpiTariffService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiTokenService, OCPI.Core.Roaming.Services.OcpiTokenService>();
+
+// Register OCPI Background Service
+builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiSyncBackgroundService>();
+
 // Add CORS
 builder.Services.AddCors(options =>
 {

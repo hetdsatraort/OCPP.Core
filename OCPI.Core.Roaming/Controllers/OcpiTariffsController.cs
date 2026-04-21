@@ -2,6 +2,7 @@ using BitzArt.Pagination;
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
 using OCPI.Core;
+using OCPI.Core.Roaming.Services;
 
 
 namespace OCPI.Core.Roaming.Controllers
@@ -14,28 +15,32 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiTariffsController : OcpiController
     {
+        private readonly IOcpiTariffService _tariffService;
+        private readonly ILogger<OcpiTariffsController> _logger;
+
+        public OcpiTariffsController(
+            IOcpiTariffService tariffService,
+            ILogger<OcpiTariffsController> logger)
+        {
+            _tariffService = tariffService;
+            _logger = logger;
+        }
         /// <summary>
         /// Get paginated list of all tariffs
         /// </summary>
         [HttpGet]
-        public IActionResult GetTariffs([FromQuery] OcpiPageRequest pageRequest)
+        public async Task<IActionResult> GetTariffs([FromQuery] OcpiPageRequest pageRequest)
         {
             // Set maximum Limit value
             SetMaxLimit(pageRequest, 100);
 
-            // TODO: Fetch tariffs from database
-            var tariffs = new List<OcpiTariff>
-            {
-                CreateSampleTariff("TARIFF-001", "Standard AC Charging"),
-                CreateSampleTariff("TARIFF-002", "Fast DC Charging")
-            };
+            var offset = pageRequest.Offset ?? 0;
+            var limit = pageRequest.Limit ?? 100;
 
-            var pagedResult = tariffs
-                .Skip(pageRequest.Offset ?? 0)
-                .Take(pageRequest.Limit ?? 100)
-                .ToList();
+            // Fetch tariffs from database
+            var tariffs = await _tariffService.GetTariffsAsync(offset, limit);
 
-            var result = new PageResult<OcpiTariff>(pagedResult, tariffs.Count, pagedResult.Count);
+            var result = new PageResult<OcpiTariff>(tariffs, tariffs.Count, tariffs.Count);
 
             return OcpiOk(result);
         }
@@ -44,50 +49,17 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get a specific tariff
         /// </summary>
         [HttpGet("{countryCode}/{partyId}/{tariffId}")]
-        public IActionResult GetTariff(
+        public async Task<IActionResult> GetTariff(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string tariffId)
         {
-            // TODO: Fetch from database
-            var tariff = CreateSampleTariff(tariffId, $"Tariff {tariffId}");
+            var tariff = await _tariffService.GetTariffAsync(tariffId);
             
-            return OcpiOk(tariff);
-        }
+            if (tariff == null)
+                throw OcpiException.UnknownLocation($"Tariff not found: {tariffId}");
 
-        private OcpiTariff CreateSampleTariff(string id, string name)
-        {
-            return new OcpiTariff
-            {
-                CountryCode = CountryCode.India,
-                PartyId = "CPO",
-                Id = id,
-                Currency = CurrencyCode.IndianRupee,
-                Elements = new List<OcpiTariffElement>
-                {
-                    new OcpiTariffElement
-                    {
-                        PriceComponents = new List<OcpiPriceComponent>
-                        {
-                            // Energy component
-                            new OcpiPriceComponent
-                            {
-                                Type = TariffDimensionType.Energy,
-                                Price = 22, // ₹0.30 per kWh
-                                StepSize = 1
-                            },
-                            // Time component
-                            new OcpiPriceComponent
-                            {
-                                Type = TariffDimensionType.Time,
-                                Price = 0.10m, // ₹0.10 per minute
-                                StepSize = 60
-                            }
-                        }
-                    }
-                },
-                LastUpdated = DateTime.UtcNow
-            };
+            return OcpiOk(tariff);
         }
     }
 }

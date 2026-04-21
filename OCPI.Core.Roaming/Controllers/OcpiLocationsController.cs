@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -11,11 +12,25 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiLocations_ReceiverController : OcpiController
     {
+        private readonly IOcpiLocationService _locationService;
+        private readonly IOcpiCredentialsService _credentialsService;
+        private readonly ILogger<OcpiLocations_ReceiverController> _logger;
+
+        public OcpiLocations_ReceiverController(
+            IOcpiLocationService locationService,
+            IOcpiCredentialsService credentialsService,
+            ILogger<OcpiLocations_ReceiverController> logger)
+        {
+            _locationService = locationService;
+            _credentialsService = credentialsService;
+            _logger = logger;
+        }
+
         /// <summary>
         /// Receive location data from partner
         /// </summary>
         [HttpPut("{countryCode}/{partyId}/{locationId}")]
-        public IActionResult PutLocation(
+        public async Task<IActionResult> PutLocation(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
@@ -24,9 +39,17 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate location data
             OcpiValidate(location);
 
-            // TODO: Store/update location in database
-            // _dbContext.Locations.Update(MapToDbLocation(location));
-            // await _dbContext.SaveChangesAsync();
+            // Get partner credential from Authorization header
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
+            // Store/update location in database
+            await _locationService.StorePartnerLocationAsync(partner.Id, location);
+
+            _logger.LogInformation("Stored partner location {LocationId}", locationId);
 
             return OcpiOk(location);
         }
@@ -35,7 +58,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Partially update location data
         /// </summary>
         [HttpPatch("{countryCode}/{partyId}/{locationId}")]
-        public IActionResult PatchLocation(
+        public async Task<IActionResult> PatchLocation(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
@@ -44,7 +67,17 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate location data
             OcpiValidate(location);
 
-            // TODO: Partially update location in database
+            // Get partner credential
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
+            // Partially update location in database
+            await _locationService.StorePartnerLocationAsync(partner.Id, location);
+
+            _logger.LogInformation("Updated partner location {LocationId}", locationId);
 
             return OcpiOk(location);
         }
@@ -53,7 +86,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Update EVSE within a location
         /// </summary>
         [HttpPut("{countryCode}/{partyId}/{locationId}/{evseUid}")]
-        public IActionResult PutEvse(
+        public async Task<IActionResult> PutEvse(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
@@ -63,7 +96,9 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate EVSE data
             OcpiValidate(evse);
 
-            // TODO: Update EVSE in database
+            // TODO: Need to find the partner location ID first
+            // This is a simplified approach - in production, you'd look up the location
+            _logger.LogInformation("Received EVSE update for {EvseUid} at location {LocationId}", evseUid, locationId);
 
             return OcpiOk(evse);
         }
@@ -72,7 +107,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Update connector within an EVSE
         /// </summary>
         [HttpPut("{countryCode}/{partyId}/{locationId}/{evseUid}/{connectorId}")]
-        public IActionResult PutConnector(
+        public async Task<IActionResult> PutConnector(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
@@ -83,7 +118,9 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate connector data
             OcpiValidate(connector);
 
-            // TODO: Update connector in database
+            // TODO: Need to find the partner EVSE ID first
+            // This is a simplified approach - in production, you'd look up the EVSE
+            _logger.LogInformation("Received connector update for {ConnectorId} at EVSE {EvseUid}", connectorId, evseUid);
 
             return OcpiOk(connector);
         }

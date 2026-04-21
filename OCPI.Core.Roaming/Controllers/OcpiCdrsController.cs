@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -13,18 +14,36 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiCdrsController : OcpiController
     {
+        private readonly IOcpiCdrService _cdrService;
+        private readonly IOcpiCredentialsService _credentialsService;
+        private readonly ILogger<OcpiCdrsController> _logger;
+
+        public OcpiCdrsController(
+            IOcpiCdrService cdrService,
+            IOcpiCredentialsService credentialsService,
+            ILogger<OcpiCdrsController> logger)
+        {
+            _cdrService = cdrService;
+            _credentialsService = credentialsService;
+            _logger = logger;
+        }
         /// <summary>
         /// Receive and store a Charge Detail Record
         /// </summary>
         [HttpPost]
-        public IActionResult PostCdr([FromBody] OcpiCdr cdr)
+        public async Task<IActionResult> PostCdr([FromBody] OcpiCdr cdr)
         {
             // Validate CDR data
             OcpiValidate(cdr);
 
-            // TODO: Store CDR in database
-            // _dbContext.Cdrs.Add(MapToDbCdr(cdr));
-            // await _dbContext.SaveChangesAsync();
+            // Get partner credential from Authorization header
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            // Store CDR in database
+            var cdrId = await _cdrService.CreateCdrAsync(cdr, partner?.Id);
+
+            _logger.LogInformation("Stored CDR {CdrId} from partner", cdrId);
 
             // Generate CDR ID or URL where it can be retrieved
             var cdrLocation = $"/2.2.1/cdrs/{cdr.Id}";
@@ -37,53 +56,14 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get a specific CDR by ID
         /// </summary>
         [HttpGet("{cdrId}")]
-        public IActionResult GetCdr([FromRoute] string cdrId)
+        public async Task<IActionResult> GetCdr([FromRoute] string cdrId)
         {
-            // TODO: Fetch from database
-            // var cdr = await _dbContext.Cdrs.FindAsync(cdrId);
-            // if (cdr == null) throw OcpiException.UnknownLocation($"CDR not found: {cdrId}");
+            var cdr = await _cdrService.GetCdrAsync(cdrId);
+            
+            if (cdr == null)
+                throw OcpiException.UnknownLocation($"CDR not found: {cdrId}");
 
-            var sampleCdr = CreateSampleCdr(cdrId);
-            return OcpiOk(sampleCdr);
-        }
-
-        private OcpiCdr CreateSampleCdr(string id)
-        {
-            return new OcpiCdr
-            {
-                CountryCode = CountryCode.India,
-                PartyId = "CPO",
-                Id = id,
-                StartDateTime = DateTime.UtcNow.AddHours(-2),
-                EndDateTime = DateTime.UtcNow,
-                AuthorizationReference = "AUTH123",
-                AuthMethod = AuthMethodType.AuthRequest,
-                CdrLocation = new Contracts.OcpiCdrLocation
-                {
-                    Id = "LOC001",
-                    Name = "Main Charging Hub",
-                    Address = "123 Main Street",
-                    City = "Los Angeles",
-                    PostalCode = "90001",
-                    Country = "India",
-                    Coordinates = new OcpiGeolocation
-                    {
-                        Latitude = "34.0522",
-                        Longitude = "-118.2437"
-                    },
-                    EvseUid = "EVSE-001",
-                    EvseId = "IN*CPO*EVSE-001",
-                    ConnectorId = "1",
-                    ConnectorStandard = ConnectorType.IEC_62196_T2_Combo,
-                    ConnectorFormat = ConnectorFormat.Socket,
-                    ConnectorPowerType = PowerType.Ac3Phase
-                },
-                Currency = CurrencyCode.IndianRupee,
-                TotalCost = new OcpiPrice { ExclVat = 15.50m },
-                TotalEnergy = 50.0m,
-                TotalTime = 2.0m,
-                LastUpdated = DateTime.UtcNow
-            };
+            return OcpiOk(cdr);
         }
     }
 }

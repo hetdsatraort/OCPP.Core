@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -11,11 +12,24 @@ namespace OCPI.Core.Roaming.Controllers
     [OcpiAuthorize]
     public class OcpiSessionsController : OcpiController
     {
+        private readonly IOcpiSessionService _sessionService;
+        private readonly IOcpiCredentialsService _credentialsService;
+        private readonly ILogger<OcpiSessionsController> _logger;
+
+        public OcpiSessionsController(
+            IOcpiSessionService sessionService,
+            IOcpiCredentialsService credentialsService,
+            ILogger<OcpiSessionsController> logger)
+        {
+            _sessionService = sessionService;
+            _credentialsService = credentialsService;
+            _logger = logger;
+        }
         /// <summary>
         /// Update or create a charging session
         /// </summary>
         [HttpPut("{countryCode}/{partyId}/{sessionId}")]
-        public IActionResult PutSession(
+        public async Task<IActionResult> PutSession(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string sessionId,
@@ -24,9 +38,17 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate session data
             OcpiValidate(session);
 
-            // TODO: Store/update session in database
-            // _dbContext.Sessions.Add(MapToDbSession(session));
-            // await _dbContext.SaveChangesAsync();
+            // Get partner credential from Authorization header
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
+            // Store/update session in database
+            await _sessionService.StorePartnerSessionAsync(partner.Id, session);
+
+            _logger.LogInformation("Stored partner session {SessionId}", sessionId);
 
             return OcpiOk(session);
         }
@@ -35,7 +57,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Update charging session via partial PATCH
         /// </summary>
         [HttpPatch("{countryCode}/{partyId}/{sessionId}")]
-        public IActionResult PatchSession(
+        public async Task<IActionResult> PatchSession(
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string sessionId,
@@ -44,11 +66,14 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate session data
             OcpiValidate(session);
 
-            // TODO: Partially update session in database
-            // var existing = await _dbContext.Sessions.FindAsync(sessionId);
-            // if (existing == null) throw OcpiException.UnknownLocation($"Session not found: {sessionId}");
-            // UpdatePartialSession(existing, session);
-            // await _dbContext.SaveChangesAsync();
+            // Partially update session in database
+            var existing = await _sessionService.GetPartnerSessionAsync(sessionId);
+            if (existing == null)
+                throw OcpiException.UnknownLocation($"Session not found: {sessionId}");
+
+            await _sessionService.UpdatePartnerSessionAsync(sessionId, session);
+
+            _logger.LogInformation("Updated partner session {SessionId}", sessionId);
 
             return OcpiOk(session);
         }
