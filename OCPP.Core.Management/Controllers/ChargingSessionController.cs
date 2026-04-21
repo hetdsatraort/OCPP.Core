@@ -876,6 +876,46 @@ namespace OCPP.Core.Management.Controllers
                 Database.EVCDTO.ChargingStation chargingStation = await _dbContext.ChargingStations
                     .FirstOrDefaultAsync(cs => cs.RecId == chargingGun.ChargingStationId);
 
+                // Check if the charge point has an active WebSocket connection on the OCPP server
+                bool isOnline = false;
+                if (chargingStation != null && !string.IsNullOrEmpty(chargingStation.ChargingPointId))
+                {
+                    var (connSuccess, online, _) = await GetChargePointConnectionStatus(chargingStation.ChargingPointId);
+                    isOnline = connSuccess && online;
+                }
+
+                // If the charger is offline, return immediately with offline status
+                if (!isOnline)
+                {
+                            chargingGun.ChargerStatus = "Offline";
+
+                    var offlineStatus = new ChargingGunStatusDto
+                    {
+                        ChargingGunId = chargingGunId,
+                        ChargingStationId = chargingStation?.RecId,
+                        ChargingStationName = chargingStation?.ChargingPointId,
+                        ConnectorId = chargingGun?.ConnectorId,
+                        Status = "Offline",
+                        CurrentSessionId = activeSession?.RecId,
+                        LastStatusUpdate = DateTime.UtcNow,
+                        IsAvailable = false,
+                        IsOnline = false,
+                        OcppStatus = chargingGun?.ChargerStatus,
+                        LastOcppStatusTime = null,
+                        LastMeter = null,
+                        LastMeterTime = null
+                    };
+
+                    await _dbContext.SaveChangesAsync(); // Save the updated status to the database
+
+                    return Ok(new ChargingSessionResponseDto
+                    {
+                        Success = true,
+                        Message = "Charging gun is offline",
+                        Data = offlineStatus
+                    });
+                }
+
                 // Fetch and apply the latest OCPP connector status
                 Database.ConnectorStatus connectorStatus = null;
                 if (chargingStation != null && int.TryParse(chargingGun?.ConnectorId, out int connectorIdInt))
@@ -918,6 +958,7 @@ namespace OCPP.Core.Management.Controllers
                     CurrentSessionId = activeSession?.RecId,
                     LastStatusUpdate = connectorStatus?.LastStatusTime ?? activeSession?.UpdatedOn ?? DateTime.UtcNow,
                     IsAvailable = isAvailable,
+                    IsOnline = true,
                     OcppStatus = connectorStatus?.LastStatus,
                     LastOcppStatusTime = connectorStatus?.LastStatusTime,
                     LastMeter = connectorStatus?.LastMeter,
@@ -2493,6 +2534,53 @@ namespace OCPP.Core.Management.Controllers
 
 
         #region Helper Methods
+
+        private async Task<(bool Success, bool IsOnline, string Message)> GetChargePointConnectionStatus(string chargePointId)
+        {
+            try
+            {
+                string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+                if (string.IsNullOrEmpty(serverApiUrl))
+                {
+                    _logger.LogWarning("GetChargePointConnectionStatus: ServerApiUrl not configured");
+                    return (false, false, "OCPP server URL not configured");
+                }
+
+                string apiKeyConfig = _config.GetValue<string>("ApiKey");
+
+                using (var httpClient = new HttpClient())
+                {
+                    if (!serverApiUrl.EndsWith('/'))
+                        serverApiUrl += "/";
+
+                    Uri uri = new Uri(new Uri(serverApiUrl), $"ConnectionStatus/{Uri.EscapeDataString(chargePointId)}");
+                    httpClient.Timeout = TimeSpan.FromSeconds(5);
+
+                    if (!string.IsNullOrWhiteSpace(apiKeyConfig))
+                        httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKeyConfig);
+
+                    HttpResponseMessage response = await httpClient.GetAsync(uri);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        string json = await response.Content.ReadAsStringAsync();
+                        dynamic result = JsonConvert.DeserializeObject(json);
+                        bool isOnline = result?.isOnline == true;
+                        return (true, isOnline, "OK");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("GetChargePointConnectionStatus => HTTP {0} for chargepoint {1}", response.StatusCode, chargePointId);
+                        return (false, false, $"Server returned: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "GetChargePointConnectionStatus => Exception for chargepoint {0}: {1}", chargePointId, ex.Message);
+                return (false, false, ex.Message);
+            }
+        }
 
         private async Task<ChargingSessionDto> MapToChargingSessionDto(Database.EVCDTO.ChargingSession session)
         {

@@ -704,6 +704,56 @@ namespace OCPP.Core.Server
                             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
                         }
                     }
+                    else if (cmd == "ConnectionStatus")
+                    {
+                        if (!string.IsNullOrEmpty(urlChargePointId))
+                        {
+                            try
+                            {
+                                bool isOnline = false;
+                                string protocol = null;
+                                string webSocketState = "NotConnected";
+
+                                lock (_chargePointStatusDict)
+                                {
+                                    if (_chargePointStatusDict.TryGetValue(urlChargePointId, out var cpStatus))
+                                    {
+                                        if (cpStatus.WebSocket != null && cpStatus.WebSocket.State == WebSocketState.Open)
+                                        {
+                                            isOnline = true;
+                                            protocol = cpStatus.Protocol;
+                                            webSocketState = cpStatus.WebSocket.State.ToString();
+                                        }
+                                        else
+                                        {
+                                            webSocketState = cpStatus.WebSocket?.State.ToString() ?? "NotConnected";
+                                        }
+                                    }
+                                }
+
+                                var result = new
+                                {
+                                    chargePointId = urlChargePointId,
+                                    isOnline,
+                                    protocol,
+                                    webSocketState
+                                };
+
+                                context.Response.ContentType = "application/json";
+                                await context.Response.WriteAsync(JsonConvert.SerializeObject(result));
+                            }
+                            catch (Exception exp)
+                            {
+                                _logger.LogError(exp, "OCPPMiddleware ConnectionStatus => Error: {0}", exp.Message);
+                                context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogError("OCPPMiddleware ConnectionStatus => Missing chargepoint ID");
+                            context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                        }
+                    }
                     else
                     {
                         // Unknown action/function

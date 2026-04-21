@@ -84,6 +84,7 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public string CurrentSessionId { get; set; }
         public DateTime? LastStatusUpdate { get; set; }
         public bool IsAvailable { get; set; }
+        public bool IsOnline { get; set; }
         // OCPP connector status
         public string OcppStatus { get; set; }
         public DateTime? LastOcppStatusTime { get; set; }
