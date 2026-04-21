@@ -457,7 +457,9 @@ namespace OCPP.Core.Management.Controllers
                     chargePoint = new ChargePoint
                     {
                         ChargePointId = request.ChargingPointId,
-                        Name = $"Station {request.ChargingPointId}",
+                        Name = !string.IsNullOrWhiteSpace(request.ChargePointName)
+                            ? request.ChargePointName
+                            : $"Station {request.ChargingPointId}",
                         Comment = "Created via Management API"
                     };
                     _dbContext.ChargePoints.Add(chargePoint);
@@ -535,9 +537,13 @@ namespace OCPP.Core.Management.Controllers
                 station.ChargingStationImage = request.ChargingStationImage;
                 station.UpdatedOn = DateTime.UtcNow;
 
-                await _dbContext.SaveChangesAsync();
-
                 var chargePoint = await _dbContext.ChargePoints.FirstOrDefaultAsync(cp => cp.ChargePointId == request.ChargingPointId);
+                if (chargePoint != null && !string.IsNullOrWhiteSpace(request.ChargePointName) && chargePoint.Name != request.ChargePointName)
+                {
+                    chargePoint.Name = request.ChargePointName;
+                }
+
+                await _dbContext.SaveChangesAsync();
 
                 _logger.LogInformation($"Charging station updated: {station.RecId}");
 

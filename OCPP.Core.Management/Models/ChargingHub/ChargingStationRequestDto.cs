@@ -10,6 +10,11 @@ namespace OCPP.Core.Management.Models.ChargingHub
         
         [Required]
         public string ChargingPointId { get; set; }
+
+        /// <summary>
+        /// Optional display name for the ChargePoint. Defaults to "Station {ChargingPointId}" if not supplied.
+        /// </summary>
+        public string ChargePointName { get; set; }
         
         [Range(1, 10)]
         public int ChargingGunCount { get; set; }
