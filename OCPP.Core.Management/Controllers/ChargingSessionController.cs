@@ -1341,14 +1341,14 @@ namespace OCPP.Core.Management.Controllers
                         // Charging Performance
                         ChargingPerformance = new
                         {
-                            AverageChargingSpeed = Math.Round(averageChargingSpeed * 1.1, 2),
+                            AverageChargingSpeed = Math.Round(averageChargingSpeed, 2),
                             PeakChargingSpeed = Math.Round(peakChargingSpeed, 2),
                             Unit = "kW",
                             ChargingEfficiency = chargingEfficiency.HasValue ? Math.Round(chargingEfficiency.Value, 1) : 80,
                             EfficiencyUnit = "%",
                             Description = chargingEfficiency.HasValue
-                                ? $"Average {Math.Round(averageChargingSpeed * 1.1, 1)} kW (estimated) charging at {Math.Round(chargingEfficiency.Value, 1)}% efficiency"
-                                : $"Average charging speed: {Math.Round(averageChargingSpeed * 1.1, 1)} kW"
+                                ? $"Average {Math.Round(averageChargingSpeed, 1)} kW (estimated) charging at {Math.Round(chargingEfficiency.Value, 1)}% efficiency"
+                                : $"Average charging speed: {Math.Round(averageChargingSpeed, 1)} kW"
                         },
 
                         // Charger Information

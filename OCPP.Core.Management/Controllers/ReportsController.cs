@@ -42,13 +42,16 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string gunId = null,
             [FromQuery] string userId = null,
             [FromQuery] DateTime? from = null,
-            [FromQuery] DateTime? to = null)
+            [FromQuery] DateTime? to = null,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
                 EnforceUserScope(ref userId);
 
-                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, from, to, null);
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, null);
                 var sessions = await query.ToListAsync();
 
                 var completed = sessions.Where(s => s.EndTime != DateTime.MinValue).ToList();
@@ -61,15 +64,15 @@ namespace OCPP.Core.Management.Controllers
                 double avgSpeed   = totalHours > 0 ? totalEnergy / totalHours : 0;
 
                 int peakHour = sessions.Count > 0
-                    ? sessions.GroupBy(s => s.StartTime.Hour)
+                    ? sessions.GroupBy(s => UtcToLocal(s.StartTime, tzOffsetMinutes).Hour)
                               .OrderByDescending(g => g.Count())
                               .First().Key
                     : -1;
 
                 string rangeFrom = from?.ToString("yyyy-MM-dd")
-                    ?? (sessions.Count > 0 ? sessions.Min(s => s.StartTime).ToString("yyyy-MM-dd") : null);
+                    ?? (sessions.Count > 0 ? UtcToLocal(sessions.Min(s => s.StartTime), tzOffsetMinutes).ToString("yyyy-MM-dd") : null);
                 string rangeTo   = to?.ToString("yyyy-MM-dd")
-                    ?? (sessions.Count > 0 ? sessions.Max(s => s.StartTime).ToString("yyyy-MM-dd") : null);
+                    ?? (sessions.Count > 0 ? UtcToLocal(sessions.Max(s => s.StartTime), tzOffsetMinutes).ToString("yyyy-MM-dd") : null);
 
                 return Ok(new ReportResponseDto
                 {
@@ -118,13 +121,16 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] DateTime? to = null,
             [FromQuery] string status = null,
             [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 50)
+            [FromQuery] int pageSize = 50,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
                 EnforceUserScope(ref userId);
 
-                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, from, to, status);
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, status);
                 int totalRecords = await query.CountAsync();
 
                 var sessions = await query
@@ -134,7 +140,7 @@ namespace OCPP.Core.Management.Controllers
                     .ToListAsync();
 
                 var lookups = await LoadEnrichmentLookupsAsync(sessions);
-                var rows    = sessions.Select(s => BuildReportRow(s, lookups)).ToList();
+                var rows    = sessions.Select(s => BuildReportRow(s, lookups, tzOffsetMinutes)).ToList();
 
                 return Ok(new ReportResponseDto
                 {
@@ -171,13 +177,16 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string userId = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
-            [FromQuery] string granularity = "day")
+            [FromQuery] string granularity = "day",
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
                 EnforceUserScope(ref userId);
 
-                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, from, to, null);
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+                var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, null);
 
                 // Project minimal fields needed for aggregation
                 var raw = await query
@@ -191,7 +200,7 @@ namespace OCPP.Core.Management.Controllers
                     .ToListAsync();
 
                 var groups = raw
-                    .GroupBy(s => GetTrendPeriodKey(s.StartTime, granularity))
+                    .GroupBy(s => GetTrendPeriodKey(UtcToLocal(s.StartTime, tzOffsetMinutes), granularity))
                     .OrderBy(g => g.Key.Start)
                     .Select(g =>
                     {
@@ -255,7 +264,8 @@ namespace OCPP.Core.Management.Controllers
         [HttpGet("hub-performance")]
         public async Task<IActionResult> GetHubPerformance(
             [FromQuery] DateTime? from = null,
-            [FromQuery] DateTime? to = null)
+            [FromQuery] DateTime? to = null,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
@@ -272,9 +282,11 @@ namespace OCPP.Core.Management.Controllers
                                            .ToDictionary(g => g.Key, g => g.ToList());
 
                 // Sessions for the period (no hub/station/user filter — we show all hubs)
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var sessionQuery = _dbContext.ChargingSessions.Where(s => s.Active == 1).AsQueryable();
-                if (from.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= from.Value);
-                if (to.HasValue)   sessionQuery = sessionQuery.Where(s => s.StartTime < to.Value.Date.AddDays(1));
+                if (fromUtc.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= fromUtc.Value);
+                if (toUtcExclusive.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime < toUtcExclusive.Value);
 
                 var allSessions = await sessionQuery.ToListAsync();
 
@@ -346,7 +358,8 @@ namespace OCPP.Core.Management.Controllers
         public async Task<IActionResult> GetStationPerformance(
             [FromQuery] string hubId = null,
             [FromQuery] DateTime? from = null,
-            [FromQuery] DateTime? to = null)
+            [FromQuery] DateTime? to = null,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
@@ -370,11 +383,13 @@ namespace OCPP.Core.Management.Controllers
                 var gunCountByStation = allGuns.GroupBy(g => g.ChargingStationId)
                                                .ToDictionary(g => g.Key, g => g.Count());
 
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var sessionQuery = _dbContext.ChargingSessions
                     .Where(s => s.Active == 1 && stationIds.Contains(s.ChargingStationID))
                     .AsQueryable();
-                if (from.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= from.Value);
-                if (to.HasValue)   sessionQuery = sessionQuery.Where(s => s.StartTime < to.Value.Date.AddDays(1));
+                if (fromUtc.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= fromUtc.Value);
+                if (toUtcExclusive.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime < toUtcExclusive.Value);
 
                 var allSessions      = await sessionQuery.ToListAsync();
                 var sessionsByStation = allSessions.GroupBy(s => s.ChargingStationID)
@@ -443,7 +458,8 @@ namespace OCPP.Core.Management.Controllers
         public async Task<IActionResult> GetGunUtilization(
             [FromQuery] string stationId = null,
             [FromQuery] DateTime? from = null,
-            [FromQuery] DateTime? to = null)
+            [FromQuery] DateTime? to = null,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
@@ -470,19 +486,21 @@ namespace OCPP.Core.Management.Controllers
                                          .Where(ct => chargerTypeIds.Contains(ct.RecId))
                                          .ToDictionaryAsync(ct => ct.RecId);
 
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var sessionQuery = _dbContext.ChargingSessions
                     .Where(s => s.Active == 1 && stationIds.Contains(s.ChargingStationID))
                     .AsQueryable();
-                if (from.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= from.Value);
-                if (to.HasValue)   sessionQuery = sessionQuery.Where(s => s.StartTime < to.Value.Date.AddDays(1));
+                if (fromUtc.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= fromUtc.Value);
+                if (toUtcExclusive.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime < toUtcExclusive.Value);
 
                 var allSessions    = await sessionQuery.ToListAsync();
                 var sessionsByGun  = allSessions.GroupBy(s => s.ChargingGunId)
                                                 .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Period window for utilisation calculation
-                DateTime periodStart  = from ?? (allSessions.Count > 0 ? allSessions.Min(s => s.StartTime) : DateTime.UtcNow.AddDays(-30));
-                DateTime periodEnd    = to?.Date.AddDays(1) ?? DateTime.UtcNow;
+                // Period window for utilisation calculation (UTC)
+                DateTime periodStart  = fromUtc ?? (allSessions.Count > 0 ? allSessions.Min(s => s.StartTime) : DateTime.UtcNow.AddDays(-30));
+                DateTime periodEnd    = toUtcExclusive ?? DateTime.UtcNow;
                 double periodHours    = Math.Max(1, (periodEnd - periodStart).TotalHours);
 
                 var result = guns.Select(gun =>
@@ -553,15 +571,18 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
             [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 50)
+            [FromQuery] int pageSize = 50,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
                 EnforceAdminOnly();
 
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var sessionQuery = _dbContext.ChargingSessions.Where(s => s.Active == 1).AsQueryable();
-                if (from.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= from.Value);
-                if (to.HasValue)   sessionQuery = sessionQuery.Where(s => s.StartTime < to.Value.Date.AddDays(1));
+                if (fromUtc.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime >= fromUtc.Value);
+                if (toUtcExclusive.HasValue) sessionQuery = sessionQuery.Where(s => s.StartTime < toUtcExclusive.Value);
 
                 var allSessions = await sessionQuery.ToListAsync();
 
@@ -620,7 +641,7 @@ namespace OCPP.Core.Management.Controllers
                             TotalSpentInr             = Math.Round(revenue, 2),
                             AvgSessionDurationMinutes = uSessions.Count > 0 ? Math.Round(durationMin / uSessions.Count, 1) : 0,
                             AvgEnergyPerSessionKwh    = uSessions.Count > 0 ? Math.Round(energy / uSessions.Count, 3) : 0,
-                            LastSessionTime           = uSessions.Max(s => (DateTime?)s.StartTime),
+                            LastSessionTime           = uSessions.Select(s => (DateTime?)UtcToLocal(s.StartTime, tzOffsetMinutes)).Max(),
                             FavoriteHubName           = favHub
                         };
                     })
@@ -669,16 +690,19 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string userId = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
-            [FromQuery] string status = null)
+            [FromQuery] string status = null,
+            [FromQuery] int tzOffsetMinutes = 330)
         {
             try
             {
                 EnforceUserScope(ref userId);
 
-                var query    = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, from, to, status);
+                var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+                var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+                var query    = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, status);
                 var sessions = await query.OrderByDescending(s => s.StartTime).ToListAsync();
                 var lookups  = await LoadEnrichmentLookupsAsync(sessions);
-                var rows     = sessions.Select(s => BuildReportRow(s, lookups));
+                var rows     = sessions.Select(s => BuildReportRow(s, lookups, tzOffsetMinutes));
 
                 // UTF-8 BOM so Excel opens it correctly
                 var preamble = Encoding.UTF8.GetPreamble();
@@ -728,7 +752,7 @@ namespace OCPP.Core.Management.Controllers
                 query = query.Where(s => s.StartTime >= from.Value);
 
             if (to.HasValue)
-                query = query.Where(s => s.StartTime < to.Value.Date.AddDays(1));
+                query = query.Where(s => s.StartTime < to.Value);
 
             if (!string.IsNullOrEmpty(status))
             {
@@ -828,7 +852,7 @@ namespace OCPP.Core.Management.Controllers
             };
         }
 
-        private SessionReportRowDto BuildReportRow(ChargingSession s, EnrichmentLookups e)
+        private SessionReportRowDto BuildReportRow(ChargingSession s, EnrichmentLookups e, int tzOffsetMinutes = 330)
         {
             e.Stations.TryGetValue(s.ChargingStationID, out var station);
             e.Hubs.TryGetValue(station?.ChargingHubId ?? "", out var hub);
@@ -840,9 +864,9 @@ namespace OCPP.Core.Management.Controllers
             e.Manufacturers.TryGetValue(vehicle?.EVManufacturerID ?? "", out var manufacturer);
             e.Capacities.TryGetValue(vehicle?.BatteryCapacityId ?? "", out var capacity);
 
-            bool isActive  = s.EndTime == DateTime.MinValue;
-            DateTime? endTime = isActive ? (DateTime?)null : s.EndTime;
-            var duration   = isActive ? DateTime.UtcNow - s.StartTime : (endTime.HasValue ? endTime.Value - s.StartTime : TimeSpan.Zero);
+            bool isActive        = s.EndTime == DateTime.MinValue;
+            DateTime? endTimeUtc = isActive ? (DateTime?)null : s.EndTime;
+            var duration         = isActive ? DateTime.UtcNow - s.StartTime : (endTimeUtc.HasValue ? endTimeUtc.Value - s.StartTime : TimeSpan.Zero);
             if (duration.TotalSeconds < 0) duration = TimeSpan.Zero;
 
             double.TryParse(s.StartMeterReading, out double startMeter);
@@ -879,8 +903,8 @@ namespace OCPP.Core.Management.Controllers
                 VehicleModel         = model?.ModelName,
                 VehicleRegistration  = vehicle?.CarRegistrationNumber,
                 BatteryCapacityKwh   = batteryKwh,
-                StartTime            = s.StartTime,
-                EndTime              = endTime,
+                StartTime            = UtcToLocal(s.StartTime, tzOffsetMinutes),
+                EndTime              = endTimeUtc.HasValue ? UtcToLocal(endTimeUtc.Value, tzOffsetMinutes) : (DateTime?)null,
                 DurationMinutes      = Math.Round(duration.TotalMinutes, 1),
                 StartMeterKwh        = Math.Round(startMeter, 3),
                 EndMeterKwh          = Math.Round(endMeter, 3),
@@ -927,11 +951,11 @@ namespace OCPP.Core.Management.Controllers
             return granularity?.ToLowerInvariant() switch
             {
                 "hour"  => ($"{dt:yyyy-MM-dd HH}:00",
-                            new DateTime(dt.Year, dt.Month, dt.Day, dt.Hour, 0, 0, DateTimeKind.Utc)),
+                            new DateTime(dt.Year, dt.Month, dt.Day, dt.Hour, 0, 0, DateTimeKind.Unspecified)),
                 "week"  => ($"{dt:yyyy}-W{ISOWeek.GetWeekOfYear(dt):D2}",
                             ISOWeek.ToDateTime(dt.Year, ISOWeek.GetWeekOfYear(dt), DayOfWeek.Monday)),
                 "month" => ($"{dt:yyyy-MM}",
-                            new DateTime(dt.Year, dt.Month, 1, 0, 0, 0, DateTimeKind.Utc)),
+                            new DateTime(dt.Year, dt.Month, 1, 0, 0, 0, DateTimeKind.Unspecified)),
                 _       => ($"{dt:yyyy-MM-dd}", dt.Date)    // "day" (default)
             };
         }
@@ -1015,6 +1039,14 @@ namespace OCPP.Core.Management.Controllers
             if (!User.IsInRole("Administrator"))
                 throw new UnauthorizedAccessException();
         }
+
+        /// <summary>Converts a local (user-timezone) DateTime to UTC by subtracting the given offset in minutes.</summary>
+        private static DateTime LocalToUtc(DateTime localDt, int tzOffsetMinutes)
+            => localDt.AddMinutes(-tzOffsetMinutes);
+
+        /// <summary>Converts a UTC DateTime to local (user-timezone) by adding the given offset in minutes. Returns Unspecified kind.</summary>
+        private static DateTime UtcToLocal(DateTime utcDt, int tzOffsetMinutes)
+            => DateTime.SpecifyKind(utcDt.AddMinutes(tzOffsetMinutes), DateTimeKind.Unspecified);
 
         // ── Inner helper class for bulk lookups ───────────────────────────────
         private class EnrichmentLookups
