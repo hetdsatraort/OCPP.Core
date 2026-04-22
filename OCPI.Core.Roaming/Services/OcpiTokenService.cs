@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
-using OCPP.Core.Database.OCPIDTO;
 
 namespace OCPI.Core.Roaming.Services
 {
@@ -67,7 +66,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.Whitelist = token.Whitelist?.ToString();
                 existing.Language = token.LanguageCode;
                 existing.DefaultProfileType = token.DefaultProfileType?.ToString();
-                existing.LastUpdated = token.LastUpdated;
+                existing.LastUpdated = token.LastUpdated ?? DateTime.MinValue;
                 
                 _dbContext.OcpiTokens.Update(existing);
                 _logger.LogInformation("Updated partner token {TokenUid}", token.Uid);
@@ -75,7 +74,7 @@ namespace OCPI.Core.Roaming.Services
             else
             {
                 // Create new
-                var newToken = new Database.OCPIDTO.OcpiToken
+                var newToken = new OCPP.Core.Database.OCPIDTO.OcpiToken
                 {
                     CountryCode = token.CountryCode?.ToString(),
                     PartyId = token.PartyId,
@@ -89,7 +88,7 @@ namespace OCPI.Core.Roaming.Services
                     Language = token.LanguageCode,
                     DefaultProfileType = token.DefaultProfileType?.ToString(),
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated = token.LastUpdated
+                    LastUpdated = token.LastUpdated ?? DateTime.MinValue
                 };
                 
                 await _dbContext.OcpiTokens.AddAsync(newToken);
@@ -113,7 +112,7 @@ namespace OCPI.Core.Roaming.Services
             // Update mutable fields
             existing.Valid = token.Valid ?? existing.Valid;
             existing.Whitelist = token.Whitelist?.ToString();
-            existing.LastUpdated = token.LastUpdated;
+            existing.LastUpdated = token.LastUpdated ?? DateTime.MinValue;
 
             _dbContext.OcpiTokens.Update(existing);
             await _dbContext.SaveChangesAsync();
@@ -121,10 +120,10 @@ namespace OCPI.Core.Roaming.Services
             _logger.LogInformation("Updated partner token {TokenUid}", tokenUid);
         }
 
-        public async Task<Database.OCPIDTO.OcpiToken> GetPartnerTokenAsync(string tokenUid)
+        public async Task<OCPP.Core.Database.OCPIDTO.OcpiToken> GetPartnerTokenAsync(string tokenUid)
         {
             return await _dbContext.OcpiTokens
-                .FirstOrDefaultAsync(t => t.TokenUid == tokenUid);
+                .FirstOrDefaultAsync(t => t.TokenUid == tokenUid) ?? new OCPP.Core.Database.OCPIDTO.OcpiToken();
         }
     }
 }

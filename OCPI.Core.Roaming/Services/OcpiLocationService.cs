@@ -28,7 +28,7 @@ namespace OCPI.Core.Roaming.Services
 
             var hubs = await _dbContext.ChargingHubs
                 .Where(h => h.Active == 1)
-                .OrderBy(h => h.RecId)
+                .OrderBy(h => h.ChargingHubName)
                 .Skip(offset)
                 .Take(limit)
                 .ToListAsync();
@@ -230,9 +230,11 @@ namespace OCPI.Core.Roaming.Services
 
         private OcpiLocation MapToOcpiLocation(OCPP.Core.Database.EVCDTO.ChargingHub hub, List<OCPP.Core.Database.EVCDTO.ChargingStation> stations, List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns, string countryCode, string partyId)
         {
+            var cc = Enum.Parse<CountryCode>("356", true);
+
             return new OcpiLocation
             {
-                CountryCode = Enum.Parse<CountryCode>(countryCode, true),
+                CountryCode = CountryCode.India,
                 PartyId = partyId,
                 Id = hub.RecId,
                 Publish = true,
@@ -240,7 +242,7 @@ namespace OCPI.Core.Roaming.Services
                 Address = hub.AddressLine1 + (string.IsNullOrEmpty(hub.AddressLine2) ? "" : ", " + hub.AddressLine2) + (string.IsNullOrEmpty(hub.City) ? "" : ", " + hub.City),
                 City = hub.City ?? "Unknown",
                 PostalCode = hub.Pincode ?? "",
-                Country = (Enum.Parse<CountryCode>(countryCode, true)).ToString(),
+                Country = CountryCode.India.ToString(),
                 Coordinates = new OcpiGeolocation
                 {
                     Latitude = hub.Latitude?.ToString() ?? "0",

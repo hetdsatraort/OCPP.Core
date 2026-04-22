@@ -89,7 +89,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "OCPI Roaming API v2.2.1");
-        c.RoutePrefix = string.Empty; // Set Swagger UI at the app's root
     });
 }
 

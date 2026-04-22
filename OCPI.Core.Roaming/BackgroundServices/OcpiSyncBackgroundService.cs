@@ -108,7 +108,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         }
 
         private async Task SyncPartnerAsync(
-            Database.OCPIDTO.OcpiPartnerCredential partner, 
+            OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential partner, 
             IServiceProvider serviceProvider,
             CancellationToken cancellationToken)
         {

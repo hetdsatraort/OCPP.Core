@@ -40,7 +40,7 @@ namespace OCPI.Core.Roaming.Controllers
             // Fetch tariffs from database
             var tariffs = await _tariffService.GetTariffsAsync(offset, limit);
 
-            var result = new PageResult<OcpiTariff>(tariffs, tariffs.Count, tariffs.Count);
+            var result = new PageResult<OcpiTariff, OcpiPageRequest>(tariffs, pageRequest, tariffs.Count);
 
             return OcpiOk(result);
         }

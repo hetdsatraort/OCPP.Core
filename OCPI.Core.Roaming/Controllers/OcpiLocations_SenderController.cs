@@ -41,9 +41,10 @@ namespace OCPI.Core.Roaming.Controllers
             // Fetch from database
             var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-            var result = new PageResult<OcpiLocation>(locations, locations.Count, locations.Count);
+            var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, locations.Count);
             // OcpiOk with PageResult automatically adds pagination headers
-            return OcpiOk(result);
+            var finalResult = OcpiOk(result);
+            return finalResult;
         }
 
         /// <summary>
