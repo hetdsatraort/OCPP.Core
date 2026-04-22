@@ -35,7 +35,7 @@ namespace OCPI.Core.Roaming.Services
     public interface IOcpiCdrService
     {
         Task<string> CreateCdrAsync(OcpiCdr cdr, int? partnerCredentialId = null);
-        Task<OcpiCdr> GetCdrAsync(string cdrId);
+        Task<OcpiCdr?> GetCdrAsync(string cdrId);
         Task<List<OcpiCdr>> GetCdrsAsync(DateTime? from = null, DateTime? to = null, int offset = 0, int limit = 100);
     }
 

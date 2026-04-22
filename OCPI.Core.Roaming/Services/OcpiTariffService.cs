@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
-using OCPP.Core.Database.OCPIDTO;
 using System.Text.Json;
 
 namespace OCPI.Core.Roaming.Services
@@ -13,7 +12,7 @@ namespace OCPI.Core.Roaming.Services
         private readonly IConfiguration _configuration;
 
         public OcpiTariffService(
-            OCPPCoreContext dbContext, 
+            OCPPCoreContext dbContext,
             ILogger<OcpiTariffService> logger,
             IConfiguration configuration)
         {
@@ -31,7 +30,7 @@ namespace OCPI.Core.Roaming.Services
                 .Take(limit)
                 .ToListAsync();
 
-            return dbTariffs.Select(MapToOcpiTariff).ToList();
+            return dbTariffs.Select(s => MapToOcpiTariff(s)).ToList();
         }
 
         public async Task<OcpiTariff> GetTariffAsync(string tariffId)
@@ -40,7 +39,7 @@ namespace OCPI.Core.Roaming.Services
                 .FirstOrDefaultAsync(t => t.TariffId == tariffId && t.IsActive);
 
             if (dbTariff == null)
-                return null;
+                return null!;
 
             return MapToOcpiTariff(dbTariff);
         }
@@ -48,8 +47,8 @@ namespace OCPI.Core.Roaming.Services
         public async Task<string> CreateOrUpdateTariffAsync(OcpiTariff tariff)
         {
             var existing = await _dbContext.OcpiTariffs
-                .FirstOrDefaultAsync(t => t.CountryCode == tariff.CountryCode.ToString() 
-                    && t.PartyId == tariff.PartyId 
+                .FirstOrDefaultAsync(t => t.CountryCode == tariff.CountryCode.ToString()
+                    && t.PartyId == tariff.PartyId
                     && t.TariffId == tariff.Id);
 
             if (existing != null)
@@ -58,8 +57,8 @@ namespace OCPI.Core.Roaming.Services
                 existing.Currency = tariff.Currency.ToString();
                 existing.Type = tariff.Type?.ToString();
                 existing.ElementsJson = JsonSerializer.Serialize(tariff.Elements);
-                existing.LastUpdated = tariff.LastUpdated;
-                
+                existing.LastUpdated = tariff.LastUpdated ?? DateTime.UtcNow;
+
                 // Extract simple pricing for quick queries
                 if (tariff.Elements?.Any() == true)
                 {
@@ -80,14 +79,14 @@ namespace OCPI.Core.Roaming.Services
                         }
                     }
                 }
-                
+
                 _dbContext.OcpiTariffs.Update(existing);
                 _logger.LogInformation("Updated tariff {TariffId}", tariff.Id);
             }
             else
             {
                 // Create new
-                var newTariff = new Database.OCPIDTO.OcpiTariff
+                var newTariff = new OCPP.Core.Database.OCPIDTO.OcpiTariff
                 {
                     CountryCode = tariff.CountryCode.ToString(),
                     PartyId = tariff.PartyId,
@@ -97,7 +96,7 @@ namespace OCPI.Core.Roaming.Services
                     ElementsJson = JsonSerializer.Serialize(tariff.Elements),
                     IsActive = true,
                     StartDateTime = tariff.TariffAltUrl != null ? DateTime.UtcNow : null,
-                    LastUpdated = tariff.LastUpdated
+                    LastUpdated = tariff.LastUpdated ?? DateTime.UtcNow
                 };
 
                 // Extract simple pricing
@@ -126,10 +125,10 @@ namespace OCPI.Core.Roaming.Services
             }
 
             await _dbContext.SaveChangesAsync();
-            return tariff.Id;
+            return tariff.Id!;
         }
 
-        private OcpiTariff MapToOcpiTariff(Database.OCPIDTO.OcpiTariff dbTariff)
+        private OcpiTariff MapToOcpiTariff(OCPP.Core.Database.OCPIDTO.OcpiTariff dbTariff)
         {
             var tariff = new OcpiTariff
             {
@@ -151,44 +150,42 @@ namespace OCPI.Core.Roaming.Services
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to deserialize tariff elements for {TariffId}", dbTariff.TariffId);
-                    
+
                     // Fallback: create simple tariff from extracted prices
-                    tariff.Elements = new List<OcpiTariffElement>
-                    {
-                        new OcpiTariffElement
-                        {
-                            PriceComponents = new List<OcpiPriceComponent>()
-                        }
-                    };
+                    var fallbackComponents = new List<OcpiPriceComponent>();
 
                     if (dbTariff.EnergyPrice.HasValue)
-                    {
-                        tariff.Elements[0].PriceComponents.Add(new OcpiPriceComponent
+                        fallbackComponents.Add(new OcpiPriceComponent
                         {
                             Type = TariffDimensionType.Energy,
                             Price = dbTariff.EnergyPrice.Value,
                             StepSize = 1
                         });
-                    }
 
-                    if (dbTariff.TimePrice.HasValue)
+                    if (dbTariff.TimePrice.HasValue) 
                     {
-                        tariff.Elements[0].PriceComponents.Add(new OcpiPriceComponent
+                        fallbackComponents.Add(new OcpiPriceComponent
                         {
                             Type = TariffDimensionType.Time,
                             Price = dbTariff.TimePrice.Value,
                             StepSize = 60
                         });
                     }
+                        
 
                     if (dbTariff.SessionFee.HasValue)
                     {
-                        tariff.Elements[0].PriceComponents.Add(new OcpiPriceComponent
+                        fallbackComponents.Add(new OcpiPriceComponent
                         {
                             Type = TariffDimensionType.Flat,
                             Price = dbTariff.SessionFee.Value
                         });
-                    }
+                    }                        
+
+                    tariff.Elements = new List<OcpiTariffElement>
+                    {
+                        new OcpiTariffElement { PriceComponents = fallbackComponents }
+                    };
                 }
             }
 

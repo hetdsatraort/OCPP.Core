@@ -59,13 +59,13 @@ namespace OCPI.Core.Roaming.Services
             if (existing != null)
             {
                 // Update existing
-                existing.Type = token.Type.ToString();
+                existing.Type = token.Type?.ToString();
                 existing.VisualNumber = token.VisualNumber;
                 existing.Issuer = token.Issuer;
                 existing.GroupId = token.GroupId;
-                existing.Valid = token.Valid;
+                existing.Valid = token.Valid ?? true;
                 existing.Whitelist = token.Whitelist?.ToString();
-                existing.Language = token.Language;
+                existing.Language = token.LanguageCode;
                 existing.DefaultProfileType = token.DefaultProfileType?.ToString();
                 existing.LastUpdated = token.LastUpdated;
                 
@@ -77,16 +77,16 @@ namespace OCPI.Core.Roaming.Services
                 // Create new
                 var newToken = new Database.OCPIDTO.OcpiToken
                 {
-                    CountryCode = token.CountryCode.ToString(),
+                    CountryCode = token.CountryCode?.ToString(),
                     PartyId = token.PartyId,
                     TokenUid = token.Uid,
-                    Type = token.Type.ToString(),
+                    Type = token.Type?.ToString(),
                     VisualNumber = token.VisualNumber,
                     Issuer = token.Issuer,
                     GroupId = token.GroupId,
-                    Valid = token.Valid,
+                    Valid = token.Valid ?? true,
                     Whitelist = token.Whitelist?.ToString(),
-                    Language = token.Language,
+                    Language = token.LanguageCode,
                     DefaultProfileType = token.DefaultProfileType?.ToString(),
                     PartnerCredentialId = partnerCredentialId,
                     LastUpdated = token.LastUpdated
@@ -111,7 +111,7 @@ namespace OCPI.Core.Roaming.Services
             }
 
             // Update mutable fields
-            existing.Valid = token.Valid;
+            existing.Valid = token.Valid ?? existing.Valid;
             existing.Whitelist = token.Whitelist?.ToString();
             existing.LastUpdated = token.LastUpdated;
 
