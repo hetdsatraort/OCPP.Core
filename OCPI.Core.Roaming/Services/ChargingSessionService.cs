@@ -98,7 +98,7 @@ namespace OCPI.Core.Roaming.Services
 
         // ─────────────────────────── MAPPING ─────────────────────────────────────
 
-        private async Task<OcpiSession?> MapToOcpiSessionAsync(Database.EVCDTO.ChargingSession cs)
+        private async Task<OcpiSession?> MapToOcpiSessionAsync(OCPP.Core.Database.EVCDTO.ChargingSession cs)
         {
             try
             {
@@ -120,12 +120,12 @@ namespace OCPI.Core.Roaming.Services
                     Id                    = cs.RecId,
                     StartDateTime         = cs.StartTime,
                     EndDateTime           = isActive ? null : cs.EndTime,
-                    Kwh                   = cs.EnergyTransmitted > 0 ? (decimal)cs.EnergyTransmitted : 0m,
-                    AuthMethod            = AuthMethodType.CommandResult,
+                    Kwh                   = Convert.ToDecimal(cs.EnergyTransmitted) > 0 ? Convert.ToDecimal(cs.EnergyTransmitted) : 0m,
+                    AuthMethod            = AuthMethodType.Command,
                     LocationId            = station?.ChargingHubId,
                     EvseId                = station?.RecId,
                     ConnectorId           = gun?.ConnectorId,
-                    Currency              = CurrencyCode.INR,
+                    Currency              = CurrencyCode.IndianRupee,
                     Status                = isActive ? SessionStatus.Active : SessionStatus.Completed,
                     LastUpdated           = cs.UpdatedOn == DateTime.MinValue ? cs.CreatedOn : cs.UpdatedOn
                 };

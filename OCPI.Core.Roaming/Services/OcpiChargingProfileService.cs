@@ -86,7 +86,7 @@ namespace OCPI.Core.Roaming.Services
             // Return a default unlimited profile — actual limit query would require OCPP GetCompositeSchedule
             return new OcpiChargingProfile
             {
-                ChargingRateUnit      = ChargingRateUnit.W,
+                ChargingRateUnit      = ChargingRateUnit.Watts,
                 ChargingProfilePeriods = new[]
                 {
                     new OcpiChargingProfilePeriod { StartPeriod = 0, Limit = null }
