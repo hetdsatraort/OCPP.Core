@@ -23,6 +23,9 @@ builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiSessionService, OCPI.
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCdrService, OCPI.Core.Roaming.Services.OcpiCdrService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiTariffService, OCPI.Core.Roaming.Services.OcpiTariffService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiTokenService, OCPI.Core.Roaming.Services.OcpiTokenService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCommandService, OCPI.Core.Roaming.Services.OcpiCommandService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiChargingProfileService, OCPI.Core.Roaming.Services.OcpiChargingProfileService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IChargingSessionService, OCPI.Core.Roaming.Services.ChargingSessionService>();
 
 // Register OCPI Background Service
 builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiSyncBackgroundService>();

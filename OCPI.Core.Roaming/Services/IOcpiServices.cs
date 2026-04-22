@@ -1,4 +1,6 @@
 using OCPI.Contracts;
+using OCPI.Contracts.ChargingProfiles;
+using OCPI.Enums.SmartCharging;
 
 namespace OCPI.Core.Roaming.Services
 {
@@ -52,5 +54,21 @@ namespace OCPI.Core.Roaming.Services
         Task StorePartnerTokenAsync(int partnerCredentialId, OcpiToken token);
         Task UpdatePartnerTokenAsync(string tokenUid, OcpiToken token);
         Task<OCPP.Core.Database.OCPIDTO.OcpiToken> GetPartnerTokenAsync(string tokenUid);
+    }
+
+    public interface IOcpiCommandService
+    {
+        Task<CommandResponseType> HandleStartSessionAsync(OcpiStartSessionCommand command);
+        Task<CommandResponseType> HandleStopSessionAsync(OcpiStopSessionCommand command);
+        Task<CommandResponseType> HandleReserveNowAsync(OcpiReserveNowCommand command);
+        Task<CommandResponseType> HandleCancelReservationAsync(OcpiCancelReservationCommand command);
+        Task<CommandResponseType> HandleUnlockConnectorAsync(OcpiUnlockConnectorCommand command);
+    }
+
+    public interface IOcpiChargingProfileService
+    {
+        Task<ChargingProfileResponseType> SetChargingProfileAsync(string sessionId, OcpiSetChargingProfileRequest request);
+        Task<OcpiChargingProfile?> GetActiveChargingProfileAsync(string sessionId);
+        Task<ChargingProfileResponseType> ClearChargingProfileAsync(string sessionId, string? responseUrl);
     }
 }
