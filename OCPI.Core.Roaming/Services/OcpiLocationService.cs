@@ -60,7 +60,7 @@ namespace OCPI.Core.Roaming.Services
                 .Where(g => g.Active == 1 && stations.Select(s => s.RecId).Contains(g.ChargingStationId))
                 .ToListAsync();
             if (hub == null)
-                return null;
+                return new OcpiLocation();
 
             return MapToOcpiLocation(hub, stations, guns, countryCode, partyId);
         }
@@ -71,7 +71,7 @@ namespace OCPI.Core.Roaming.Services
                 .FirstOrDefaultAsync(s => s.RecId == evseUid && s.ChargingHubId == locationId);
 
             if (station == null)
-                return null;
+                return new OcpiEvse();
 
             var guns = await _dbContext.ChargingGuns
                 .Where(g => g.ChargingStationId == evseUid)
@@ -87,7 +87,7 @@ namespace OCPI.Core.Roaming.Services
                 .FirstOrDefaultAsync(s => s.RecId == evseUid && s.ChargingHubId == locationId);
 
             if (station == null)
-                return null;
+                return new OcpiConnector();
 
             var gun = await _dbContext.ChargingGuns
                 .FirstOrDefaultAsync(g => g.RecId == connectorId 
@@ -95,7 +95,7 @@ namespace OCPI.Core.Roaming.Services
                     && station.ChargingHubId == locationId);
 
             if (gun == null)
-                return null;
+                return new OcpiConnector();
 
             return MapToOcpiConnector(gun);
         }
@@ -114,7 +114,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.Address = location.Address;
                 existing.City = location.City;
                 existing.PostalCode = location.PostalCode;
-                existing.Country = location.Country.ToString();
+                existing.Country = location.Country!.ToString();
                 existing.Latitude = location.Coordinates?.Latitude;
                 existing.Longitude = location.Coordinates?.Longitude;
                 existing.LocationType = location.Type?.ToString();
@@ -134,7 +134,7 @@ namespace OCPI.Core.Roaming.Services
                     Address = location.Address,
                     City = location.City,
                     PostalCode = location.PostalCode,
-                    Country = location.Country.ToString(),
+                    Country = location.Country!.ToString(),
                     Latitude = location.Coordinates?.Latitude,
                     Longitude = location.Coordinates?.Longitude,
                     LocationType = location.Type?.ToString(),
