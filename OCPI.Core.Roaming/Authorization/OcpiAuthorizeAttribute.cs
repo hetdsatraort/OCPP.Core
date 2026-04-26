@@ -1,13 +1,37 @@
 using BitzArt;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.DependencyInjection;
+using OCPI.Core.Roaming.Services;
 
-public class OcpiAuthorizeAttribute : Attribute, IAuthorizationFilter
+public class OcpiAuthorizeAttribute : Attribute, IAsyncAuthorizationFilter
 {
-    public void OnAuthorization(AuthorizationFilterContext context)
+    public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
-        //var token = GetToken(context.HttpContext.Request);
+        string token;
+        try
+        {
+            token = GetToken(context.HttpContext.Request);
+        }
+        catch
+        {
+            context.Result = new UnauthorizedResult();
+            return;
+        }
 
-        // Your authorization logic.
+        var credentialsService = context.HttpContext.RequestServices
+            .GetRequiredService<IOcpiCredentialsService>();
+
+        var partner = await credentialsService.GetPartnerByTokenAsync(token);
+
+        if (partner == null)
+        {
+            context.Result = new UnauthorizedResult();
+            return;
+        }
+
+        // Expose the resolved partner to downstream controllers via HttpContext.Items
+        context.HttpContext.Items["OcpiPartner"] = partner;
     }
 
     private static string GetToken(HttpRequest request)
