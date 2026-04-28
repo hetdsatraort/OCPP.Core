@@ -33,11 +33,12 @@ builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiSyncB
 // Add CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowAngularApp", builder =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
+        builder.WithOrigins("http://localhost:4200", "https://evc-admin.ortdemo.com", "https://admin.hycharge.in", "https://charge.hycharge.in", "https://app.hycharge.in")
+               .AllowCredentials()
+               .AllowAnyHeader()
+               .AllowAnyMethod();
     });
 });
 
@@ -97,7 +98,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors("AllowAll");
+app.UseCors("AllowAngularApp");
 
 app.UseAuthorization();
 

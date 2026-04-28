@@ -56,6 +56,7 @@ namespace OCPI.Core.Roaming.Controllers
                     uid    = e.Uid,
                     evseId = e.EvseId,
                     status = e.Status.ToString(),
+                    physicalRefernce = e.PhysicalReference,
                     connectors = (e.Connectors ?? Enumerable.Empty<OcpiConnector>()).Select(c => new
                     {
                         id         = c.Id,

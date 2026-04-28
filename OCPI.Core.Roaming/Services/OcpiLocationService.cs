@@ -273,7 +273,7 @@ namespace OCPI.Core.Roaming.Services
                 Status = status,
                 StatusSchedule = null, // For simplicity, not implementing schedule in this example
                 Connectors = guns?.Where(g => g.ChargingStationId == station.RecId).Select(MapToOcpiConnector).ToList() ?? new List<OcpiConnector>(),
-                PhysicalReference = "Station " + station.ChargingPointId,
+                PhysicalReference = chargePoint.Name,
                 LastUpdated = station.UpdatedOn
             };
         }
@@ -301,8 +301,9 @@ namespace OCPI.Core.Roaming.Services
                 "AVAILABLE" => EvseStatus.Available,
                 "OCCUPIED" => EvseStatus.Charging,
                 "CHARGING" => EvseStatus.Charging,
-                "UNAVAILABLE" => EvseStatus.OutOfOrder,
-                "FAULTED" => EvseStatus.OutOfOrder,
+                "UNAVAILABLE" => EvseStatus.Blocked,
+                "FAULTED" => EvseStatus.Blocked,
+                "OFFLINE" => EvseStatus.OutOfOrder,
                 _ => EvseStatus.Unknown
             };
         }
