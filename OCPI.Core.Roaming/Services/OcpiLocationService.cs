@@ -249,7 +249,7 @@ namespace OCPI.Core.Roaming.Services
                     Longitude = hub.Longitude?.ToString() ?? "0"
                 },
                 Type = LocationType.OnStreet,
-                Evses = stations.Select(s => MapToOcpiEvse(s, guns)).ToList() ?? new List<OcpiEvse>(),
+                Evses = stations.Where(s => s.ChargingHubId == hub.RecId).Select(s => MapToOcpiEvse(s, guns)).ToList() ?? new List<OcpiEvse>(),
                 Operator = new OcpiBusinessDetails
                 {
                     Name = _configuration["OCPI:BusinessName"] ?? "EV Charging Platform"
