@@ -25,6 +25,11 @@ namespace OCPI.Core.Roaming.Services
         Task StorePartnerLocationAsync(int partnerCredentialId, OcpiLocation location);
         Task StorePartnerEvseAsync(int partnerLocationId, OcpiEvse evse);
         Task StorePartnerConnectorAsync(int partnerEvseId, OcpiConnector connector);
+
+        /// <summary>Returns the database PK of a stored partner location, or null if not found.</summary>
+        Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId);
+        /// <summary>Returns the database PK of a stored partner EVSE, or null if not found.</summary>
+        Task<int?> GetPartnerEvseDbIdAsync(int partnerLocationId, string evseUid);
     }
 
     public interface IOcpiSessionService

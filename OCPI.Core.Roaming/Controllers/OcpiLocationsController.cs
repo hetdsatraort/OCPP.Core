@@ -102,9 +102,14 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
-            // TODO: Need to find the partner location ID first
-            // This is a simplified approach - in production, you'd look up the location
-            _logger.LogInformation("Received EVSE update for {EvseUid} at location {LocationId}", evseUid, locationId);
+            // Resolve the stored partner location PK
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
+            if (partnerLocationId == null)
+                throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
+
+            await _locationService.StorePartnerEvseAsync(partnerLocationId.Value, evse);
+
+            _logger.LogInformation("Stored EVSE {EvseUid} for partner location {LocationId}", evseUid, locationId);
 
             return OcpiOk(evse);
         }
@@ -124,9 +129,25 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate connector data
             OcpiValidate(connector);
 
-            // TODO: Need to find the partner EVSE ID first
-            // This is a simplified approach - in production, you'd look up the EVSE
-            _logger.LogInformation("Received connector update for {ConnectorId} at EVSE {EvseUid}", connectorId, evseUid);
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
+            // Resolve the stored partner location PK
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
+            if (partnerLocationId == null)
+                throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
+
+            // Resolve the stored partner EVSE PK
+            var partnerEvseId = await _locationService.GetPartnerEvseDbIdAsync(partnerLocationId.Value, evseUid);
+            if (partnerEvseId == null)
+                throw OcpiException.UnknownLocation($"EVSE {evseUid} not found under location {locationId}");
+
+            await _locationService.StorePartnerConnectorAsync(partnerEvseId.Value, connector);
+
+            _logger.LogInformation("Stored connector {ConnectorId} for EVSE {EvseUid}", connectorId, evseUid);
 
             return OcpiOk(connector);
         }

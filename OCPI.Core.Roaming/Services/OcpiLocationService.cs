@@ -226,6 +226,24 @@ namespace OCPI.Core.Roaming.Services
             await _dbContext.SaveChangesAsync();
         }
 
+        public async Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId)
+        {
+            var loc = await _dbContext.OcpiPartnerLocations
+                .Where(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId)
+                .Select(l => (int?)l.Id)
+                .FirstOrDefaultAsync();
+            return loc;
+        }
+
+        public async Task<int?> GetPartnerEvseDbIdAsync(int partnerLocationId, string evseUid)
+        {
+            var evse = await _dbContext.OcpiPartnerEvses
+                .Where(e => e.PartnerLocationId == partnerLocationId && e.EvseUid == evseUid)
+                .Select(e => (int?)e.Id)
+                .FirstOrDefaultAsync();
+            return evse;
+        }
+
         #region Mapping Methods
 
         private OcpiLocation MapToOcpiLocation(OCPP.Core.Database.EVCDTO.ChargingHub hub, List<OCPP.Core.Database.EVCDTO.ChargingStation> stations, List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns, string countryCode, string partyId)
