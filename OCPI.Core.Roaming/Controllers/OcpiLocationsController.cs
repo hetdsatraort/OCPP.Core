@@ -96,6 +96,12 @@ namespace OCPI.Core.Roaming.Controllers
             // Validate EVSE data
             OcpiValidate(evse);
 
+            var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
+            var partner = await _credentialsService.GetPartnerByTokenAsync(token);
+
+            if (partner == null)
+                throw OcpiException.InvalidParameters("Invalid partner credentials");
+
             // TODO: Need to find the partner location ID first
             // This is a simplified approach - in production, you'd look up the location
             _logger.LogInformation("Received EVSE update for {EvseUid} at location {LocationId}", evseUid, locationId);

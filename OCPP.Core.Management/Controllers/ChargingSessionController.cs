@@ -887,7 +887,7 @@ namespace OCPP.Core.Management.Controllers
                 // If the charger is offline, return immediately with offline status
                 if (!isOnline)
                 {
-                            chargingGun.ChargerStatus = "Offline";
+                    chargingGun.ChargerStatus = "Offline";
 
                     var offlineStatus = new ChargingGunStatusDto
                     {

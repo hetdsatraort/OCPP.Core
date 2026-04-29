@@ -64,7 +64,8 @@ namespace OCPI.Core.Roaming.Controllers
                         format     = c.Format.ToString(),
                         powerType  = c.PowerType.ToString(),
                         maxVoltage  = c.MaxVoltage,
-                        maxAmperage = c.MaxAmperage
+                        maxAmperage = c.MaxAmperage,
+                        maxElectricPower = c.MaxElectricPower
                     })
                 })
             });
