@@ -273,7 +273,7 @@ namespace OCPI.Core.Roaming.Services
                 Status = status,
                 StatusSchedule = null, // For simplicity, not implementing schedule in this example
                 Connectors = guns?.Where(g => g.ChargingStationId == station.RecId).Select(MapToOcpiConnector).ToList() ?? new List<OcpiConnector>(),
-                PhysicalReference = chargePoint.Name,
+                PhysicalReference = chargePoint?.Name ?? "Station " + station.ChargingPointId,
                 LastUpdated = station.UpdatedOn
             };
         }
