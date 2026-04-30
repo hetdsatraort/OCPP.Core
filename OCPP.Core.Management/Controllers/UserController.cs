@@ -599,6 +599,16 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
+                if (!User.IsInRole("Administrator"))
+                {
+                    return Ok(new AuthResponseDto
+                    {
+                        Success = false,
+                        Message = "Please contact an administrator, something went wrong"
+                    });
+                }
                 if (!ModelState.IsValid)
                 {
                     return Ok(new AuthResponseDto
@@ -631,7 +641,24 @@ namespace OCPP.Core.Management.Controllers
                     previousBalance = lastBalance;
                 }
 
-                decimal newBalance = previousBalance + request.Amount;
+                // For Debit, subtract; for Credit, add
+                decimal newBalance;
+                if (request.TransactionType?.Equals("Debit", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    if (request.Amount > previousBalance)
+                    {
+                        return Ok(new AuthResponseDto
+                        {
+                            Success = false,
+                            Message = "Insufficient balance for debit"
+                        });
+                    }
+                    newBalance = previousBalance - request.Amount;
+                }
+                else
+                {
+                    newBalance = previousBalance + request.Amount;
+                }
 
                 // Create transaction log
                 var walletLog = new WalletTransactionLog
@@ -1110,6 +1137,59 @@ namespace OCPP.Core.Management.Controllers
                     Success = false,
                     Message = "An error occurred while retrieving wallet details"
                 });
+            }
+        }
+
+        /// <summary>
+        /// Admin: Get wallet details for any user (paginated)
+        /// </summary>
+        [HttpGet("admin-wallet-details/{userId}")]
+        [Authorize]
+        public async Task<IActionResult> AdminGetWalletDetails(string userId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        {
+            try
+            {
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                    return Ok(new AuthResponseDto { Success = false, Message = "User not found" });
+
+                var totalCount = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .CountAsync();
+
+                var transactions = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == userId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                decimal currentBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var balance))
+                    currentBalance = balance;
+
+                return Ok(new WalletResponseDto
+                {
+                    Success = true,
+                    Message = "Wallet details retrieved successfully",
+                    Wallet = new WalletDto
+                    {
+                        UserId = userId,
+                        CurrentBalance = currentBalance,
+                        TotalTransactions = totalCount,
+                        RecentTransactions = transactions.Select(MapToWalletTransactionDto).ToList()
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving admin wallet details for user {UserId}", userId);
+                return Ok(new AuthResponseDto { Success = false, Message = "An error occurred while retrieving wallet details" });
             }
         }
 
