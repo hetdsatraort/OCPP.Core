@@ -158,9 +158,16 @@ namespace OCPP.Core.Management
             
             // Add HttpClient for background services
             services.AddHttpClient("SessionLimitMonitor");
-            
+            services.AddHttpClient("GunStatus");
+
+            // Gun status sync — shared between the controller and the background service
+            services.AddScoped<IGunStatusSyncService, GunStatusSyncService>();
+
             // Add Session Limit Monitor Background Service
             services.AddHostedService<SessionLimitMonitorService>();
+
+            // Sync all gun statuses every 10 minutes (configurable via GunStatus:CheckIntervalMinutes)
+            services.AddHostedService<GunStatusService>();
             
             services.AddSwaggerGen(c =>
             {

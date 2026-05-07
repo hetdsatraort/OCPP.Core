@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,57 +11,53 @@ namespace OCPP.Core.Management.Services
     public class GunStatusService : BackgroundService
     {
         private readonly ILogger<GunStatusService> _logger;
-        private readonly IConfiguration _configuration;
-        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly TimeSpan _checkInterval;
 
         public GunStatusService(
             ILogger<GunStatusService> logger,
             IConfiguration configuration,
-            IHttpClientFactory httpClientFactory)
+            IServiceScopeFactory scopeFactory)
         {
             _logger = logger;
-            _configuration = configuration;
-            _httpClientFactory = httpClientFactory;
+            _scopeFactory = scopeFactory;
 
-            // Get check interval from configuration, default to 30 secs
-            var intervalSeconds = _configuration.GetValue<int>("GunStatus:CheckIntervalSeconds", 30);
-            _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
+            var intervalMinutes = configuration.GetValue<int>("GunStatus:CheckIntervalMinutes", 10);
+            _checkInterval = TimeSpan.FromMinutes(intervalMinutes);
 
-            _logger.LogInformation("GunStatusService initialized with check interval: {Interval} seconds", intervalSeconds);
+            _logger.LogInformation(
+                "GunStatusService initialized — will sync every {Interval} minute(s)", intervalMinutes);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // _logger.LogInformation("SessionLimitMonitorService is starting");
-
-            // Wait a bit before starting to ensure the application is fully initialized
+            // Let the application finish starting before the first sync
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
-            // Use PeriodicTimer for efficient periodic execution
             using var timer = new PeriodicTimer(_checkInterval);
 
             try
             {
-                // Execute immediately on start, then wait for timer
                 do
                 {
                     try
                     {
-                        //await CheckSessionLimits(stoppingToken);
+                        using var scope = _scopeFactory.CreateScope();
+                        var syncService = scope.ServiceProvider.GetRequiredService<IGunStatusSyncService>();
+                        await syncService.SyncAllGunsAsync(stoppingToken);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error occurred while checking session limits");
+                        _logger.LogError(ex, "GunStatusService: unhandled error during sync cycle");
                     }
                 }
                 while (await timer.WaitForNextTickAsync(stoppingToken));
             }
             catch (OperationCanceledException)
             {
-                // Expected when cancellation is requested
-                // _logger.LogInformation("SessionLimitMonitorService is stopping");
+                // Normal shutdown — no action needed
             }
         }
     }
 }
+

@@ -9,6 +9,7 @@ using OCPP.Core.Database;
 using OCPP.Core.Database.EVCDTO;
 using OCPP.Core.Management.Models.ChargingHub;
 using OCPP.Core.Management.Models.ChargingSession;
+using OCPP.Core.Management.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,15 +27,18 @@ namespace OCPP.Core.Management.Controllers
         private readonly OCPPCoreContext _dbContext;
         private readonly ILogger<ChargingSessionController> _logger;
         private readonly IConfiguration _config;
+        private readonly IGunStatusSyncService _gunStatusSyncService;
 
         public ChargingSessionController(
             OCPPCoreContext dbContext,
             ILogger<ChargingSessionController> logger,
-            IConfiguration config)
+            IConfiguration config,
+            IGunStatusSyncService gunStatusSyncService)
         {
             _dbContext = dbContext;
             _logger = logger;
             _config = config;
+            _gunStatusSyncService = gunStatusSyncService;
         }
 
         /// <summary>
@@ -864,111 +868,21 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                Database.EVCDTO.ChargingGuns chargingGun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.RecId == chargingGunId && g.Active == 1);
+                var status = await _gunStatusSyncService.SyncGunStatusAsync(chargingGunId);
 
-                var activeSession = await _dbContext.ChargingSessions
-                    .FirstOrDefaultAsync(s => s.ChargingGunId == chargingGun.RecId &&
-                                             s.Active == 1 &&
-                                             s.EndTime == DateTime.MinValue);
-
-                // Always resolve the charging station so we can look up the OCPP connector status
-                Database.EVCDTO.ChargingStation chargingStation = await _dbContext.ChargingStations
-                    .FirstOrDefaultAsync(cs => cs.RecId == chargingGun.ChargingStationId);
-
-                // Check if the charge point has an active WebSocket connection on the OCPP server
-                bool isOnline = false;
-                if (chargingStation != null && !string.IsNullOrEmpty(chargingStation.ChargingPointId))
-                {
-                    var (connSuccess, online, _) = await GetChargePointConnectionStatus(chargingStation.ChargingPointId);
-                    isOnline = connSuccess && online;
-                }
-
-                // If the charger is offline, return immediately with offline status
-                if (!isOnline)
-                {
-                    chargingGun.ChargerStatus = "Offline";
-
-                    var offlineStatus = new ChargingGunStatusDto
-                    {
-                        ChargingGunId = chargingGunId,
-                        ChargingStationId = chargingStation?.RecId,
-                        ChargingStationName = chargingStation?.ChargingPointId,
-                        ConnectorId = chargingGun?.ConnectorId,
-                        Status = "Offline",
-                        CurrentSessionId = activeSession?.RecId,
-                        LastStatusUpdate = DateTime.UtcNow,
-                        IsAvailable = false,
-                        IsOnline = false,
-                        OcppStatus = chargingGun?.ChargerStatus,
-                        LastOcppStatusTime = null,
-                        LastMeter = null,
-                        LastMeterTime = null
-                    };
-
-                    await _dbContext.SaveChangesAsync(); // Save the updated status to the database
-
+                if (status == null)
                     return Ok(new ChargingSessionResponseDto
                     {
-                        Success = true,
-                        Message = "Charging gun is offline",
-                        Data = offlineStatus
+                        Success = false,
+                        Message = "Charging gun not found or inactive"
                     });
-                }
-
-                // Fetch and apply the latest OCPP connector status
-                Database.ConnectorStatus connectorStatus = null;
-                if (chargingStation != null && int.TryParse(chargingGun?.ConnectorId, out int connectorIdInt))
-                {
-                    connectorStatus = await _dbContext.ConnectorStatuses
-                        .FirstOrDefaultAsync(cs => cs.ChargePointId == chargingStation.ChargingPointId
-                            && cs.ConnectorId == connectorIdInt && cs.Active == 1);
-
-                    if (connectorStatus != null && !string.IsNullOrEmpty(connectorStatus.LastStatus))
-                    {
-                        // Sync the gun's stored status with the latest OCPP-reported status
-                        if (chargingGun.ChargerStatus != connectorStatus.LastStatus)
-                        {
-                            chargingGun.ChargerStatus = connectorStatus.LastStatus;
-                            chargingGun.UpdatedOn = DateTime.UtcNow;
-                            await _dbContext.SaveChangesAsync();
-                            _logger.LogInformation(
-                                "GetChargingGunStatus: Updated ChargerStatus for gun {GunId} to '{Status}' from OCPP connector status",
-                                chargingGunId, connectorStatus.LastStatus);
-                        }
-                    }
-                }
-
-                // Derive the effective status: prefer live OCPP status, fall back to session-based
-                string effectiveStatus = connectorStatus?.LastStatus;
-                if (string.IsNullOrEmpty(effectiveStatus))
-                    effectiveStatus = activeSession != null ? "In Use" : "Available";
-
-                bool isAvailable = connectorStatus != null
-                    ? connectorStatus.LastStatus == "Available"
-                    : activeSession == null;
-
-                var status = new ChargingGunStatusDto
-                {
-                    ChargingGunId = chargingGunId,
-                    ChargingStationId = chargingStation?.RecId,
-                    ChargingStationName = chargingStation?.ChargingPointId,
-                    ConnectorId = chargingGun?.ConnectorId,
-                    Status = effectiveStatus,
-                    CurrentSessionId = activeSession?.RecId,
-                    LastStatusUpdate = connectorStatus?.LastStatusTime ?? activeSession?.UpdatedOn ?? DateTime.UtcNow,
-                    IsAvailable = isAvailable,
-                    IsOnline = true,
-                    OcppStatus = connectorStatus?.LastStatus,
-                    LastOcppStatusTime = connectorStatus?.LastStatusTime,
-                    LastMeter = connectorStatus?.LastMeter,
-                    LastMeterTime = connectorStatus?.LastMeterTime
-                };
 
                 return Ok(new ChargingSessionResponseDto
                 {
                     Success = true,
-                    Message = "Charging gun status retrieved successfully",
+                    Message = status.IsOnline
+                        ? "Charging gun status retrieved successfully"
+                        : "Charging gun is offline",
                     Data = status
                 });
             }
