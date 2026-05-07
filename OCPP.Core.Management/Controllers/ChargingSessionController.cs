@@ -2376,6 +2376,30 @@ namespace OCPP.Core.Management.Controllers
                             if (chargingStation == null)
                                 continue;
 
+                            // If an active OCPI partner session owns this EVSE/connector, leave the
+                            // OCPP transaction running — it was started by an external eMSP, not by
+                            // one of our own app sessions, so we must not auto-stop it here.
+                            var chargingGun = await _dbContext.ChargingGuns
+                                .FirstOrDefaultAsync(g => g.ChargingStationId == chargingStation.RecId
+                                    && g.ConnectorId == transaction.ConnectorId.ToString()
+                                    && g.Active == 1);
+
+                            if (chargingGun != null)
+                            {
+                                bool hasActiveOcpiSession = await _dbContext.OcpiPartnerSessions
+                                    .AnyAsync(s => s.EvseUid    == chargingStation.RecId
+                                               && s.ConnectorId == chargingGun.RecId
+                                               && s.Status      == "ACTIVE");
+
+                                if (hasActiveOcpiSession)
+                                {
+                                    _logger.LogInformation(
+                                        $"Check 4: Skipping orphan transaction {transaction.TransactionId} — " +
+                                        $"active OCPI partner session found for EVSE {chargingStation.RecId} / connector {chargingGun.RecId}");
+                                    continue;
+                                }
+                            }
+
                             var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, transaction.ConnectorId);
                             if (ocppResult.Success)
                             {
