@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using OCPI.Contracts;
 using OCPP.Core.Database;
+using OCPP.Core.Database.OCPIDTO;
 
 namespace OCPI.Core.Roaming.Services
 {
@@ -12,20 +14,23 @@ namespace OCPI.Core.Roaming.Services
         private readonly OCPPCoreContext _dbContext;
         private readonly ILogger<OcpiCommandService> _logger;
         private readonly IConfiguration _config;
+        private readonly IServiceScopeFactory _scopeFactory;
 
         public OcpiCommandService(
             OCPPCoreContext dbContext,
             ILogger<OcpiCommandService> logger,
-            IConfiguration config)
+            IConfiguration config,
+            IServiceScopeFactory scopeFactory)
         {
             _dbContext = dbContext;
             _logger = logger;
             _config = config;
+            _scopeFactory = scopeFactory;
         }
 
         // ───────────────────────────── START SESSION ─────────────────────────────
 
-        public async Task<CommandResponseType> HandleStartSessionAsync(OcpiStartSessionCommand command)
+        public async Task<(CommandResponseType Result, string? SessionId)> HandleStartSessionAsync(OcpiStartSessionCommand command)
         {
             _logger.LogInformation("Handling START_SESSION for location={LocationId} evse={EvseUid} connector={ConnectorId}",
                 command.LocationId, command.EvseUid, command.ConnectorId);
@@ -36,17 +41,45 @@ namespace OCPI.Core.Roaming.Services
             if (error != null)
             {
                 _logger.LogWarning("START_SESSION resolution failed: {Error}", error);
-                return CommandResponseType.Rejected;
+                return (CommandResponseType.Rejected, null);
             }
 
-            var tokenUid = command.Token?.Uid ?? "REMOTE";
+            var tokenUid   = command.Token?.Uid ?? "REMOTE";
+            var sessionId  = Guid.NewGuid().ToString();
+            var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
+            var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
 
-            // Fire-and-forget: call OCPP and post result to response_url
+            // Fire-and-forget: call OCPP charger, create session record, then post result to response_url
             _ = Task.Run(async () =>
             {
                 try
                 {
                     var (success, msg) = await CallOcppStartTransactionAsync(chargePointId!, connectorNumber, tokenUid);
+
+                    if (success)
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
+
+                        var session = new OcpiPartnerSession
+                        {
+                            CountryCode  = countryCode,
+                            PartyId      = partyId,
+                            SessionId    = sessionId,
+                            StartDateTime = DateTime.UtcNow,
+                            Status       = "ACTIVE",
+                            LocationId   = command.LocationId,
+                            EvseUid      = command.EvseUid,
+                            ConnectorId  = command.ConnectorId,
+                            TokenUid     = tokenUid,
+                            PartnerCredentialId = null   // admin-initiated — no external partner
+                        };
+
+                        await db.OcpiPartnerSessions.AddAsync(session);
+                        await db.SaveChangesAsync();
+                        _logger.LogInformation("Created OcpiPartnerSession {SessionId}", sessionId);
+                    }
+
                     var resultType = success ? CommandResultType.Accepted : CommandResultType.Rejected;
                     await PostCommandResultAsync(command.ResponseUrl, resultType, msg);
                 }
@@ -56,7 +89,7 @@ namespace OCPI.Core.Roaming.Services
                 }
             });
 
-            return CommandResponseType.Accepted;
+            return (CommandResponseType.Accepted, sessionId);
         }
 
         // ───────────────────────────── STOP SESSION ──────────────────────────────

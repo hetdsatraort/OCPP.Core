@@ -63,7 +63,7 @@ namespace OCPI.Core.Roaming.Services
 
     public interface IOcpiCommandService
     {
-        Task<CommandResponseType> HandleStartSessionAsync(OcpiStartSessionCommand command);
+        Task<(CommandResponseType Result, string? SessionId)> HandleStartSessionAsync(OcpiStartSessionCommand command);
         Task<CommandResponseType> HandleStopSessionAsync(OcpiStopSessionCommand command);
         Task<CommandResponseType> HandleReserveNowAsync(OcpiReserveNowCommand command);
         Task<CommandResponseType> HandleCancelReservationAsync(OcpiCancelReservationCommand command);

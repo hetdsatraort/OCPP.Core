@@ -873,7 +873,8 @@ namespace OCPP.Core.Database
                 entity.HasOne(d => d.PartnerCredential)
                     .WithMany()
                     .HasForeignKey(d => d.PartnerCredentialId)
-                    .OnDelete(DeleteBehavior.Cascade)
+                    .IsRequired(false)
+                    .OnDelete(DeleteBehavior.SetNull)
                     .HasConstraintName("FK_OcpiPartnerSession_PartnerCredential");
             });
 

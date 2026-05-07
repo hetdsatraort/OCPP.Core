@@ -95,9 +95,9 @@ namespace OCPP.Core.Database.OCPIDTO
         public decimal? TotalCost { get; set; }
 
         /// <summary>
-        /// Partner credential ID (foreign key)
+        /// Partner credential ID (foreign key) — null for locally-initiated admin sessions
         /// </summary>
-        public int PartnerCredentialId { get; set; }
+        public int? PartnerCredentialId { get; set; }
 
         /// <summary>
         /// When was this record created locally

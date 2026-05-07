@@ -32,7 +32,7 @@ namespace OCPI.Core.Roaming.Controllers
             OcpiValidate(command);
             _logger.LogInformation("Received START_SESSION for location={LocationId}", command.LocationId);
 
-            var result = await _commandService.HandleStartSessionAsync(command);
+            var (result, _) = await _commandService.HandleStartSessionAsync(command);
 
             return OcpiOk(new OcpiCommandResponse
             {

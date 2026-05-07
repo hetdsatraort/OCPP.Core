@@ -165,11 +165,12 @@ namespace OCPI.Core.Roaming.Controllers
                 "[Admin] START_SESSION location={LocationId} evse={EvseUid} connector={ConnectorId} tag={Tag}",
                 request.LocationId, request.EvseUid, request.ConnectorId, request.TagUid);
 
-            var result = await _commandService.HandleStartSessionAsync(command);
+            var (result, sessionId) = await _commandService.HandleStartSessionAsync(command);
             return Ok(new
             {
-                success = result == CommandResponseType.Accepted,
-                result  = result.ToString()
+                success   = result == CommandResponseType.Accepted,
+                result    = result.ToString(),
+                sessionId = result == CommandResponseType.Accepted ? sessionId : null
             });
         }
 
