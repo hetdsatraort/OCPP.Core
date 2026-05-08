@@ -2314,7 +2314,7 @@ namespace OCPP.Core.Management.Controllers
                                 }
                             }
 
-                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, transaction.ConnectorId);
+                            var ocppResult = await CallOCPPStopTransaction(transaction.ChargePointId, transaction.ConnectorId);
                             if (ocppResult.Success)
                             {
                                 orphanTransactionsStopped.Add($"Orphan Txn {transaction.TransactionId} at {chargingStation.ChargingPointId}");

@@ -32,11 +32,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _scopeFactory = scopeFactory;
             _logger       = logger;
 
-            var intervalMinutes = configuration.GetValue<int>("OCPI:OrphanCheckIntervalMinutes", 5);
-            var timeoutMinutes  = configuration.GetValue<int>("OCPI:OrphanTimeoutMinutes", 30);
+            var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 30);
+            var timeouSeconds  = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
 
-            _checkInterval = TimeSpan.FromMinutes(intervalMinutes);
-            _orphanTimeout = TimeSpan.FromMinutes(timeoutMinutes);
+            _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
+            _orphanTimeout = TimeSpan.FromSeconds(timeouSeconds);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
