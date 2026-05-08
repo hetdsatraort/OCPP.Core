@@ -49,6 +49,18 @@ namespace OCPI.Core.Roaming.Services
             var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
             var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
 
+            // Snapshot the highest TransactionId for this chargepoint/connector BEFORE sending the
+            // OCPP command — used to identify the new transaction that appears after StartTransaction.
+            int baselineTransactionId = await _dbContext.Transactions
+                .Where(t => t.ChargePointId == chargePointId && t.ConnectorId == connectorNumber)
+                .OrderByDescending(t => t.TransactionId)
+                .Select(t => t.TransactionId)
+                .FirstOrDefaultAsync();
+
+            _logger.LogInformation(
+                "START_SESSION baseline TransactionId for {ChargePointId}/{ConnectorNumber}: {Baseline}",
+                chargePointId, connectorNumber, baselineTransactionId);
+
             // Fire-and-forget: call OCPP charger, create session record, then post result to response_url
             _ = Task.Run(async () =>
             {
@@ -61,23 +73,62 @@ namespace OCPI.Core.Roaming.Services
                         using var scope = _scopeFactory.CreateScope();
                         var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
 
+                        // Poll for the new OCPP transaction row (up to 16 × 1.5 s = 24 s)
+                        OCPP.Core.Database.Transaction? ocppTransaction = null;
+                        const int maxPollAttempts = 16;
+                        const int pollIntervalMs  = 1500;
+
+                        for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
+                        {
+                            await Task.Delay(pollIntervalMs);
+
+                            ocppTransaction = await db.Transactions
+                                .Where(t => t.ChargePointId == chargePointId &&
+                                            t.ConnectorId   == connectorNumber &&
+                                            t.TransactionId > baselineTransactionId)
+                                .OrderByDescending(t => t.TransactionId)
+                                .FirstOrDefaultAsync();
+
+                            if (ocppTransaction != null)
+                            {
+                                _logger.LogInformation(
+                                    "OCPI START_SESSION: new transaction found on attempt {Attempt}: TransactionId={TxId}",
+                                    attempt, ocppTransaction.TransactionId);
+                                break;
+                            }
+
+                            _logger.LogDebug(
+                                "OCPI START_SESSION poll {Attempt}/{Max}: no new transaction yet for {ChargePointId}/{ConnectorNumber}",
+                                attempt, maxPollAttempts, chargePointId, connectorNumber);
+                        }
+
+                        if (ocppTransaction == null)
+                        {
+                            _logger.LogWarning(
+                                "OCPI START_SESSION: no transaction appeared after {Max} attempts for {ChargePointId}/{ConnectorNumber} — session {SessionId} created without TransactionId",
+                                maxPollAttempts, chargePointId, connectorNumber, sessionId);
+                        }
+
                         var session = new OcpiPartnerSession
                         {
-                            CountryCode  = countryCode,
-                            PartyId      = partyId,
-                            SessionId    = sessionId,
-                            StartDateTime = DateTime.Now,
-                            Status       = "ACTIVE",
-                            LocationId   = command.LocationId,
-                            EvseUid      = command.EvseUid,
-                            ConnectorId  = command.ConnectorId,
-                            TokenUid     = tokenUid,
+                            CountryCode   = countryCode,
+                            PartyId       = partyId,
+                            SessionId     = sessionId,
+                            StartDateTime = ocppTransaction?.StartTime ?? DateTime.UtcNow,
+                            Status        = "ACTIVE",
+                            LocationId    = command.LocationId,
+                            EvseUid       = command.EvseUid,
+                            ConnectorId   = command.ConnectorId,
+                            TokenUid      = tokenUid,
+                            TransactionId = ocppTransaction?.TransactionId,
                             PartnerCredentialId = null   // admin-initiated — no external partner
                         };
 
                         await db.OcpiPartnerSessions.AddAsync(session);
                         await db.SaveChangesAsync();
-                        _logger.LogInformation("Created OcpiPartnerSession {SessionId}", sessionId);
+                        _logger.LogInformation(
+                            "Created OcpiPartnerSession {SessionId} with TransactionId={TxId}",
+                            sessionId, ocppTransaction?.TransactionId.ToString() ?? "none");
                     }
 
                     var resultType = success ? CommandResultType.Accepted : CommandResultType.Rejected;

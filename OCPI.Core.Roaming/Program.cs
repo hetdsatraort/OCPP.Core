@@ -29,6 +29,7 @@ builder.Services.AddScoped<OCPI.Core.Roaming.Services.IChargingSessionService, O
 
 // Register OCPI Background Service
 builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiSyncBackgroundService>();
+builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiOrphanSessionService>();
 
 // Add CORS
 builder.Services.AddCors(options =>

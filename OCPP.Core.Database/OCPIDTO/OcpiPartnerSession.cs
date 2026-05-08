@@ -100,6 +100,11 @@ namespace OCPP.Core.Database.OCPIDTO
         public int? PartnerCredentialId { get; set; }
 
         /// <summary>
+        /// OCPP Transaction ID bound to this session (null until the chargepoint fires StartTransaction)
+        /// </summary>
+        public int? TransactionId { get; set; }
+
+        /// <summary>
         /// When was this record created locally
         /// </summary>
         public DateTime CreatedOn { get; set; } = DateTime.UtcNow;

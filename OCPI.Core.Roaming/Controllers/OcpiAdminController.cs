@@ -228,16 +228,16 @@ namespace OCPI.Core.Roaming.Controllers
 
         // ── Sessions ───────────────────────────────────────────────────────────
 
-        /// <summary>List all active charging sessions (our CPO sessions)</summary>
+        /// <summary>List all active OCPI partner sessions</summary>
         [HttpGet("sessions")]
         public async Task<IActionResult> GetActiveSessions()
         {
             var sessions = await _dbContext.OcpiPartnerSessions
-                .Where(s => s.EndDateTime == DateTime.MinValue || s.EndDateTime == null)
+                .Where(s => s.Status == "ACTIVE")
                 .ToListAsync();
 
             var stationIds = sessions.Select(s => s.EvseUid).Distinct().ToList();
-            var gunIds = sessions.Select(s => s.ConnectorId).Distinct().ToList();
+            var gunIds     = sessions.Select(s => s.ConnectorId).Distinct().ToList();
 
             var stations = await _dbContext.ChargingStations
                 .Where(st => stationIds.Contains(st.RecId))
@@ -251,43 +251,31 @@ namespace OCPI.Core.Roaming.Controllers
                 .Where(g => gunIds.Contains(g.RecId))
                 .ToListAsync();
 
-            // Also include active OCPI partner sessions
-            var ocpiSessions = await _dbContext.OcpiPartnerSessions
-                .Where(s => s.Status == "ACTIVE")
-                .ToListAsync();
-
             var result = sessions.Select(s =>
             {
                 var station = stations.FirstOrDefault(st => st.RecId == s.EvseUid);
-                var hub = hubs.FirstOrDefault(h => h.RecId == station?.ChargingHubId);
-                var gun = guns.FirstOrDefault(g => g.RecId == s.ConnectorId);
-                var ocpiLink = ocpiSessions.FirstOrDefault(o => o.EvseUid == station?.RecId
-                                                             && o.ConnectorId == gun?.RecId);
+                var hub     = hubs.FirstOrDefault(h => h.RecId == station?.ChargingHubId);
+                var gun     = guns.FirstOrDefault(g => g.RecId == s.ConnectorId);
 
-                s.TotalEnergy ??= 0;
-                double.TryParse(s.TotalEnergy.Value.ToString(), out double kwh);
-                s.TotalCost ??= 0;
-                double.TryParse(s.TotalCost.Value.ToString(), out double cost);
-
-                if (gun != null)
-                    double.TryParse(gun.ChargerTariff, out double tariff);
+                double kwh  = (double)(s.TotalEnergy ?? 0m);
+                double cost = (double)(s.TotalCost   ?? 0m);
 
                 return new
                 {
-                    sessionId = s.SessionId,
-                    ocpiSessionId = ocpiLink?.SessionId,
-                    status = "ACTIVE",
+                    sessionId     = s.SessionId,
+                    transactionId = s.TransactionId,
+                    status        = s.Status,
                     startDateTime = s.StartDateTime,
-                    locationId = station?.ChargingHubId,
-                    locationName = hub?.ChargingHubName,
-                    evseId = station?.RecId,
-                    evseName = station?.ChargingPointId,
-                    connectorId = gun?.ConnectorId,
-                    kwh = Math.Round(kwh, 3),
-                    cost = Math.Round(cost, 2),
-                    tariff = gun != null ? gun.ChargerTariff : "NA",
-                    tokenUid = s.TokenUid,
-                    lastUpdated = s.LastUpdated
+                    locationId    = station?.ChargingHubId,
+                    locationName  = hub?.ChargingHubName,
+                    evseId        = station?.RecId,
+                    evseName      = station?.ChargingPointId,
+                    connectorId   = gun?.ConnectorId,
+                    kwh           = Math.Round(kwh, 3),
+                    cost          = Math.Round(cost, 2),
+                    tariff        = gun?.ChargerTariff ?? "NA",
+                    tokenUid      = s.TokenUid,
+                    lastUpdated   = s.LastUpdated
                 };
             });
 
@@ -319,35 +307,47 @@ namespace OCPI.Core.Roaming.Controllers
                 liveMeter = cs?.LastMeter;
             }
 
-            double.TryParse(s.TotalEnergy.Value.ToString(), out double storedKwh);
-            double kwh = storedKwh;
+            double kwh  = (double)(s.TotalEnergy ?? 0m);
+            double cost = (double)(s.TotalCost   ?? 0m);
 
-            double.TryParse(s.TotalCost.Value.ToString(), out double storedCost);
-            double cost = storedCost;
+            // If we have a live meter and a transaction, calculate live kWh from meter diff
+            if (liveMeter.HasValue && s.TransactionId.HasValue)
+            {
+                var tx = await _dbContext.Transactions
+                    .FirstOrDefaultAsync(t => t.TransactionId == s.TransactionId.Value);
 
-            var ocpiLink = await _dbContext.OcpiPartnerSessions
-                .FirstOrDefaultAsync(o => o.EvseUid == station.RecId && o.ConnectorId == gun.RecId && o.Status == "ACTIVE");
+                if (tx != null && liveMeter.Value >= tx.MeterStart)
+                {
+                    kwh = Math.Round(liveMeter.Value - tx.MeterStart, 3);
+                    if (gun != null)
+                    {
+                        double.TryParse(gun.ChargerTariff, out double tariffVal);
+                        cost = Math.Round(kwh * tariffVal * 1.18, 2);
+                    }
+                }
+            }
 
             return Ok(new
             {
                 success = true,
                 data = new
                 {
-                    sessionId = s.SessionId,
-                    ocpiSessionId = ocpiLink?.SessionId,
-                    status = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? "ACTIVE" : "COMPLETED",
+                    sessionId     = s.SessionId,
+                    transactionId = s.TransactionId,
+                    status        = s.Status,
                     startDateTime = s.StartDateTime,
-                    endDateTime = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? (DateTime?)null : s.EndDateTime,
-                    locationId = station?.ChargingHubId,
-                    locationName = hub?.ChargingHubName,
-                    evseId = station?.RecId,
-                    evseName = station?.ChargingPointId,
-                    connectorId = gun?.ConnectorId,
+                    endDateTime   = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? (DateTime?)null : s.EndDateTime,
+                    locationId    = station?.ChargingHubId,
+                    locationName  = hub?.ChargingHubName,
+                    evseId        = station?.RecId,
+                    evseName      = station?.ChargingPointId,
+                    connectorId   = gun?.ConnectorId,
                     kwh,
                     cost,
+                    tariff        = gun?.ChargerTariff ?? "NA",
                     liveMeter,
-                    tokenUid = s.TokenUid,
-                    lastUpdated = s.LastUpdated
+                    tokenUid      = s.TokenUid,
+                    lastUpdated   = s.LastUpdated
                 }
             });
         }
