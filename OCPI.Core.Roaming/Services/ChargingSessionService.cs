@@ -22,8 +22,8 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<List<OcpiSession>> GetActiveOcpiSessionsAsync()
         {
-            var activeSessions = await _dbContext.ChargingSessions
-                .Where(s => s.EndTime == DateTime.MinValue && s.Active == 1)
+            var activeSessions = await _dbContext.OcpiPartnerSessions
+                .Where(s => s.StartDateTime == DateTime.MinValue)
                 .ToListAsync();
 
             var sessions = new List<OcpiSession>();
@@ -40,8 +40,8 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<OcpiSession?> GetOcpiSessionAsync(string sessionId)
         {
-            var cs = await _dbContext.ChargingSessions
-                .FirstOrDefaultAsync(s => s.RecId == sessionId && s.Active == 1);
+            var cs = await _dbContext.OcpiPartnerSessions
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId );
 
             if (cs == null)
                 return null;
@@ -98,41 +98,41 @@ namespace OCPI.Core.Roaming.Services
 
         // ─────────────────────────── MAPPING ─────────────────────────────────────
 
-        private async Task<OcpiSession?> MapToOcpiSessionAsync(OCPP.Core.Database.EVCDTO.ChargingSession cs)
+        private async Task<OcpiSession?> MapToOcpiSessionAsync(OCPP.Core.Database.OCPIDTO.OcpiPartnerSession ops)
         {
             try
             {
                 var station = await _dbContext.ChargingStations
-                    .FirstOrDefaultAsync(s => s.RecId == cs.ChargingStationID);
+                    .FirstOrDefaultAsync(s => s.RecId == ops.EvseUid); 
 
                 var gun = await _dbContext.ChargingGuns
-                    .FirstOrDefaultAsync(g => g.RecId == cs.ChargingGunId);
+                    .FirstOrDefaultAsync(g => g.RecId == ops.ConnectorId);
 
                 var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
                 var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
 
-                var isActive = cs.EndTime == DateTime.MinValue;
+                var isActive = ops.EndDateTime == DateTime.MinValue;
 
                 return new OcpiSession
                 {
                     CountryCode           = Enum.Parse<CountryCode>(countryCode),
                     PartyId               = partyId,
-                    Id                    = cs.RecId,
-                    StartDateTime         = cs.StartTime,
-                    EndDateTime           = isActive ? null : cs.EndTime,
-                    Kwh                   = Convert.ToDecimal(cs.EnergyTransmitted) > 0 ? Convert.ToDecimal(cs.EnergyTransmitted) : 0m,
+                    Id                    = ops.SessionId,
+                    StartDateTime         = ops.StartDateTime,
+                    EndDateTime           = isActive ? null : ops.EndDateTime,
+                    Kwh                   = Convert.ToDecimal(ops.TotalEnergy) > 0 ? Convert.ToDecimal(ops.TotalEnergy) : 0m,
                     AuthMethod            = AuthMethodType.Command,
                     LocationId            = station?.ChargingHubId,
                     EvseId                = station?.RecId,
                     ConnectorId           = gun?.ConnectorId,
                     Currency              = CurrencyCode.IndianRupee,
                     Status                = isActive ? SessionStatus.Active : SessionStatus.Completed,
-                    LastUpdated           = cs.UpdatedOn == DateTime.MinValue ? cs.CreatedOn : cs.UpdatedOn
+                    LastUpdated           = ops.LastUpdated == DateTime.MinValue ? ops.CreatedOn : ops.LastUpdated
                 };
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error mapping ChargingSession {SessionId} to OcpiSession", cs.RecId);
+                _logger.LogError(ex, "Error mapping ChargingSession {SessionId} to OcpiSession", ops.SessionId);
                 return null;
             }
         }
