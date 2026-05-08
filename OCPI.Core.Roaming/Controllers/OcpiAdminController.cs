@@ -233,7 +233,7 @@ namespace OCPI.Core.Roaming.Controllers
         public async Task<IActionResult> GetActiveSessions()
         {
             var sessions = await _dbContext.OcpiPartnerSessions
-                .Where(s => s.EndDateTime == DateTime.MinValue)
+                .Where(s => s.EndDateTime == DateTime.MinValue || s.EndDateTime == null)
                 .ToListAsync();
 
             var stationIds = sessions.Select(s => s.EvseUid).Distinct().ToList();
@@ -335,9 +335,9 @@ namespace OCPI.Core.Roaming.Controllers
                 {
                     sessionId = s.SessionId,
                     ocpiSessionId = ocpiLink?.SessionId,
-                    status = s.EndDateTime == DateTime.MinValue ? "ACTIVE" : "COMPLETED",
+                    status = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? "ACTIVE" : "COMPLETED",
                     startDateTime = s.StartDateTime,
-                    endDateTime = s.EndDateTime == DateTime.MinValue ? (DateTime?)null : s.EndDateTime,
+                    endDateTime = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? (DateTime?)null : s.EndDateTime,
                     locationId = station?.ChargingHubId,
                     locationName = hub?.ChargingHubName,
                     evseId = station?.RecId,

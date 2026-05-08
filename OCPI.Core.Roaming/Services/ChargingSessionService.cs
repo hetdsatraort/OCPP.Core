@@ -111,7 +111,7 @@ namespace OCPI.Core.Roaming.Services
                 var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
                 var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
 
-                var isActive = ops.EndDateTime == DateTime.MinValue;
+                var isActive = ops.EndDateTime == DateTime.MinValue || ops.EndDateTime == null;
 
                 return new OcpiSession
                 {

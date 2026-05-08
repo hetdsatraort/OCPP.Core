@@ -66,7 +66,7 @@ namespace OCPI.Core.Roaming.Services
                             CountryCode  = countryCode,
                             PartyId      = partyId,
                             SessionId    = sessionId,
-                            StartDateTime = DateTime.UtcNow,
+                            StartDateTime = DateTime.Now,
                             Status       = "ACTIVE",
                             LocationId   = command.LocationId,
                             EvseUid      = command.EvseUid,
