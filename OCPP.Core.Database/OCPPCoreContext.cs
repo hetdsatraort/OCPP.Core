@@ -65,6 +65,8 @@ namespace OCPP.Core.Database
         public virtual DbSet<OCPIDTO.OcpiPartnerEvse> OcpiPartnerEvses { get; set; }
         public virtual DbSet<OCPIDTO.OcpiPartnerConnector> OcpiPartnerConnectors { get; set; }
         public virtual DbSet<OCPIDTO.OcpiPartnerSession> OcpiPartnerSessions { get; set; }
+        /// <summary>Sessions hosted at OUR stations for eMSP roaming users (CPO role).</summary>
+        public virtual DbSet<OCPIDTO.OcpiHostedSession> OcpiHostedSessions { get; set; }
         public virtual DbSet<OCPIDTO.OcpiCdr> OcpiCdrs { get; set; }
         public virtual DbSet<OCPIDTO.OcpiTariff> OcpiTariffs { get; set; }
         public virtual DbSet<OCPIDTO.OcpiToken> OcpiTokens { get; set; }
@@ -869,7 +871,6 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.Currency).HasMaxLength(3);
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
-                entity.Property(e => e.TransactionId);
 
                 entity.HasOne(d => d.PartnerCredential)
                     .WithMany()
@@ -877,6 +878,41 @@ namespace OCPP.Core.Database
                     .IsRequired(false)
                     .OnDelete(DeleteBehavior.SetNull)
                     .HasConstraintName("FK_OcpiPartnerSession_PartnerCredential");
+            });
+
+            // ── CPO-role: sessions at OUR stations served to eMSP partners ─────────
+            modelBuilder.Entity<OCPIDTO.OcpiHostedSession>(entity =>
+            {
+                entity.ToTable("OcpiHostedSession");
+                entity.HasKey(e => e.Id);
+
+                entity.HasIndex(e => e.SessionId)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiHostedSession_SessionId");
+
+                entity.HasIndex(e => e.TransactionId)
+                    .HasDatabaseName("IX_OcpiHostedSession_TransactionId");
+
+                entity.HasIndex(e => e.Status)
+                    .HasDatabaseName("IX_OcpiHostedSession_Status");
+
+                entity.Property(e => e.SessionId).IsRequired().HasMaxLength(36);
+                entity.Property(e => e.ChargePointId).IsRequired().HasMaxLength(100);
+                entity.Property(e => e.EvseUid).HasMaxLength(36);
+                entity.Property(e => e.ConnectorId).HasMaxLength(36);
+                entity.Property(e => e.TokenUid).HasMaxLength(36);
+                entity.Property(e => e.LocationId).HasMaxLength(36);
+                entity.Property(e => e.Status).HasMaxLength(50);
+                entity.Property(e => e.Currency).HasMaxLength(3);
+                entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
+
+                entity.HasOne(d => d.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(d => d.PartnerCredentialId)
+                    .IsRequired(false)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .HasConstraintName("FK_OcpiHostedSession_PartnerCredential");
             });
 
             modelBuilder.Entity<OCPIDTO.OcpiCdr>(entity =>

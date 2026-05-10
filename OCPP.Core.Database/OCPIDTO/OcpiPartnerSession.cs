@@ -95,14 +95,9 @@ namespace OCPP.Core.Database.OCPIDTO
         public decimal? TotalCost { get; set; }
 
         /// <summary>
-        /// Partner credential ID (foreign key) — null for locally-initiated admin sessions
+        /// Partner credential ID (foreign key) — identifies which CPO partner sent this session data.
         /// </summary>
         public int? PartnerCredentialId { get; set; }
-
-        /// <summary>
-        /// OCPP Transaction ID bound to this session (null until the chargepoint fires StartTransaction)
-        /// </summary>
-        public int? TransactionId { get; set; }
 
         /// <summary>
         /// When was this record created locally

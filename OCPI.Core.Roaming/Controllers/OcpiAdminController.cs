@@ -228,16 +228,20 @@ namespace OCPI.Core.Roaming.Controllers
 
         // ── Sessions ───────────────────────────────────────────────────────────
 
-        /// <summary>List all active OCPI partner sessions</summary>
+        /// <summary>
+        /// List active sessions at OUR charging stations (CPO role).
+        /// For sessions our users do at partner CPO stations see the partner-sessions endpoint.
+        /// </summary>
         [HttpGet("sessions")]
         public async Task<IActionResult> GetActiveSessions()
         {
-            var sessions = await _dbContext.OcpiPartnerSessions
+            // CPO role: sessions hosted at our stations
+            var sessions = await _dbContext.OcpiHostedSessions
                 .Where(s => s.Status == "ACTIVE")
                 .ToListAsync();
 
-            var stationIds = sessions.Select(s => s.EvseUid).Distinct().ToList();
-            var gunIds     = sessions.Select(s => s.ConnectorId).Distinct().ToList();
+            var stationIds = sessions.Select(s => s.EvseUid).Where(x => x != null).Distinct().ToList();
+            var gunIds     = sessions.Select(s => s.ConnectorId).Where(x => x != null).Distinct().ToList();
 
             var stations = await _dbContext.ChargingStations
                 .Where(st => stationIds.Contains(st.RecId))
@@ -282,11 +286,23 @@ namespace OCPI.Core.Roaming.Controllers
             return Ok(new { success = true, data = result });
         }
 
-        /// <summary>Get a single active session with live meter reading</summary>
+        /// <summary>List sessions our users did at partner CPO stations (eMSP role).</summary>
+        [HttpGet("partner-sessions")]
+        public async Task<IActionResult> GetPartnerSessions()
+        {
+            var sessions = await _dbContext.OcpiPartnerSessions
+                .OrderByDescending(s => s.LastUpdated)
+                .Take(200)
+                .ToListAsync();
+
+            return Ok(new { success = true, data = sessions });
+        }
+
+        /// <summary>Get a single hosted session (CPO role) with live meter reading</summary>
         [HttpGet("sessions/{sessionId}")]
         public async Task<IActionResult> GetSession([FromRoute] string sessionId)
         {
-            var s = await _dbContext.OcpiPartnerSessions
+            var s = await _dbContext.OcpiHostedSessions
                 .FirstOrDefaultAsync(cs => cs.SessionId == sessionId);
 
             if (s == null)
@@ -296,16 +312,13 @@ namespace OCPI.Core.Roaming.Controllers
             var hub = station != null ? await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == station.ChargingHubId) : null;
             var gun = await _dbContext.ChargingGuns.FirstOrDefaultAsync(g => g.RecId == s.ConnectorId);
 
-            // Live meter from OCPP connector status
+            // Live meter from OCPP connector status — OcpiHostedSession stores ChargePointId/ConnectorNumber directly
             double? liveMeter = null;
-            if (station != null && int.TryParse(gun?.ConnectorId, out var connNum))
-            {
-                var cs = await _dbContext.ConnectorStatuses
-                    .FirstOrDefaultAsync(c => c.ChargePointId == station.ChargingPointId
-                                           && c.ConnectorId == connNum
-                                           && c.Active == 1);
-                liveMeter = cs?.LastMeter;
-            }
+            var connStatus = await _dbContext.ConnectorStatuses
+                .FirstOrDefaultAsync(c => c.ChargePointId == s.ChargePointId
+                                       && c.ConnectorId   == s.ConnectorNumber
+                                       && c.Active        == 1);
+            liveMeter = connStatus?.LastMeter;
 
             double kwh  = (double)(s.TotalEnergy ?? 0m);
             double cost = (double)(s.TotalCost   ?? 0m);
@@ -336,7 +349,7 @@ namespace OCPI.Core.Roaming.Controllers
                     transactionId = s.TransactionId,
                     status        = s.Status,
                     startDateTime = s.StartDateTime,
-                    endDateTime   = (s.EndDateTime == DateTime.MinValue || s.EndDateTime == null) ? (DateTime?)null : s.EndDateTime,
+                    endDateTime   = (s.EndDateTime == null) ? (DateTime?)null : s.EndDateTime,
                     locationId    = station?.ChargingHubId,
                     locationName  = hub?.ChargingHubName,
                     evseId        = station?.RecId,

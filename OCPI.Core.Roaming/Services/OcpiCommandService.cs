@@ -109,25 +109,35 @@ namespace OCPI.Core.Roaming.Services
                                 maxPollAttempts, chargePointId, connectorNumber, sessionId);
                         }
 
-                        var session = new OcpiPartnerSession
+                        // Resolve chargepoint → station → gun so EvseUid/ConnectorId are set correctly.
+                        var station = await db.ChargingStations
+                            .FirstOrDefaultAsync(s => s.ChargingPointId == chargePointId);
+
+                        var gun = station != null
+                            ? await db.ChargingGuns
+                                .FirstOrDefaultAsync(g => g.ChargingStationId == station.RecId
+                                                       && g.ConnectorId == connectorNumber.ToString())
+                            : null;
+
+                        var hostedSession = new OcpiHostedSession
                         {
-                            CountryCode   = countryCode,
-                            PartyId       = partyId,
-                            SessionId     = sessionId,
-                            StartDateTime = ocppTransaction?.StartTime ?? DateTime.UtcNow,
-                            Status        = "ACTIVE",
-                            LocationId    = command.LocationId,
-                            EvseUid       = command.EvseUid,
-                            ConnectorId   = command.ConnectorId,
-                            TokenUid      = tokenUid,
-                            TransactionId = ocppTransaction?.TransactionId,
-                            PartnerCredentialId = null   // admin-initiated — no external partner
+                            SessionId       = sessionId,
+                            TransactionId   = ocppTransaction?.TransactionId,
+                            ChargePointId   = chargePointId!,
+                            ConnectorNumber = connectorNumber,
+                            EvseUid         = station?.RecId ?? command.EvseUid,
+                            ConnectorId     = gun?.RecId     ?? command.ConnectorId,
+                            TokenUid        = tokenUid,
+                            LocationId      = command.LocationId,
+                            StartDateTime   = ocppTransaction?.StartTime ?? DateTime.UtcNow,
+                            Status          = "ACTIVE",
+                            PartnerCredentialId = null   // resolved separately if roaming token
                         };
 
-                        await db.OcpiPartnerSessions.AddAsync(session);
+                        await db.OcpiHostedSessions.AddAsync(hostedSession);
                         await db.SaveChangesAsync();
                         _logger.LogInformation(
-                            "Created OcpiPartnerSession {SessionId} with TransactionId={TxId}",
+                            "Created OcpiHostedSession {SessionId} with TransactionId={TxId}",
                             sessionId, ocppTransaction?.TransactionId.ToString() ?? "none");
                     }
 
@@ -149,8 +159,8 @@ namespace OCPI.Core.Roaming.Services
         {
             _logger.LogInformation("Handling STOP_SESSION for session={SessionId}", command.SessionId);
 
-            // Find the active charging session
-            var ocpiSession = await _dbContext.OcpiPartnerSessions
+            // Find the hosted session (CPO-role: session at our station)
+            var ocpiSession = await _dbContext.OcpiHostedSessions
                 .FirstOrDefaultAsync(s => s.SessionId == command.SessionId);
 
             if (ocpiSession == null)

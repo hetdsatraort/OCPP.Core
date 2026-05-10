@@ -22,8 +22,9 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<List<OcpiSession>> GetActiveOcpiSessionsAsync()
         {
-            var activeSessions = await _dbContext.OcpiPartnerSessions
-                .Where(s => s.StartDateTime == DateTime.MinValue)
+            // CPO role: sessions at OUR stations. Active = no StopTime yet.
+            var activeSessions = await _dbContext.OcpiHostedSessions
+                .Where(s => s.Status == "ACTIVE")
                 .ToListAsync();
 
             var sessions = new List<OcpiSession>();
@@ -40,8 +41,9 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<OcpiSession?> GetOcpiSessionAsync(string sessionId)
         {
-            var cs = await _dbContext.OcpiPartnerSessions
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId );
+            // CPO role: look up our hosted session table only
+            var cs = await _dbContext.OcpiHostedSessions
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId);
 
             if (cs == null)
                 return null;
@@ -98,7 +100,7 @@ namespace OCPI.Core.Roaming.Services
 
         // ─────────────────────────── MAPPING ─────────────────────────────────────
 
-        private async Task<OcpiSession?> MapToOcpiSessionAsync(OCPP.Core.Database.OCPIDTO.OcpiPartnerSession ops)
+        private async Task<OcpiSession?> MapToOcpiSessionAsync(OCPP.Core.Database.OCPIDTO.OcpiHostedSession ops)
         {
             try
             {

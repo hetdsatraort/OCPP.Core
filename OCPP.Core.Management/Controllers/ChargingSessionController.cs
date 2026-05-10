@@ -2402,9 +2402,9 @@ namespace OCPP.Core.Management.Controllers
                         .Where(cs => orphanTxnChargePointIds.Contains(cs.ChargingPointId))
                         .ToDictionaryAsync(cs => cs.ChargingPointId, cs => cs);
 
-                    // Bulk load OCPI partner sessions for the check
+                    // Bulk load OCPI hosted sessions for the check
                     var orphanTxnStationIds = orphanTxnStationsDict.Values.Select(s => s.RecId).ToList();
-                    var ocpiPartnerSessionsDict = await _dbContext.OcpiPartnerSessions
+                    var ocpiHostedSessionsDict = await _dbContext.OcpiHostedSessions
                         .Where(s => orphanTxnStationIds.Contains(s.EvseUid) && s.Status == "ACTIVE")
                         .ToListAsync()
                         .ContinueWith(sessions => sessions.Result
@@ -2426,15 +2426,15 @@ namespace OCPP.Core.Management.Controllers
 
                             if (matchingGun != null)
                             {
-                                // If an active OCPI partner session owns this EVSE/connector, leave the
+                                // If an active OCPI hosted session owns this EVSE/connector, leave the
                                 // OCPP transaction running — it was started by an external eMSP, not by
                                 // one of our own app sessions, so we must not auto-stop it here.
                                 string ocpiKey = $"{chargingStation.RecId}_{matchingGun.RecId}";
-                                if (ocpiPartnerSessionsDict.ContainsKey(ocpiKey))
+                                if (ocpiHostedSessionsDict.ContainsKey(ocpiKey))
                                 {
                                     _logger.LogInformation(
                                         "Check 4: Skipping orphan transaction {TransactionId} — " +
-                                        "active OCPI partner session found for EVSE {EvseUid} / connector {ConnectorId}",
+                                        "active OCPI hosted session found for EVSE {EvseUid} / connector {ConnectorId}",
                                         transaction.TransactionId, chargingStation.RecId, matchingGun.RecId);
                                     continue;
                                 }
