@@ -1879,11 +1879,11 @@ namespace OCPP.Core.Management.Controllers
 
                 // Create lookup dictionaries for O(1) access
                 var stationsDict = await _dbContext.ChargingStations
-                    .Where(cs => stationIds.Contains(cs.RecId))
+                    //.Where(cs => stationIds.Contains(cs.RecId))
                     .ToDictionaryAsync(cs => cs.RecId, cs => cs);
 
                 var gunsDict = await _dbContext.ChargingGuns
-                    .Where(cg => gunIds.Contains(cg.RecId))
+                    //.Where(cg => gunIds.Contains(cg.RecId))
                     .ToDictionaryAsync(cg => cg.RecId, cg => cg);
 
                 var transactionsDict = await _dbContext.Transactions
@@ -3287,7 +3287,7 @@ namespace OCPP.Core.Management.Controllers
                 result.LimitStatus.EnergyConsumed = Math.Round(energyConsumed, 2);
             }
 
-            if (double.TryParse(session.ChargingTariff, out double tariff))
+            if (double.TryParse(chargingGun.ChargerTariff, out double tariff))
             {
                 currentCost = energyConsumed * tariff * 1.18;
                 result.LimitStatus.CurrentCost = Math.Round(currentCost, 2);

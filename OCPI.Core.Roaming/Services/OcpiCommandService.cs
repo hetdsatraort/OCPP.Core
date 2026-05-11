@@ -180,7 +180,7 @@ namespace OCPI.Core.Roaming.Services
 
             var gun = await _dbContext.ChargingGuns
                 .FirstOrDefaultAsync(g => g.ChargingStationId == station.RecId
-                    && g.ConnectorId == ocpiSession.ConnectorId && g.Active == 1);
+                    && g.RecId == ocpiSession.ConnectorId && g.Active == 1);
 
             if (gun == null)
             {
