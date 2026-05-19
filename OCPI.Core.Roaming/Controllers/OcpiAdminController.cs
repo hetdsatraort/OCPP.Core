@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
 using OCPP.Core.Database;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -18,17 +20,26 @@ namespace OCPI.Core.Roaming.Controllers
     {
         private readonly IOcpiLocationService _locationService;
         private readonly IOcpiCommandService _commandService;
+        private readonly IOcpiCredentialsService _credentialsService;
         private readonly OCPPCoreContext _dbContext;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<OcpiAdminController> _logger;
 
         public OcpiAdminController(
             IOcpiLocationService locationService,
             IOcpiCommandService commandService,
+            IOcpiCredentialsService credentialsService,
+            IHttpClientFactory httpClientFactory,
+            IConfiguration configuration,
             OCPPCoreContext dbContext,
             ILogger<OcpiAdminController> logger)
         {
             _locationService = locationService;
             _commandService = commandService;
+            _credentialsService = credentialsService;
+            _httpClientFactory = httpClientFactory;
+            _configuration = configuration;
             _dbContext = dbContext;
             _logger = logger;
         }
@@ -141,6 +152,210 @@ namespace OCPI.Core.Roaming.Controllers
             });
 
             return Ok(new { success = true, data = result });
+        }
+
+        // ── Commands (Our Chargers) ────────────────────────────────────────────
+
+        /// <summary>Deactivate / remove a registered OCPI partner</summary>
+        [HttpDelete("partners/{id:int}")]
+        public async Task<IActionResult> RemovePartner([FromRoute] int id)
+        {
+            var partner = await _dbContext.OcpiPartnerCredentials
+                .FirstOrDefaultAsync(p => p.Id == id && p.IsActive);
+
+            if (partner == null)
+                return NotFound(new { success = false, message = "Partner not found" });
+
+            partner.IsActive = false;
+            partner.LastUpdated = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("[Admin] Deactivated OCPI partner Id={Id} ({BusinessName})", id, partner.BusinessName);
+            return Ok(new { success = true, message = $"Partner '{partner.BusinessName}' removed" });
+        }
+
+        /// <summary>
+        /// Probe a partner's versions URL to verify connectivity.
+        /// Uses the stored token to authenticate with the partner.
+        /// </summary>
+        [HttpPost("partners/{id:int}/probe")]
+        public async Task<IActionResult> ProbePartner([FromRoute] int id)
+        {
+            var partner = await _dbContext.OcpiPartnerCredentials
+                .FirstOrDefaultAsync(p => p.Id == id && p.IsActive);
+
+            if (partner == null)
+                return NotFound(new { success = false, message = "Partner not found" });
+
+            var httpClient = _httpClientFactory.CreateClient();
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {partner.Token}");
+            httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var resp = await httpClient.GetAsync(partner.Url);
+                sw.Stop();
+
+                return Ok(new
+                {
+                    success    = resp.IsSuccessStatusCode,
+                    statusCode = (int)resp.StatusCode,
+                    latencyMs  = sw.ElapsedMilliseconds,
+                    message    = resp.IsSuccessStatusCode ? "Reachable" : $"HTTP {(int)resp.StatusCode}"
+                });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, statusCode = 0, latencyMs = -1, message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Initiate OCPI handshake: register ourselves with a partner CPO/eMSP.
+        /// Caller provides the partner's OCPI versions URL and the A-token (shared out of band).
+        /// We discover their endpoints and POST our credentials to complete registration.
+        /// </summary>
+        [HttpPost("partners/onboard")]
+        public async Task<IActionResult> OnboardPartner([FromBody] OnboardPartnerRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.VersionsUrl) || string.IsNullOrWhiteSpace(request.Token))
+                return BadRequest(new { success = false, message = "VersionsUrl and Token are required" });
+
+            var httpClient = _httpClientFactory.CreateClient();
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {request.Token}");
+            httpClient.Timeout = TimeSpan.FromSeconds(15);
+
+            try
+            {
+                // Step 1: GET partner's versions list
+                var versionsJson = await httpClient.GetStringAsync(request.VersionsUrl);
+                using var versionsDoc = JsonDocument.Parse(versionsJson);
+                var versionsRoot = versionsDoc.RootElement;
+
+                if (!versionsRoot.TryGetProperty("data", out var versionsData) || versionsData.ValueKind != JsonValueKind.Array)
+                    return BadRequest(new { success = false, message = "Partner returned no OCPI versions" });
+
+                // Step 2: Find 2.2.1 (fallback to 2.2)
+                string? versionUrl = null;
+                string? chosenVersion = null;
+                foreach (var v in versionsData.EnumerateArray())
+                {
+                    var ver = v.GetProperty("version").GetString();
+                    if (ver == "2.2.1") { versionUrl = v.GetProperty("url").GetString(); chosenVersion = "2.2.1"; break; }
+                    if (ver == "2.2"  ) { versionUrl = v.GetProperty("url").GetString(); chosenVersion = "2.2"; }
+                }
+
+                if (versionUrl == null)
+                    return BadRequest(new { success = false, message = "No compatible OCPI version (2.2 or 2.2.1) found at partner" });
+
+                // Step 3: GET version details to find credentials endpoint
+                var detailJson = await httpClient.GetStringAsync(versionUrl);
+                using var detailDoc = JsonDocument.Parse(detailJson);
+                var detailRoot = detailDoc.RootElement;
+
+                if (!detailRoot.TryGetProperty("data", out var detailData))
+                    return BadRequest(new { success = false, message = "Failed to read version details from partner" });
+
+                string? credentialsEndpointUrl = null;
+                if (detailData.TryGetProperty("endpoints", out var endpoints))
+                {
+                    foreach (var ep in endpoints.EnumerateArray())
+                    {
+                        var identifier = ep.GetProperty("identifier").GetString() ?? "";
+                        if (identifier.Equals("credentials", StringComparison.OrdinalIgnoreCase))
+                        {
+                            credentialsEndpointUrl = ep.GetProperty("url").GetString();
+                            break;
+                        }
+                    }
+                }
+
+                if (credentialsEndpointUrl == null)
+                    return BadRequest(new { success = false, message = "Partner does not expose a credentials endpoint" });
+
+                // Step 4: Build our credentials object
+                var ourToken = Guid.NewGuid().ToString("N")[..32].ToUpperInvariant();
+                var ourBaseUrl = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+                var ourVersionsUrl = $"{ourBaseUrl}/2.2.1/versions";
+                var ourCountryCode = _configuration["Ocpi:CountryCode"] ?? "IN";
+                var ourPartyId = _configuration["Ocpi:PartyId"] ?? "HYC";
+                var ourBusinessName = _configuration["Ocpi:BusinessName"] ?? "HyCharge";
+
+                var ourCredentials = new
+                {
+                    token = ourToken,
+                    url = ourVersionsUrl,
+                    roles = new[]
+                    {
+                        new
+                        {
+                            role = "CPO",
+                            business_details = new { name = ourBusinessName },
+                            country_code = ourCountryCode,
+                            party_id = ourPartyId
+                        }
+                    }
+                };
+
+                // Step 5: POST our credentials to partner's credentials endpoint
+                var credResp = await httpClient.PostAsJsonAsync(credentialsEndpointUrl, ourCredentials);
+                if (!credResp.IsSuccessStatusCode)
+                {
+                    var body = await credResp.Content.ReadAsStringAsync();
+                    return BadRequest(new { success = false, message = $"Credential POST failed (HTTP {(int)credResp.StatusCode}): {body}" });
+                }
+
+                // Step 6: Parse the partner's returned credentials (B-token)
+                var credJson = await credResp.Content.ReadAsStringAsync();
+                using var credDoc = JsonDocument.Parse(credJson);
+                var credData = credDoc.RootElement.GetProperty("data");
+
+                var partnerToken = credData.GetProperty("token").GetString() ?? request.Token;
+                var partnerUrl   = credData.TryGetProperty("url", out var urlProp) ? urlProp.GetString() ?? request.VersionsUrl : request.VersionsUrl;
+
+                string? partnerCountryCode = null;
+                string? partnerPartyId = null;
+                string? partnerRole = null;
+                string? partnerName = request.BusinessName;
+
+                if (credData.TryGetProperty("roles", out var roles) && roles.ValueKind == JsonValueKind.Array)
+                {
+                    var firstRole = roles.EnumerateArray().FirstOrDefault();
+                    if (firstRole.ValueKind != JsonValueKind.Undefined)
+                    {
+                        partnerCountryCode = firstRole.TryGetProperty("country_code", out var cc) ? cc.GetString() : null;
+                        partnerPartyId     = firstRole.TryGetProperty("party_id",     out var pi) ? pi.GetString() : null;
+                        partnerRole        = firstRole.TryGetProperty("role",          out var ro) ? ro.GetString() : null;
+                        if (firstRole.TryGetProperty("business_details", out var bd))
+                            partnerName = bd.TryGetProperty("name", out var nm) ? nm.GetString() : partnerName;
+                    }
+                }
+
+                // Step 7: Persist partner credentials (use B-token going forward)
+                await _credentialsService.CreateOrUpdatePartnerAsync(
+                    token:        partnerToken,
+                    url:          partnerUrl,
+                    countryCode:  partnerCountryCode ?? "??",
+                    partyId:      partnerPartyId ?? "???",
+                    businessName: partnerName ?? "Unknown",
+                    role:         partnerRole ?? "CPO",
+                    version:      chosenVersion!
+                );
+
+                _logger.LogInformation("[Admin] OCPI handshake complete with {Url} ({BusinessName})", request.VersionsUrl, partnerName);
+                return Ok(new { success = true, message = "Partner registered successfully", partnerName });
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[Admin] OCPI onboard HTTP error for {Url}", request.VersionsUrl);
+                return StatusCode(502, new { success = false, message = $"Could not reach partner: {ex.Message}" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Admin] OCPI onboard error for {Url}", request.VersionsUrl);
+                return StatusCode(500, new { success = false, message = $"Error during handshake: {ex.Message}" });
+            }
         }
 
         // ── Commands (Our Chargers) ────────────────────────────────────────────
@@ -379,5 +594,10 @@ namespace OCPI.Core.Roaming.Controllers
             string LocationId,
             string EvseUid,
             string ConnectorId);
+
+        public record OnboardPartnerRequest(
+            string VersionsUrl,
+            string Token,
+            string? BusinessName);
     }
 }
