@@ -58,6 +58,7 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.BatteryCapacityMaster> BatteryCapacityMasters { get; set; }
         public virtual DbSet<EVCDTO.CarManufacturerMaster> CarManufacturerMasters { get; set; }
         public virtual DbSet<EVCDTO.PaymentValidation> PaymentValidations { get; set; }
+        public virtual DbSet<EVCDTO.ServiceTicket> ServiceTickets { get; set; }
 
         // OCPI Tables
         public virtual DbSet<OCPIDTO.OcpiPartnerCredential> OcpiPartnerCredentials { get; set; }
@@ -1005,6 +1006,30 @@ namespace OCPP.Core.Database
                     .HasForeignKey(d => d.PartnerCredentialId)
                     .OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName("FK_OcpiToken_PartnerCredential");
+            });
+
+            modelBuilder.Entity<EVCDTO.ServiceTicket>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+                entity.ToTable("ServiceTicket");
+
+                entity.HasIndex(e => e.ServiceTicketId, "IX_ServiceTicket_TicketId").IsUnique();
+                entity.HasIndex(e => e.UserId, "IX_ServiceTicket_UserId");
+                entity.HasIndex(e => e.Status, "IX_ServiceTicket_Status");
+
+                entity.Property(e => e.RecId).HasMaxLength(50).IsRequired();
+                entity.Property(e => e.ServiceTicketId).HasMaxLength(20).IsRequired();
+                entity.Property(e => e.UserId).HasMaxLength(50).IsRequired();
+                entity.Property(e => e.Category).HasMaxLength(50).IsRequired();
+                entity.Property(e => e.Subject).HasMaxLength(200).IsRequired();
+                entity.Property(e => e.Description).HasMaxLength(2000).IsRequired();
+                entity.Property(e => e.Status).HasMaxLength(50).HasDefaultValue("Open").IsRequired();
+                entity.Property(e => e.Priority).HasMaxLength(20).HasDefaultValue("Medium").IsRequired();
+                entity.Property(e => e.RelatedSessionId).HasMaxLength(50);
+                entity.Property(e => e.AssignedToAdminId).HasMaxLength(50);
+                entity.Property(e => e.AdminNotes).HasMaxLength(2000);
+                entity.Property(e => e.ResolutionNotes).HasMaxLength(2000);
+                entity.Property(e => e.Active).HasDefaultValue(1);
             });
 
             OnModelCreatingPartial(modelBuilder);
