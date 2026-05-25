@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using OCPP.Core.Database;
 using OCPP.Core.Database.EVCDTO;
+using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Models.ChargingHub;
 using OCPP.Core.Management.Models.ChargingSession;
 using OCPP.Core.Management.Services;
@@ -329,8 +330,8 @@ namespace OCPP.Core.Management.Controllers
                 // writes a NEW transaction row (TransactionId > baseline). This prevents two concurrent
                 // start-session requests from binding to the same transaction row.
                 Database.Transaction ocppTransaction = null;
-                const int maxPollAttempts = 16;
-                const int pollIntervalMs = 1500;
+                const int maxPollAttempts = 30;
+                const int pollIntervalMs = 2000;
 
                 for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
                 {
@@ -1226,6 +1227,33 @@ namespace OCPP.Core.Management.Controllers
                     session.SoCStart = currentSoC;
                 }
 
+                var walletTransaction = new WalletTransactionDto();
+
+                if (!isActiveSession && energyConsumed > 0)
+                {
+                    var walletTransactionLog = await _dbContext.WalletTransactionLogs
+                        .Where(w => w.ChargingSessionId == session.RecId &&
+                                    w.TransactionType == "Debit" &&
+                                    w.Active == 1)
+                        .OrderByDescending(w => w.CreatedOn)
+                        .FirstOrDefaultAsync();
+
+                    walletTransaction = new WalletTransactionDto
+                    {
+                        RecId = walletTransactionLog.RecId,
+                        PreviousCreditBalance = walletTransactionLog.PreviousCreditBalance,
+                        CurrentCreditBalance = walletTransactionLog.CurrentCreditBalance,
+                        TransactionType = walletTransactionLog.TransactionType,
+                        Amount = Math.Abs(decimal.Parse(walletTransactionLog.CurrentCreditBalance) - decimal.Parse(walletTransactionLog.PreviousCreditBalance)), // absolute amount
+                        PaymentRecId = walletTransactionLog.PaymentRecId,
+                        ChargingSessionId = walletTransactionLog.ChargingSessionId,
+                        AdditionalInfo1 = walletTransactionLog.AdditionalInfo1,
+                        AdditionalInfo2 = walletTransactionLog.AdditionalInfo2,
+                        AdditionalInfo3 = walletTransactionLog.AdditionalInfo3,
+                        CreatedOn = walletTransactionLog.CreatedOn
+                    };
+                }
+
                 bool isActive = session.EndTime == DateTime.MinValue;
 
                 // Calculate cost breakdown
@@ -1378,7 +1406,8 @@ namespace OCPP.Core.Management.Controllers
                             Unit = "%",
                             IsRealtime = isActiveSession && currentSoC.HasValue,
                             DataSource = currentSoC.HasValue ? "OCPP Server Cache (Live)" : "Database (Historical)"
-                        }
+                        },
+                        WalletTransaction = walletTransaction
                     }
                 });
             }
@@ -2013,7 +2042,7 @@ namespace OCPP.Core.Management.Controllers
                                     ChargingSessionId = session.RecId,
                                     AdditionalInfo1 = $"Auto-stopped at {chargingStation.ChargingPointId} (OCPP Txn: {session.TransactionId})",
                                     AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{session.ChargingTariff}/kWh = ₹{totalFee:F2}",
-                                    AdditionalInfo3 = $"Meter: {startMeter:F3} → {endMeter:F3} kWh | Reason: Limit violation",
+                                    AdditionalInfo3 = $"Limit Violations: {string.Join(", ", limitCheck.ViolatedLimits)}",
                                     Active = 1,
                                     CreatedOn = DateTime.UtcNow,
                                     UpdatedOn = DateTime.UtcNow
