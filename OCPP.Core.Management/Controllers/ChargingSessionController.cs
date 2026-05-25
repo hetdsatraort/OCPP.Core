@@ -2130,7 +2130,7 @@ namespace OCPP.Core.Management.Controllers
                         .Select(s => s.TransactionId.Value)
                         .ToList();
                     var stoppedSessionTransactionsDict = await _dbContext.Transactions
-                        .Where(t => stoppedSessionTxnIds.Contains(t.TransactionId))
+                        .Where(t => stoppedSessionTxnIds.Contains(t.TransactionId) && !t.StopTime.HasValue)
                         .ToDictionaryAsync(t => t.TransactionId, t => t);
 
                     foreach (var session in stoppedSessionsWithRunningTxns)
