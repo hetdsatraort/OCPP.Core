@@ -87,4 +87,14 @@ namespace OCPP.Core.Management.Models.Payment
         public string ValidationId { get; set; }
         public string TransactionId { get; set; }
     }
+
+    public class InternalWebhookPayloadDto
+    {
+        public string Event { get; set; }
+        public string OrderId { get; set; }
+        public string PaymentId { get; set; }
+        public string UserId { get; set; }
+        public decimal Amount { get; set; }
+        public string Currency { get; set; }
+    }
 }

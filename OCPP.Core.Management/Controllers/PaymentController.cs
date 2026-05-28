@@ -662,6 +662,159 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// Internal webhook endpoint: called by the payment gateway (node-ort-rzp) for late-authorized payments.
+        /// Secured via a shared secret in the X-Internal-Webhook-Secret header.
+        /// </summary>
+        [HttpPost("internal-webhook")]
+        [AllowAnonymous]
+        public async Task<IActionResult> InternalWebhook([FromBody] InternalWebhookPayloadDto payload)
+        {
+            try
+            {
+                // Validate internal shared secret
+                var expectedSecret = _config.GetValue<string>("OcppInternalWebhookSecret");
+                if (string.IsNullOrEmpty(expectedSecret))
+                {
+                    _logger.LogError("OcppInternalWebhookSecret is not configured");
+                    return StatusCode(500, new { error = "Webhook not configured" });
+                }
+
+                var providedSecret = Request.Headers["X-Internal-Webhook-Secret"].ToString();
+                if (string.IsNullOrEmpty(providedSecret) || providedSecret != expectedSecret)
+                {
+                    _logger.LogWarning("InternalWebhook called with invalid or missing secret");
+                    return Unauthorized(new { error = "Invalid secret" });
+                }
+
+                if (payload == null || (payload.Event != "payment.captured" && payload.Event != "payment.authorized"))
+                    return Ok(new { status = "ignored", reason = "event not handled" });
+
+                if (string.IsNullOrEmpty(payload.OrderId) || string.IsNullOrEmpty(payload.UserId))
+                    return BadRequest(new { error = "orderId and userId are required" });
+
+                // Idempotency: do not process if already credited
+                var existing = await _dbContext.PaymentValidations
+                    .FirstOrDefaultAsync(pv => pv.OrderId == payload.OrderId &&
+                                               (pv.Status == "Verified" || pv.Status == "Processed"));
+                if (existing != null)
+                {
+                    _logger.LogInformation("InternalWebhook: order {OrderId} already processed — skipping", payload.OrderId);
+                    return Ok(new { status = "already_processed" });
+                }
+
+                var user = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.RecId == payload.UserId && u.Active == 1);
+                if (user == null)
+                {
+                    _logger.LogWarning("InternalWebhook: user {UserId} not found for order {OrderId}", payload.UserId, payload.OrderId);
+                    return NotFound(new { error = "User not found" });
+                }
+
+                // Find or create the payment validation record for this order
+                var validation = await _dbContext.PaymentValidations
+                    .FirstOrDefaultAsync(pv => pv.OrderId == payload.OrderId);
+
+                if (validation == null)
+                {
+                    validation = new PaymentValidation
+                    {
+                        RecId = Guid.NewGuid().ToString(),
+                        UserId = payload.UserId,
+                        OrderId = payload.OrderId,
+                        PaymentId = payload.PaymentId,
+                        Amount = (long)(payload.Amount * 100),
+                        Currency = payload.Currency ?? "INR",
+                        Status = "Pending",
+                        VerificationAttempts = 0,
+                        Active = 1,
+                        CreatedOn = DateTime.UtcNow,
+                        UpdatedOn = DateTime.UtcNow
+                    };
+                    _dbContext.PaymentValidations.Add(validation);
+                    await _dbContext.SaveChangesAsync();
+                }
+
+                // Get current wallet balance
+                var lastTransaction = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == payload.UserId)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                decimal previousBalance = 0;
+                if (lastTransaction != null && decimal.TryParse(lastTransaction.CurrentCreditBalance, out var lb))
+                    previousBalance = lb;
+
+                decimal newBalance = previousBalance + payload.Amount;
+
+                // Create payment history record
+                var paymentHistoryId = Guid.NewGuid().ToString();
+                var paymentHistory = new PaymentHistory
+                {
+                    RecId = paymentHistoryId,
+                    TransactionType = "Credit_Add",
+                    UserId = payload.UserId,
+                    SessionDuration = TimeSpan.Zero,
+                    PaymentMethod = "Razorpay-LateCapture",
+                    OrderId = payload.OrderId,
+                    PaymentId = payload.PaymentId,
+                    AdditionalInfo1 = $"Amount: {payload.Amount}",
+                    AdditionalInfo2 = $"Event: {payload.Event}",
+                    AdditionalInfo3 = $"ValidationId: {validation.RecId}",
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                var walletTransactionId = Guid.NewGuid().ToString();
+                var walletLog = new WalletTransactionLog
+                {
+                    RecId = walletTransactionId,
+                    UserId = payload.UserId,
+                    PreviousCreditBalance = previousBalance.ToString("F2"),
+                    CurrentCreditBalance = newBalance.ToString("F2"),
+                    TransactionType = "Credit",
+                    PaymentRecId = paymentHistoryId,
+                    AdditionalInfo1 = $"OrderId: {payload.OrderId}",
+                    AdditionalInfo2 = $"PaymentId: {payload.PaymentId} (late capture via webhook)",
+                    AdditionalInfo3 = $"ValidationId: {validation.RecId}",
+                    Active = 1,
+                    CreatedOn = DateTime.UtcNow,
+                    UpdatedOn = DateTime.UtcNow
+                };
+
+                _dbContext.PaymentHistories.Add(paymentHistory);
+                _dbContext.WalletTransactionLogs.Add(walletLog);
+
+                // Finalise validation
+                validation.Status = "Processed";
+                validation.PaymentId = payload.PaymentId;
+                validation.VerifiedAt = DateTime.UtcNow;
+                validation.ProcessedAt = DateTime.UtcNow;
+                validation.PaymentHistoryId = paymentHistoryId;
+                validation.WalletTransactionId = walletTransactionId;
+                validation.VerificationMessage = $"Processed via late-capture webhook ({payload.Event})";
+                validation.UpdatedOn = DateTime.UtcNow;
+
+                // Update user credit balance
+                user.CreditBalance = newBalance.ToString("F2");
+                user.UpdatedOn = DateTime.UtcNow;
+
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "Late payment credited via webhook — UserId: {UserId}, OrderId: {OrderId}, Amount: {Amount}, Event: {Event}, NewBalance: {NewBalance}",
+                    payload.UserId, payload.OrderId, payload.Amount, payload.Event, newBalance);
+
+                return Ok(new { status = "ok", newBalance });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing internal webhook for OrderId: {OrderId}", payload?.OrderId);
+                return StatusCode(500, new { error = "An error occurred while processing the webhook" });
+            }
+        }
+
+        /// <summary>
         /// Update payment validation status
         /// </summary>
         private async Task UpdateValidationStatus(PaymentValidation validation, string status, string message)
