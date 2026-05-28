@@ -803,7 +803,7 @@ namespace OCPP.Core.Management.Controllers
                 string successMessage = $"Charging session ended successfully. ₹{totalFee:F2} debited.";
                 if (newBalance < 0)
                 {
-                    successMessage += $" Warning: Your balance is now negative (₹{newBalance:F2}). Please recharge your wallet.";
+                    successMessage += $" Information: Your balance is now negative (₹{newBalance:F2}). Please recharge your wallet.";
                 }
                 successMessage += $" OCPP: {ocppResult.Message}";
 
@@ -2246,7 +2246,7 @@ namespace OCPP.Core.Management.Controllers
                                 CurrentCreditBalance = newBalance.ToString("F2"),
                                 TransactionType = "Debit",
                                 ChargingSessionId = session.RecId,
-                                AdditionalInfo1 = $"Session auto-closed - OCPP transaction {session.TransactionId} already stopped",
+                                AdditionalInfo1 = $"Session auto-closed - Balance Went Negative. OCPP transaction {session.TransactionId} already stopped",
                                 AdditionalInfo2 = $"Energy: {energyConsumed:F3} kWh @ ₹{tariffValue}/kWh = ₹{totalFee:F2}",
                                 AdditionalInfo3 = $"Meter: {startMeter:F3} → {endMeter:F3} kWh",
                                 Active = 1,
@@ -3380,6 +3380,24 @@ namespace OCPP.Core.Management.Controllers
                 {
                     result.HasViolations = true;
                     result.ViolatedLimits.Add($"Cost: {currentCost:F2} >= {session.CostLimit.Value:F2} limit");
+                }
+            }
+
+            // Check Wallet Balance — stop session if current cost has exceeded the user's available balance
+            if (currentCost > 0)
+            {
+                var lastWalletTx = await _dbContext.WalletTransactionLogs
+                    .Where(w => w.UserId == session.UserId && w.Active == 1)
+                    .OrderByDescending(w => w.CreatedOn)
+                    .FirstOrDefaultAsync();
+
+                if (lastWalletTx != null && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out var walletBalance))
+                {
+                    if ((decimal)currentCost >= walletBalance)
+                    {
+                        result.HasViolations = true;
+                        result.ViolatedLimits.Add($"Balance: cost ₹{currentCost:F2} >= wallet balance ₹{walletBalance:F2}");
+                    }
                 }
             }
 
