@@ -580,6 +580,59 @@ namespace OCPI.Core.Roaming.Controllers
             });
         }
 
+        // ── A-Token Issuance ──────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Generate an A-token for a new partner.  Share this token with the partner
+        /// out-of-band; they use it to authenticate the initial POST to /2.2.1/credentials
+        /// and receive a permanent B-token in exchange.
+        /// </summary>
+        [HttpPost("partners/issue-token")]
+        public async Task<IActionResult> IssueAToken([FromBody] IssueATokenRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Label))
+                return BadRequest(new { success = false, message = "Label is required" });
+
+            var pending = await _credentialsService.IssueATokenAsync(
+                request.Label.Trim(),
+                request.ExpiryHours > 0 ? request.ExpiryHours : 72);
+
+            _logger.LogInformation("[Admin] Issued A-token id={Id} label='{Label}'", pending.Id, pending.Label);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    id        = pending.Id,
+                    aToken    = pending.AToken,
+                    label     = pending.Label,
+                    expiresAt = pending.ExpiresAt,
+                    createdOn = pending.CreatedOn
+                }
+            });
+        }
+
+        /// <summary>List all issued A-tokens (used and pending).</summary>
+        [HttpGet("partners/issued-tokens")]
+        public async Task<IActionResult> GetIssuedTokens()
+        {
+            var tokens = await _credentialsService.GetAllPendingRegistrationsAsync();
+            var result = tokens.Select(t => new
+            {
+                id                  = t.Id,
+                label               = t.Label,
+                aToken              = t.AToken,
+                expiresAt           = t.ExpiresAt,
+                createdOn           = t.CreatedOn,
+                isUsed              = t.IsUsed,
+                usedOn              = t.UsedOn,
+                partnerCredentialId = t.PartnerCredentialId,
+                isExpired           = !t.IsUsed && t.ExpiresAt <= DateTime.UtcNow
+            });
+            return Ok(new { success = true, data = result });
+        }
+
         // ── Request DTOs ──────────────────────────────────────────────────────────
 
         public record AdminStartRequest(
@@ -599,5 +652,7 @@ namespace OCPI.Core.Roaming.Controllers
             string VersionsUrl,
             string Token,
             string? BusinessName);
+
+        public record IssueATokenRequest(string Label, int ExpiryHours = 72);
     }
 }

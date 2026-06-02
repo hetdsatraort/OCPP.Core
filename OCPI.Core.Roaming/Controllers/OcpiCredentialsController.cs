@@ -10,7 +10,6 @@ namespace OCPI.Core.Roaming.Controllers
     /// </summary>
     [OcpiEndpoint(OcpiModule.Credentials, "Receiver", "2.2.1")]
     [Route("2.2.1/credentials")]
-    [OcpiAuthorize]
     public class OcpiCredentialsController : OcpiController
     {
         private readonly IConfiguration _configuration;
@@ -30,6 +29,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// <summary>
         /// Get current credentials
         /// </summary>
+        [OcpiAuthorize]
         [HttpGet]
         public IActionResult Get()
         {
@@ -39,29 +39,50 @@ namespace OCPI.Core.Roaming.Controllers
         }
 
         /// <summary>
-        /// Register new partner credentials
+        /// Register new partner credentials.
+        /// Accepts either:
+        ///   (a) An A-token issued via POST /admin/partners/issue-token — completes the
+        ///       inbound handshake and returns a permanent B-token for the partner to use.
+        ///   (b) An already-registered partner token — rejected (already registered).
         /// </summary>
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] OcpiCredentials partnerCredentials)
         {
-            // Validate incoming credentials
+            // Manually extract the bearer token — [OcpiAuthorize] is intentionally absent
+            // on POST so that brand-new partners can authenticate with an A-token.
+            var authHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(authHeader))
+                return Unauthorized(new { status_code = 2001, status_message = "Authorization header missing" });
+
+            var incomingToken = authHeader.Split(' ').Last();
+
+            // 1. Check if this is a valid A-token (pending registration)
+            var pending = await _credentialsService.GetPendingRegistrationByTokenAsync(incomingToken);
+
+            // 2. If not an A-token, check if it belongs to an already-registered partner
+            //    (e.g. they're re-trying POST instead of using PUT)
+            if (pending == null)
+            {
+                var existingPartner = await _credentialsService.GetPartnerByTokenAsync(incomingToken);
+                if (existingPartner == null)
+                    return Unauthorized(new { status_code = 2001, status_message = "Unknown or expired token" });
+
+                // Already registered — they should use PUT to update credentials
+                return Conflict(new { status_code = 2001, status_message = "Platform is already registered. Use PUT to update credentials." });
+            }
+
             OcpiValidate(partnerCredentials);
 
             var firstRole = partnerCredentials.Roles?.FirstOrDefault();
             if (firstRole == null)
                 throw OcpiException.InvalidParameters("At least one role is required");
 
-            // Check if platform is already registered
-            var existing = await _credentialsService.GetPartnerByCountryAndPartyAsync(
-                firstRole.CountryCode.ToString(),
-                firstRole.PartyId);
+            // 3. Generate a permanent B-token the partner will use for all future calls to us
+            var bToken = Guid.NewGuid().ToString("N");
 
-            if (existing != null)
-                throw OcpiException.InvalidParameters("Platform is already registered");
-
-            // Store partner credentials in database
-            await _credentialsService.CreateOrUpdatePartnerAsync(
-                partnerCredentials.Token,
+            // 4. Persist the partner with the B-token as their inbound auth token
+            var partner = await _credentialsService.CreateOrUpdatePartnerAsync(
+                bToken,
                 partnerCredentials.Url,
                 firstRole.CountryCode.ToString(),
                 firstRole.PartyId,
@@ -70,17 +91,23 @@ namespace OCPI.Core.Roaming.Controllers
                 "2.2.1"
             );
 
-            _logger.LogInformation("Registered new OCPI partner: {BusinessName}", 
-                firstRole.BusinessDetails?.Name);
+            // 5. Mark the A-token as consumed
+            await _credentialsService.MarkATokenUsedAsync(pending.Id, partner.Id);
 
-            // Return your platform's credentials
-            var credentials = GetPlatformCredentials();
-            return OcpiOk(credentials);
+            _logger.LogInformation(
+                "Completed OCPI handshake for new partner: {BusinessName} ({CountryCode}-{PartyId}). B-token issued.",
+                firstRole.BusinessDetails?.Name, firstRole.CountryCode, firstRole.PartyId);
+
+            // 6. Return OUR credentials — the B-token is embedded so the partner knows
+            //    what token to send in Authorization headers when calling us going forward.
+            var ourCredentials = GetPlatformCredentials(bToken);
+            return OcpiOk(ourCredentials);
         }
 
         /// <summary>
         /// Update existing partner credentials
         /// </summary>
+        [OcpiAuthorize]
         [HttpPut]
         public async Task<IActionResult> Put([FromBody] OcpiCredentials partnerCredentials)
         {
@@ -121,6 +148,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// <summary>
         /// Unregister partner
         /// </summary>
+        [OcpiAuthorize]
         [HttpDelete]
         public async Task<IActionResult> Delete()
         {
@@ -141,11 +169,16 @@ namespace OCPI.Core.Roaming.Controllers
             return OcpiOk("Successfully unregistered");
         }
 
-        private OcpiCredentials GetPlatformCredentials()
+        /// <param name="bToken">
+        /// When supplied (A-token flow) this is the newly-generated B-token.
+        /// The partner stores this token and sends it in Authorization headers going forward.
+        /// When null the static configured token is used (for GET / PUT flows).
+        /// </param>
+        private OcpiCredentials GetPlatformCredentials(string? bToken = null)
         {
             return new OcpiCredentials
             {
-                Token = _configuration["OCPI:Token"] ?? Guid.NewGuid().ToString(),
+                Token = bToken ?? _configuration["OCPI:Token"] ?? Guid.NewGuid().ToString(),
                 Url = _configuration["OCPI:BaseUrl"] ?? "https://localhost:5001/versions",
                 Roles = new List<OcpiCredentialsRole>
                 {

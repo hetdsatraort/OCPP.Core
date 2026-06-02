@@ -89,5 +89,52 @@ namespace OCPI.Core.Roaming.Services
                 _logger.LogInformation("Deactivated OCPI partner with token {Token}", token);
             }
         }
+
+        // ── A-token (pending registration) ─────────────────────────────────────
+
+        public async Task<OcpiPendingRegistration> IssueATokenAsync(string label, int expiryHours = 72)
+        {
+            var pending = new OcpiPendingRegistration
+            {
+                AToken = Guid.NewGuid().ToString("N"),
+                Label = label,
+                ExpiresAt = DateTime.UtcNow.AddHours(expiryHours),
+                CreatedOn = DateTime.UtcNow,
+                IsUsed = false
+            };
+
+            await _dbContext.OcpiPendingRegistrations.AddAsync(pending);
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Issued A-token for label '{Label}', expires {Expiry}", label, pending.ExpiresAt);
+            return pending;
+        }
+
+        public async Task<OcpiPendingRegistration?> GetPendingRegistrationByTokenAsync(string aToken)
+        {
+            return await _dbContext.OcpiPendingRegistrations
+                .FirstOrDefaultAsync(p => p.AToken == aToken && !p.IsUsed && p.ExpiresAt > DateTime.UtcNow);
+        }
+
+        public async Task<List<OcpiPendingRegistration>> GetAllPendingRegistrationsAsync()
+        {
+            return await _dbContext.OcpiPendingRegistrations
+                .OrderByDescending(p => p.CreatedOn)
+                .ToListAsync();
+        }
+
+        public async Task MarkATokenUsedAsync(int pendingId, int partnerCredentialId)
+        {
+            var pending = await _dbContext.OcpiPendingRegistrations.FindAsync(pendingId);
+            if (pending == null) return;
+
+            pending.IsUsed = true;
+            pending.UsedOn = DateTime.UtcNow;
+            pending.PartnerCredentialId = partnerCredentialId;
+            _dbContext.OcpiPendingRegistrations.Update(pending);
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("A-token id={Id} marked used, linked to partner credential id={PartnerId}", pendingId, partnerCredentialId);
+        }
     }
 }

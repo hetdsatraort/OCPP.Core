@@ -13,6 +13,12 @@ namespace OCPI.Core.Roaming.Services
         Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId);
         Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential> CreateOrUpdatePartnerAsync(string token, string url, string countryCode, string partyId, string businessName, string role, string version);
         Task DeletePartnerAsync(string token);
+
+        // ── A-token (pending registration) management ──────────────────────────
+        Task<OCPP.Core.Database.OCPIDTO.OcpiPendingRegistration> IssueATokenAsync(string label, int expiryHours = 72);
+        Task<OCPP.Core.Database.OCPIDTO.OcpiPendingRegistration?> GetPendingRegistrationByTokenAsync(string aToken);
+        Task<List<OCPP.Core.Database.OCPIDTO.OcpiPendingRegistration>> GetAllPendingRegistrationsAsync();
+        Task MarkATokenUsedAsync(int pendingId, int partnerCredentialId);
     }
 
     public interface IOcpiLocationService
