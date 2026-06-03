@@ -50,13 +50,13 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
     {
-        Title = "OCPI Roaming API",
+        Title = "OCPI Roaming API - HyCharge",
         Version = "v2.2.1",
-        Description = "OCPI (Open Charge Point Interface) Roaming API for EV Charging Platform",
+        Description = "OCPI (Open Charge Point Interface) Roaming API for HyCharge",
         Contact = new Microsoft.OpenApi.Models.OpenApiContact
         {
-            Name = "EV Charging Platform",
-            Email = "support@evcharging.com"
+            Name = "HyCharge",
+            Email = "het.satra@onerooftech.com"
         }
     });
 
