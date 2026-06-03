@@ -62,6 +62,7 @@ namespace OCPP.Core.Database
 
         // OCPI Tables
         public virtual DbSet<OCPIDTO.OcpiPartnerCredential> OcpiPartnerCredentials { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPendingRegistration> OcpiPendingRegistrations { get; set; }
         public virtual DbSet<OCPIDTO.OcpiPartnerLocation> OcpiPartnerLocations { get; set; }
         public virtual DbSet<OCPIDTO.OcpiPartnerEvse> OcpiPartnerEvses { get; set; }
         public virtual DbSet<OCPIDTO.OcpiPartnerConnector> OcpiPartnerConnectors { get; set; }
