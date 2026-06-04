@@ -18,6 +18,7 @@ builder.Services.AddDbContext<OCPPCoreContext>(options =>
 
 // Register OCPI Services
 builder.Services.AddHttpClient();
+builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiVersionService,     OCPI.Core.Roaming.Services.OcpiVersionService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCredentialsService, OCPI.Core.Roaming.Services.OcpiCredentialsService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiLocationService, OCPI.Core.Roaming.Services.OcpiLocationService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiSessionService, OCPI.Core.Roaming.Services.OcpiSessionService>();

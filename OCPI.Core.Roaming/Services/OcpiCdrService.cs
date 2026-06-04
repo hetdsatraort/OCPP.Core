@@ -103,6 +103,19 @@ namespace OCPI.Core.Roaming.Services
             return dbCdrs.Select(s => MapToOcpiCdr(s)).ToList();
         }
 
+        public async Task<int> GetCdrCountAsync(DateTime? from = null, DateTime? to = null)
+        {
+            var query = _dbContext.OcpiCdrs.AsQueryable();
+
+            if (from.HasValue)
+                query = query.Where(c => c.StartDateTime >= from.Value);
+
+            if (to.HasValue)
+                query = query.Where(c => c.EndDateTime <= to.Value);
+
+            return await query.CountAsync();
+        }
+
         private OCPI.Contracts.OcpiCdr MapToOcpiCdr(OCPP.Core.Database.OCPIDTO.OcpiCdr dbCdr)
         {
             return new OCPI.Contracts.OcpiCdr

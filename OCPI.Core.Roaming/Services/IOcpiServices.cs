@@ -1,9 +1,63 @@
+using System.Text.Json.Serialization;
 using OCPI.Contracts;
 using OCPI.Contracts.ChargingProfiles;
 using OCPI.Enums.SmartCharging;
 
 namespace OCPI.Core.Roaming.Services
 {
+    // ── Version response DTOs ──────────────────────────────────────────────────
+
+    /// <summary>Single item returned by GET /versions</summary>
+    public class OcpiVersionInfo
+    {
+        [JsonPropertyName("version")]
+        public string Version { get; set; } = string.Empty;
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; } = string.Empty;
+    }
+
+    /// <summary>Endpoint entry within a version details response</summary>
+    public class OcpiEndpointEntry
+    {
+        [JsonPropertyName("identifier")]
+        public string Identifier { get; set; } = string.Empty;
+
+        [JsonPropertyName("role")]
+        public string Role { get; set; } = string.Empty;
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; } = string.Empty;
+    }
+
+    /// <summary>Full response returned by GET /versions/{version}</summary>
+    public class OcpiVersionDetails
+    {
+        [JsonPropertyName("version")]
+        public string Version { get; set; } = string.Empty;
+
+        [JsonPropertyName("endpoints")]
+        public List<OcpiEndpointEntry> Endpoints { get; set; } = new();
+    }
+
+    // ── Version service interface ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Our own OCPI version service — replaces the NuGet IOcpiVersionService.
+    /// Scans the assembly for all [OcpiEndpoint]-decorated controllers and assembles
+    /// the OCPI-compliant version and endpoint data at runtime.
+    /// </summary>
+    public interface IOcpiVersionService
+    {
+        /// <summary>Returns the list of supported OCPI versions.</summary>
+        List<OcpiVersionInfo> GetVersions();
+
+        /// <summary>Returns version details (endpoint list) for the requested version, or null if unsupported.</summary>
+        OcpiVersionDetails? GetVersionDetails(string version);
+    }
+
+    // ── Existing service interfaces ────────────────────────────────────────────
+
     /// <summary>
     /// Service interfaces for OCPI operations
     /// </summary>
@@ -50,6 +104,8 @@ namespace OCPI.Core.Roaming.Services
         Task<string> CreateCdrAsync(OcpiCdr cdr, int? partnerCredentialId = null);
         Task<OcpiCdr?> GetCdrAsync(string cdrId);
         Task<List<OcpiCdr>> GetCdrsAsync(DateTime? from = null, DateTime? to = null, int offset = 0, int limit = 100);
+        /// <summary>Returns the total number of CDRs matching the given date filters, for pagination headers.</summary>
+        Task<int> GetCdrCountAsync(DateTime? from = null, DateTime? to = null);
     }
 
     public interface IOcpiTariffService
