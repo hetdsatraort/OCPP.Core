@@ -15,13 +15,13 @@ namespace OCPI.Core.Roaming.Services
             _logger = logger;
         }
 
-        public async Task<OcpiPartnerCredential> GetPartnerByTokenAsync(string token)
+        public async Task<OcpiPartnerCredential?> GetPartnerByTokenAsync(string token)
         {
             return await _dbContext.OcpiPartnerCredentials
                 .FirstOrDefaultAsync(p => p.Token == token && p.IsActive);
         }
 
-        public async Task<OcpiPartnerCredential> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId)
+        public async Task<OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId)
         {
             return await _dbContext.OcpiPartnerCredentials
                 .FirstOrDefaultAsync(p => p.CountryCode == countryCode && p.PartyId == partyId && p.IsActive);
@@ -34,7 +34,8 @@ namespace OCPI.Core.Roaming.Services
             string partyId, 
             string businessName, 
             string role, 
-            string version)
+            string version,
+            string? outboundToken = null)
         {
             var existing = await GetPartnerByCountryAndPartyAsync(countryCode, partyId);
 
@@ -46,6 +47,8 @@ namespace OCPI.Core.Roaming.Services
                 existing.BusinessName = businessName;
                 existing.Role = role;
                 existing.Version = version;
+                if (outboundToken != null)
+                    existing.OutboundToken = outboundToken;
                 existing.LastUpdated = DateTime.UtcNow;
                 
                 _dbContext.OcpiPartnerCredentials.Update(existing);
@@ -63,6 +66,7 @@ namespace OCPI.Core.Roaming.Services
                     BusinessName = businessName,
                     Role = role,
                     Version = version,
+                    OutboundToken = outboundToken,
                     IsActive = true,
                     CreatedOn = DateTime.UtcNow,
                     LastUpdated = DateTime.UtcNow

@@ -76,5 +76,13 @@ namespace OCPP.Core.Database.OCPIDTO
         /// Last successful sync with this partner
         /// </summary>
         public DateTime? LastSyncOn { get; set; }
+
+        /// <summary>
+        /// The token we send in Authorization headers when we call the partner's API.
+        /// Set during the OCPI credentials handshake from the partner's Credentials.Token field.
+        /// Distinct from <see cref="Token"/> which is the token the partner sends US.
+        /// </summary>
+        [MaxLength(255)]
+        public string? OutboundToken { get; set; }
     }
 }

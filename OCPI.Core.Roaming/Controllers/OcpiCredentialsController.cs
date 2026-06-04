@@ -80,7 +80,9 @@ namespace OCPI.Core.Roaming.Controllers
             // 3. Generate a permanent B-token the partner will use for all future calls to us
             var bToken = Guid.NewGuid().ToString("N");
 
-            // 4. Persist the partner with the B-token as their inbound auth token
+            // 4. Persist the partner:
+            //    token         = bToken     — the token THEY send US going forward (inbound auth)
+            //    outboundToken = partnerCredentials.Token — the token WE send THEM (outbound auth)
             var partner = await _credentialsService.CreateOrUpdatePartnerAsync(
                 bToken,
                 partnerCredentials.Url,
@@ -88,7 +90,8 @@ namespace OCPI.Core.Roaming.Controllers
                 firstRole.PartyId,
                 firstRole.BusinessDetails?.Name,
                 firstRole.Role.ToString(),
-                "2.2.1"
+                "2.2.1",
+                outboundToken: partnerCredentials.Token
             );
 
             // 5. Mark the A-token as consumed
@@ -126,15 +129,18 @@ namespace OCPI.Core.Roaming.Controllers
             if (existing == null)
                 throw OcpiException.InvalidParameters("Platform must be registered first");
 
-            // Update partner credentials in database
+            // Update partner credentials:
+            //    Keep the existing inbound token (token = existing.Token) unchanged.
+            //    The new outboundToken from the PUT body is what WE use when calling THEM.
             await _credentialsService.CreateOrUpdatePartnerAsync(
-                partnerCredentials.Token,
+                existing.Token,
                 partnerCredentials.Url,
                 firstRole.CountryCode.ToString(),
                 firstRole.PartyId,
                 firstRole.BusinessDetails?.Name,
                 firstRole.Role.ToString(),
-                "2.2.1"
+                "2.2.1",
+                outboundToken: partnerCredentials.Token
             );
 
             _logger.LogInformation("Updated OCPI partner credentials: {BusinessName}", 
