@@ -194,7 +194,7 @@ namespace OCPI.Core.Roaming.Controllers
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                var resp = await httpClient.GetAsync(partner.Url);
+                var resp = await httpClient.GetAsync($"{partner.Url.TrimEnd('/')}/versions");
                 sw.Stop();
 
                 return Ok(new

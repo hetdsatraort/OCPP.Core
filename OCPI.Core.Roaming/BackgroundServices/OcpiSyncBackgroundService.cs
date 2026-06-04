@@ -176,7 +176,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             try
             {
                 // 1. GET /versions → list of version objects
-                var versionsResp = await http.GetAsync(partner.Url, ct);
+                var versionsResp = await http.GetAsync($"{partner.Url.TrimEnd('/')}/versions", ct);
                 if (!versionsResp.IsSuccessStatusCode)
                 {
                     _logger.LogWarning(
@@ -185,9 +185,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     return null;
                 }
 
-                var versionsEnvelope = await DeserializeAsync<OcpiApiEnvelope<List<Contracts.OcpiVersionInfo>>>(versionsResp, ct);
+                var versionsEnvelope = await DeserializeAsync<OcpiApiEnvelope<List<Services.OcpiVersionInfo>>>(versionsResp, ct);
                 var v221 = versionsEnvelope?.Data?.FirstOrDefault(v =>
-                    string.Equals(v.Version.ToMemberValue<OcpiVersion>(), "2.2.1", StringComparison.OrdinalIgnoreCase));
+                    string.Equals(v.Version, "2.2.1", StringComparison.OrdinalIgnoreCase));
 
                 if (v221 == null)
                 {
@@ -207,7 +207,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     return null;
                 }
 
-                var detailsEnvelope = await DeserializeAsync<OcpiApiEnvelope<Contracts.OcpiVersionDetails>>(detailsResp, ct);
+                var detailsEnvelope = await DeserializeAsync<OcpiApiEnvelope<Services.OcpiVersionDetails>>(detailsResp, ct);
                 var endpoints = detailsEnvelope?.Data?.Endpoints;
 
                 if (endpoints == null || !endpoints.Any())
@@ -219,7 +219,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 }
 
                 var map = endpoints.ToDictionary(
-                    e => $"{e.Identifier.ToMemberValue<OcpiModule>().ToLowerInvariant()}_{e.Role.ToMemberValue<InterfaceRole>().ToLowerInvariant()}",
+                    e => $"{e.Identifier.ToLowerInvariant()}_{e.Role.ToLowerInvariant()}",
                     e => e.Url,
                     StringComparer.OrdinalIgnoreCase);
 

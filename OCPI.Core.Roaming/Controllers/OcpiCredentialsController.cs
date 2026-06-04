@@ -48,63 +48,71 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] OcpiCredentials partnerCredentials)
         {
-            // Manually extract the bearer token — [OcpiAuthorize] is intentionally absent
-            // on POST so that brand-new partners can authenticate with an A-token.
-            var authHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(authHeader))
-                return Unauthorized(new { status_code = 2001, status_message = "Authorization header missing" });
-
-            var incomingToken = authHeader.Split(' ').Last();
-
-            // 1. Check if this is a valid A-token (pending registration)
-            var pending = await _credentialsService.GetPendingRegistrationByTokenAsync(incomingToken);
-
-            // 2. If not an A-token, check if it belongs to an already-registered partner
-            //    (e.g. they're re-trying POST instead of using PUT)
-            if (pending == null)
+            try
             {
-                var existingPartner = await _credentialsService.GetPartnerByTokenAsync(incomingToken);
-                if (existingPartner == null)
-                    return Unauthorized(new { status_code = 2001, status_message = "Unknown or expired token" });
+                // Manually extract the bearer token — [OcpiAuthorize] is intentionally absent
+                // on POST so that brand-new partners can authenticate with an A-token.
+                var authHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(authHeader))
+                    return Unauthorized(new { status_code = 2001, status_message = "Authorization header missing" });
 
-                // Already registered — they should use PUT to update credentials
-                return Conflict(new { status_code = 2001, status_message = "Platform is already registered. Use PUT to update credentials." });
+                var incomingToken = authHeader.Split(' ').Last();
+
+                // 1. Check if this is a valid A-token (pending registration)
+                var pending = await _credentialsService.GetPendingRegistrationByTokenAsync(incomingToken);
+
+                // 2. If not an A-token, check if it belongs to an already-registered partner
+                //    (e.g. they're re-trying POST instead of using PUT)
+                if (pending == null)
+                {
+                    var existingPartner = await _credentialsService.GetPartnerByTokenAsync(incomingToken);
+                    if (existingPartner == null)
+                        return Unauthorized(new { status_code = 2001, status_message = "Unknown or expired token" });
+
+                    // Already registered — they should use PUT to update credentials
+                    return Conflict(new { status_code = 2001, status_message = "Platform is already registered. Use PUT to update credentials." });
+                }
+
+                OcpiValidate(partnerCredentials);
+
+                var firstRole = partnerCredentials.Roles?.FirstOrDefault();
+                if (firstRole == null)
+                    throw OcpiException.InvalidParameters("At least one role is required");
+
+                // 3. Generate a permanent B-token the partner will use for all future calls to us
+                var bToken = Guid.NewGuid().ToString("N");
+
+                // 4. Persist the partner:
+                //    token         = bToken     — the token THEY send US going forward (inbound auth)
+                //    outboundToken = partnerCredentials.Token — the token WE send THEM (outbound auth)
+                var partner = await _credentialsService.CreateOrUpdatePartnerAsync(
+                    bToken,
+                    partnerCredentials.Url,
+                    firstRole.CountryCode.ToString().ToUpper().Substring(0, 2),
+                    firstRole.PartyId,
+                    firstRole.BusinessDetails?.Name,
+                    firstRole.Role.ToString(),
+                    "2.2.1",
+                    outboundToken: partnerCredentials.Token
+                );
+
+                // 5. Mark the A-token as consumed
+                await _credentialsService.MarkATokenUsedAsync(pending.Id, partner.Id);
+
+                _logger.LogInformation(
+                    "Completed OCPI handshake for new partner: {BusinessName} ({CountryCode}-{PartyId}). B-token issued.",
+                    firstRole.BusinessDetails?.Name, firstRole.CountryCode, firstRole.PartyId);
+
+                // 6. Return OUR credentials — the B-token is embedded so the partner knows
+                //    what token to send in Authorization headers when calling us going forward.
+                var ourCredentials = GetPlatformCredentials(bToken);
+                return OcpiOk(ourCredentials);
             }
-
-            OcpiValidate(partnerCredentials);
-
-            var firstRole = partnerCredentials.Roles?.FirstOrDefault();
-            if (firstRole == null)
-                throw OcpiException.InvalidParameters("At least one role is required");
-
-            // 3. Generate a permanent B-token the partner will use for all future calls to us
-            var bToken = Guid.NewGuid().ToString("N");
-
-            // 4. Persist the partner:
-            //    token         = bToken     — the token THEY send US going forward (inbound auth)
-            //    outboundToken = partnerCredentials.Token — the token WE send THEM (outbound auth)
-            var partner = await _credentialsService.CreateOrUpdatePartnerAsync(
-                bToken,
-                partnerCredentials.Url,
-                firstRole.CountryCode.ToString(),
-                firstRole.PartyId,
-                firstRole.BusinessDetails?.Name,
-                firstRole.Role.ToString(),
-                "2.2.1",
-                outboundToken: partnerCredentials.Token
-            );
-
-            // 5. Mark the A-token as consumed
-            await _credentialsService.MarkATokenUsedAsync(pending.Id, partner.Id);
-
-            _logger.LogInformation(
-                "Completed OCPI handshake for new partner: {BusinessName} ({CountryCode}-{PartyId}). B-token issued.",
-                firstRole.BusinessDetails?.Name, firstRole.CountryCode, firstRole.PartyId);
-
-            // 6. Return OUR credentials — the B-token is embedded so the partner knows
-            //    what token to send in Authorization headers when calling us going forward.
-            var ourCredentials = GetPlatformCredentials(bToken);
-            return OcpiOk(ourCredentials);
+            catch (Exception ex)
+            {
+                throw OcpiException.ServerError(ex.Message, ex.InnerException);
+            }
+            
         }
 
         /// <summary>

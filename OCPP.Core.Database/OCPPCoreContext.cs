@@ -765,10 +765,12 @@ namespace OCPP.Core.Database
                 
                 entity.HasIndex(e => new { e.CountryCode, e.PartyId })
                     .IsUnique()
+                    .HasFilter("[IsActive] = 1")
                     .HasDatabaseName("IX_OcpiPartnerCredential_CountryCode_PartyId");
                 
                 entity.HasIndex(e => e.Token)
                     .IsUnique()
+                    .HasFilter("[IsActive] = 1")
                     .HasDatabaseName("IX_OcpiPartnerCredential_Token");
 
                 entity.Property(e => e.Token).IsRequired().HasMaxLength(255);

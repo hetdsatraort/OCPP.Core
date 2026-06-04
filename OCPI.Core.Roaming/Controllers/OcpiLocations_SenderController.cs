@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using OCPI.Contracts;
 using OCPP.Core.Database;
 using Microsoft.EntityFrameworkCore;
 using BitzArt.Pagination;
@@ -30,7 +29,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get paginated list of all locations
         /// </summary>
         [HttpGet]
-        public async Task<IActionResult> GetLocations([FromQuery] OcpiPageRequest pageRequest)
+        public async Task<IActionResult> GetLocations([FromQuery] BitzArt.Pagination.PageRequest pageRequest)
         {
             // Set maximum Limit value (required for OCPI.Net PageResult handling)
             SetMaxLimit(pageRequest, 100);
@@ -41,7 +40,7 @@ namespace OCPI.Core.Roaming.Controllers
             // Fetch from database
             var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-            var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, locations.Count);
+            var result = new PageResult<Contracts.OcpiLocation, PageRequest>(locations, pageRequest, locations.Count);
             // OcpiOk with PageResult automatically adds pagination headers
             var finalResult = OcpiOk(result);
             return finalResult;
