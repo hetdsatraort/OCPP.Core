@@ -31,19 +31,27 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpGet]
         public async Task<IActionResult> GetLocations([FromQuery] BitzArt.Pagination.PageRequest pageRequest)
         {
-            // Set maximum Limit value (required for OCPI.Net PageResult handling)
-            SetMaxLimit(pageRequest, 100);
+            try
+            {
+                // Set maximum Limit value (required for OCPI.Net PageResult handling)
+                SetMaxLimit(pageRequest, 100);
 
-            var offset = pageRequest.Offset ?? 0;
-            var limit = pageRequest.Limit ?? 100;
+                var offset = pageRequest.Offset ?? 0;
+                var limit = pageRequest.Limit ?? 100;
 
-            // Fetch from database
-            var locations = await _locationService.GetOurLocationsAsync(offset, limit);
+                // Fetch from database
+                var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-            var result = new PageResult<Contracts.OcpiLocation, PageRequest>(locations, pageRequest, locations.Count);
-            // OcpiOk with PageResult automatically adds pagination headers
-            var finalResult = OcpiOk(result);
-            return finalResult;
+                var result = new PageResult<Contracts.OcpiLocation, PageRequest>(locations, pageRequest, locations.Count);
+                // OcpiOk with PageResult automatically adds pagination headers
+                var finalResult = OcpiOk(result);
+                return finalResult;
+            }
+            catch (Exception ex)
+            {
+                throw OcpiException.ServerError(ex.Message, ex.InnerException);
+            }
+            
         }
 
         /// <summary>
