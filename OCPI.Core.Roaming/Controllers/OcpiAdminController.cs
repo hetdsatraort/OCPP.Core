@@ -4,6 +4,7 @@ using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
 using OCPP.Core.Database;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 namespace OCPI.Core.Roaming.Controllers
@@ -223,7 +224,7 @@ namespace OCPI.Core.Roaming.Controllers
                 return BadRequest(new { success = false, message = "VersionsUrl and Token are required" });
 
             var httpClient = _httpClientFactory.CreateClient();
-            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {request.Token}");
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(request.Token))}");
             httpClient.Timeout = TimeSpan.FromSeconds(15);
 
             try
