@@ -277,8 +277,8 @@ namespace OCPI.Core.Roaming.Controllers
 
                 // Step 4: Build our credentials object
                 var ourToken = Guid.NewGuid().ToString("N")[..32].ToUpperInvariant();
-                var ourBaseUrl = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
-                var ourVersionsUrl = $"{ourBaseUrl}/2.2.1/versions";
+                var ourBaseUrl = _configuration["Ocpi:BaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+                var ourVersionsUrl = $"{ourBaseUrl}/versions";
                 var ourCountryCode = _configuration["Ocpi:CountryCode"] ?? "IN";
                 var ourPartyId = _configuration["Ocpi:PartyId"] ?? "HYC";
                 var ourBusinessName = _configuration["Ocpi:BusinessName"] ?? "HyCharge";
@@ -289,6 +289,13 @@ namespace OCPI.Core.Roaming.Controllers
                     url = ourVersionsUrl,
                     roles = new[]
                     {
+                        new
+                        {
+                            role = "EMS",
+                            business_details = new { name = ourBusinessName },
+                            country_code = ourCountryCode,
+                            party_id = ourPartyId
+                        },
                         new
                         {
                             role = "CPO",
