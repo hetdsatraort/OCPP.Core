@@ -29,7 +29,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get paginated list of all locations
         /// </summary>
         [HttpGet]
-        public async Task<IActionResult> GetLocations([FromQuery] BitzArt.Pagination.PageRequest pageRequest)
+        public async Task<IActionResult> GetLocations([FromQuery] PageRequest pageRequest)
         {
             try
             {

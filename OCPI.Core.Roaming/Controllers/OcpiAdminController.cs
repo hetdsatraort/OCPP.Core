@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.BackgroundServices;
 using OCPI.Core.Roaming.Services;
 using OCPP.Core.Database;
 using System.Net.Http.Json;
@@ -21,6 +22,7 @@ namespace OCPI.Core.Roaming.Controllers
     {
         private readonly IOcpiLocationService _locationService;
         private readonly IOcpiCommandService _commandService;
+        private readonly IOcpiSyncBackgroundService _syncService;
         private readonly IOcpiCredentialsService _credentialsService;
         private readonly OCPPCoreContext _dbContext;
         private readonly IHttpClientFactory _httpClientFactory;
@@ -34,7 +36,8 @@ namespace OCPI.Core.Roaming.Controllers
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             OCPPCoreContext dbContext,
-            ILogger<OcpiAdminController> logger)
+            ILogger<OcpiAdminController> logger,
+            IOcpiSyncBackgroundService syncService)
         {
             _locationService = locationService;
             _commandService = commandService;
@@ -43,6 +46,7 @@ namespace OCPI.Core.Roaming.Controllers
             _configuration = configuration;
             _dbContext = dbContext;
             _logger = logger;
+            _syncService = syncService;
         }
 
         // ── Our Locations ──────────────────────────────────────────────────────
@@ -283,35 +287,28 @@ namespace OCPI.Core.Roaming.Controllers
                 var ourPartyId = _configuration["Ocpi:PartyId"] ?? "HYC";
                 var ourBusinessName = _configuration["Ocpi:BusinessName"] ?? "HyCharge";
 
-                var ourCredentials = new
+                var ourCredentials = new OcpiCredentials
                 {
-                    token = ourToken,
-                    url = ourVersionsUrl,
-                    roles = new[]
+                    Token = ourToken,
+                    Url = ourVersionsUrl,
+                    Roles = new List<OcpiCredentialsRole>
                     {
-                        new
+                        new OcpiCredentialsRole
                         {
-                            role = "EMS",
-                            business_details = new { name = ourBusinessName },
-                            country_code = ourCountryCode,
-                            party_id = ourPartyId
-                        },
-                        new
-                        {
-                            role = "CPO",
-                            business_details = new { name = ourBusinessName },
-                            country_code = ourCountryCode,
-                            party_id = ourPartyId
+                            Role = "CPO",
+                            BusinessDetails = new OcpiBusinessDetails { Name = ourBusinessName },
+                            CountryCode = ourCountryCode,
+                            PartyId = ourPartyId
                         }
                     }
                 };
 
                 // Step 5: POST our credentials to partner's credentials endpoint
-                var credResp = await httpClient.PostAsJsonAsync(credentialsEndpointUrl, ourCredentials);
+                var credResp = await httpClient.PostAsJsonAsync<OcpiCredentials>(credentialsEndpointUrl, ourCredentials);
                 if (!credResp.IsSuccessStatusCode)
                 {
                     var body = await credResp.Content.ReadAsStringAsync();
-                    return BadRequest(new { success = false, message = $"Credential POST failed (HTTP {(int)credResp.StatusCode}): {body}" });
+                    return Ok(new { success = false, message = $"Credential POST failed (HTTP {(int)credResp.StatusCode}): {body}" });
                 }
 
                 // Step 6: Parse the partner's returned credentials (B-token)
@@ -342,13 +339,14 @@ namespace OCPI.Core.Roaming.Controllers
 
                 // Step 7: Persist partner credentials (use B-token going forward)
                 await _credentialsService.CreateOrUpdatePartnerAsync(
-                    token:        partnerToken,
+                    token:        ourToken,
                     url:          partnerUrl,
                     countryCode:  partnerCountryCode ?? "??",
                     partyId:      partnerPartyId ?? "???",
                     businessName: partnerName ?? "Unknown",
                     role:         partnerRole ?? "CPO",
-                    version:      chosenVersion!
+                    version:      chosenVersion!,
+                    outboundToken: partnerToken
                 );
 
                 _logger.LogInformation("[Admin] OCPI handshake complete with {Url} ({BusinessName})", request.VersionsUrl, partnerName);
@@ -357,12 +355,12 @@ namespace OCPI.Core.Roaming.Controllers
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "[Admin] OCPI onboard HTTP error for {Url}", request.VersionsUrl);
-                return StatusCode(502, new { success = false, message = $"Could not reach partner: {ex.Message}" });
+                return StatusCode(200, new { success = false, message = $"Could not reach partner: {ex.Message}" });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[Admin] OCPI onboard error for {Url}", request.VersionsUrl);
-                return StatusCode(500, new { success = false, message = $"Error during handshake: {ex.Message}" });
+                return StatusCode(200, new { success = false, message = $"Error during handshake: {ex.Message}. Inner: {ex.InnerException?.Message}" });
             }
         }
 
@@ -847,6 +845,22 @@ namespace OCPI.Core.Roaming.Controllers
                     "[Admin/eMSP] Error sending STOP_SESSION for session {SessionId}", request.SessionId);
                 return StatusCode(502,
                     new { success = false, message = $"Error communicating with partner: {ex.Message}" });
+            }
+        }
+
+        [HttpGet("emsp/perform-sync")]
+        public async Task<IActionResult> PerformSync()
+        {
+            try
+            {
+                var ct = new CancellationToken();
+                await _syncService.PerformSyncRoundAsync(ct);
+                return Ok(new { success = true, message = "Full sync completed successfully" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Admin/eMSP] Error performing full sync");
+                return StatusCode(500, new { success = false, message = $"Error during sync: {ex.Message}" });
             }
         }
 

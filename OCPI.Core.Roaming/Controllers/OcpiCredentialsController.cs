@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
-using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
+using System.Text.Json.Serialization;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -73,14 +73,14 @@ namespace OCPI.Core.Roaming.Controllers
                     return Conflict(new { status_code = 2001, status_message = "Platform is already registered. Use PUT to update credentials." });
                 }
 
-                OcpiValidate(partnerCredentials);
+                //OcpiValidate<OcpiCredentials>(partnerCredentials);
 
                 var firstRole = partnerCredentials.Roles?.FirstOrDefault();
                 if (firstRole == null)
                     throw OcpiException.InvalidParameters("At least one role is required");
 
                 // 3. Generate a permanent B-token the partner will use for all future calls to us
-                var bToken = Guid.NewGuid().ToString("N");
+                var bToken = Guid.NewGuid().ToString("N").ToUpperInvariant();
 
                 // 4. Persist the partner:
                 //    token         = bToken     — the token THEY send US going forward (inbound auth)
@@ -198,10 +198,10 @@ namespace OCPI.Core.Roaming.Controllers
                 {
                     new OcpiCredentialsRole
                     {
-                        CountryCode = CountryCode.India,
+                        CountryCode = "IN",
                         PartyId = _configuration["OCPI:PartyId"] ?? "CPO",
-                        Role = PartyRole.Cpo,
-                        BusinessDetails = new OcpiBusinessDetails
+                        Role = "CPO",
+                        BusinessDetails = new OCPI.Contracts.OcpiBusinessDetails
                         {
                             Name = _configuration["OCPI:BusinessName"] ?? "EV Charging Platform",
                             Website = _configuration["OCPI:Website"] ?? "https://evcharging.com"
@@ -210,5 +210,32 @@ namespace OCPI.Core.Roaming.Controllers
                 }
             };
         }
+    }
+
+    public class OcpiCredentials
+    {
+        [JsonPropertyName("token")]
+        public string? Token { get; set; }
+
+        [JsonPropertyName("url")]
+        public string? Url { get; set; }
+
+        [JsonPropertyName("roles")]
+        public List<OcpiCredentialsRole>? Roles { get; set; }
+    }
+
+    public class OcpiCredentialsRole
+    {
+        [JsonPropertyName("country_code")]
+        public string? CountryCode { get; set; }
+
+        [JsonPropertyName("party_id")]
+        public string? PartyId { get; set; }
+
+        [JsonPropertyName("role")]
+        public string? Role { get; set; }
+
+        [JsonPropertyName("business_details")]
+        public OCPI.Contracts.OcpiBusinessDetails? BusinessDetails { get; set; }
     }
 }

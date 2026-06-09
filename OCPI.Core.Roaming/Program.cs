@@ -1,15 +1,18 @@
 using OCPI;
 using OCPP.Core.Database;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-
 // Add all required OCPI services to the application
 // This automatically registers all OCPI.Net services including:
 // - IOcpiVersionService (auto-scans controllers and generates version endpoints)
 // - Exception handling middleware
 // - Validation services
 // - Authorization services
+                using var log = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
 builder.AddOcpi();
 
 // Add Database Context (for future integration with OCPP.Core.Database)
@@ -28,6 +31,7 @@ builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiTokenService, OCPI.Co
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCommandService, OCPI.Core.Roaming.Services.OcpiCommandService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiChargingProfileService, OCPI.Core.Roaming.Services.OcpiChargingProfileService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IChargingSessionService, OCPI.Core.Roaming.Services.ChargingSessionService>();
+builder.Services.AddScoped<OCPI.Core.Roaming.BackgroundServices.IOcpiSyncBackgroundService, OCPI.Core.Roaming.BackgroundServices.OcpiSyncBackgroundService>();
 
 // Register OCPI Background Service
 builder.Services.AddHostedService<OCPI.Core.Roaming.BackgroundServices.OcpiSyncBackgroundService>();
@@ -88,6 +92,8 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 var app = builder.Build();
+
+app.UseDeveloperExceptionPage();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment() || true)

@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BitzArt.EnumToMemberValue;
@@ -22,7 +23,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
     /// Endpoint URLs are discovered at runtime by calling the partner's /versions URL and
     /// resolving the 2.2.1 module endpoint list, so no hard-coded URL templates are needed.
     /// </summary>
-    public class OcpiSyncBackgroundService : BackgroundService
+    /// 
+    public interface IOcpiSyncBackgroundService
+    {
+        public Task PerformSyncRoundAsync(CancellationToken ct);
+    }
+    public class OcpiSyncBackgroundService : BackgroundService, IOcpiSyncBackgroundService
     {
         private readonly IServiceProvider _services;
         private readonly ILogger<OcpiSyncBackgroundService> _logger;
@@ -36,6 +42,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingNull,
             Converters                  = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper) }
         };
+        
 
         public OcpiSyncBackgroundService(
             IServiceProvider services,
@@ -90,7 +97,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
         // ── Sync orchestration ─────────────────────────────────────────────────
 
-        private async Task PerformSyncRoundAsync(CancellationToken ct)
+        public async Task PerformSyncRoundAsync(CancellationToken ct)
         {
             using var scope     = _services.CreateScope();
             var dbContext       = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
@@ -531,7 +538,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             const int pageSize = 100;
 
             // Build initial URL with query params
-            var sep      = url.Contains('?') ? "&" : "?";
+            var sep = url.Contains('?') ? "&" : "?";
             var firstUrl = $"{url}{sep}limit={pageSize}";
             if (!string.IsNullOrEmpty(dateFrom))
                 firstUrl += $"&date_from={Uri.EscapeDataString(dateFrom)}";
@@ -586,7 +593,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         {
             var http = factory.CreateClient();
             http.DefaultRequestHeaders.Clear();
-            http.DefaultRequestHeaders.Add("Authorization", $"Token {partner.OutboundToken}");
+            http.DefaultRequestHeaders.Add("Authorization", $"Token  {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.Token))}");
             http.Timeout = TimeSpan.FromSeconds(30);
             return http;
         }
