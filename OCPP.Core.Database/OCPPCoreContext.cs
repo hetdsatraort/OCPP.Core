@@ -876,6 +876,15 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
 
+                // ── App-side eMSP tracking columns ────────────────────────────
+                entity.Property(e => e.UserId).HasMaxLength(250).IsRequired(false);
+                entity.Property(e => e.EnergyLimit).IsRequired(false);
+                entity.Property(e => e.CostLimit).IsRequired(false);
+                entity.Property(e => e.TimeLimit).IsRequired(false);
+                entity.Property(e => e.BatteryIncreaseLimit).IsRequired(false);
+                // BIT NOT NULL DEFAULT 0 — a simple boolean flag; no special column type needed.
+                entity.Property(e => e.LimitViolationHandled).HasDefaultValue(false);
+
                 entity.HasOne(d => d.PartnerCredential)
                     .WithMany()
                     .HasForeignKey(d => d.PartnerCredentialId)

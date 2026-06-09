@@ -109,6 +109,34 @@ namespace OCPP.Core.Database.OCPIDTO
         /// </summary>
         public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
 
+        // ── App-side session tracking (eMSP role) ─────────────────────────────
+
+        /// <summary>
+        /// App user who initiated this session via our eMSP flow.
+        /// Null for sessions not started from our app (e.g. received via partner sync only).
+        /// Links to EVCDTO.Users.RecId.
+        /// </summary>
+        [MaxLength(250)]
+        public string? UserId { get; set; }
+
+        /// <summary>Maximum energy to deliver in kWh. Null = no limit.</summary>
+        public double? EnergyLimit { get; set; }
+
+        /// <summary>Maximum cost in session currency. Null = no limit.</summary>
+        public double? CostLimit { get; set; }
+
+        /// <summary>Maximum session duration in minutes. Null = no limit.</summary>
+        public int? TimeLimit { get; set; }
+
+        /// <summary>Maximum battery percentage increase (0–100). Null = no limit.</summary>
+        public double? BatteryIncreaseLimit { get; set; }
+
+        /// <summary>
+        /// Set to true once a limit-violation debit has been recorded for this session
+        /// to prevent double-billing when the partner later sends the final COMPLETED status.
+        /// </summary>
+        public bool LimitViolationHandled { get; set; } = false;
+
         // Navigation property
         public virtual OcpiPartnerCredential PartnerCredential { get; set; }
     }

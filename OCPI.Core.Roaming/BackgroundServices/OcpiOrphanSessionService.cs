@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OCPP.Core.Database;
+using OCPP.Core.Database.OCPIDTO;
+using System.Text.Json;
 
 namespace OCPI.Core.Roaming.BackgroundServices
 {
@@ -22,6 +24,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
     {
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<OcpiOrphanSessionService> _logger;
+        private readonly IConfiguration _configuration;
         private readonly TimeSpan _checkInterval;
         private readonly TimeSpan _orphanTimeout;
 
@@ -30,8 +33,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
             ILogger<OcpiOrphanSessionService> logger,
             IConfiguration configuration)
         {
-            _scopeFactory = scopeFactory;
-            _logger       = logger;
+            _scopeFactory   = scopeFactory;
+            _logger         = logger;
+            _configuration  = configuration;
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 30);
             var timeouSeconds  = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
@@ -53,7 +57,10 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 try
                 {
+                    // CPO role: manage sessions hosted at OUR chargers
                     await ProcessSessionsAsync(stoppingToken);
+                    // eMSP role: manage sessions our users have at partner CPO stations
+                    await ProcessPartnerSessionsAsync(stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -213,6 +220,434 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _logger.LogInformation(
                 "OcpiOrphanSessionService: cycle done — live-updated: {Live}, completed: {Tx}, invalidated: {Inv}",
                 liveUpdated, closedByTx, closedAsInvalid);
+        }
+
+        // ── eMSP role: partner session limit checking ─────────────────────────────
+        //
+        // OcpiPartnerSessions are sessions our users do at partner CPO stations.
+        // The partner CPO owns the charging hardware; we can only stop the session by
+        // issuing an OCPI STOP_SESSION command.  Energy / cost data comes from the
+        // partner's periodic PUT/PATCH updates (handled by OcpiSyncBackgroundService).
+        //
+        // This method:
+        //   A) Marks sessions as COMPLETED when the partner has set EndDateTime.
+        //      Bills the user's wallet for the final TotalCost.
+        //   B) Checks configured limits (Energy / Cost / Time) and issues a STOP_SESSION
+        //      command to the partner CPO when a limit is exceeded, then bills the wallet
+        //      for the current TotalCost.  LimitViolationHandled is set to prevent double-billing.
+        //   C) Marks sessions without UserId as INVALID when they are stale (eMSP sessions
+        //      that were never formally started from our app and have timed out).
+
+        private async Task ProcessPartnerSessionsAsync(CancellationToken ct)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db          = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
+            var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+
+            var activeSessions = await db.OcpiPartnerSessions
+                .Where(s => s.Status == "ACTIVE")
+                .ToListAsync(ct);
+
+            if (activeSessions.Count == 0)
+            {
+                _logger.LogDebug("OcpiOrphanSessionService: no ACTIVE partner sessions to process");
+                return;
+            }
+
+            _logger.LogInformation(
+                "OcpiOrphanSessionService: processing {Count} ACTIVE partner session(s)", activeSessions.Count);
+
+            // ── Bulk-load ancillary data ──────────────────────────────────────────
+
+            var partnerIds = activeSessions
+                .Where(s => s.PartnerCredentialId.HasValue)
+                .Select(s => s.PartnerCredentialId!.Value)
+                .Distinct().ToList();
+
+            var partners = partnerIds.Any()
+                ? await db.OcpiPartnerCredentials
+                      .Where(p => partnerIds.Contains(p.Id) && p.IsActive)
+                      .ToDictionaryAsync(p => p.Id, ct)
+                : new Dictionary<int, OcpiPartnerCredential>();
+
+            // Only need wallet/user data for app-initiated sessions with limits
+            var limitedUserIds = activeSessions
+                .Where(s => s.UserId != null && !s.LimitViolationHandled
+                            && (s.EnergyLimit.HasValue || s.CostLimit.HasValue || s.TimeLimit.HasValue))
+                .Select(s => s.UserId!)
+                .Distinct().ToList();
+
+            // Also include sessions that completed (EndDateTime set) to finalise billing
+            var completedUserIds = activeSessions
+                .Where(s => s.EndDateTime.HasValue && s.UserId != null && !s.LimitViolationHandled)
+                .Select(s => s.UserId!)
+                .Distinct().ToList();
+
+            var allBillingUserIds = limitedUserIds.Union(completedUserIds).Distinct().ToList();
+
+            var walletBalancesDict = new Dictionary<string, string>();
+            if (allBillingUserIds.Any())
+            {
+                var lastTxns = await db.WalletTransactionLogs
+                    .Where(w => allBillingUserIds.Contains(w.UserId) && w.Active == 1)
+                    .GroupBy(w => w.UserId)
+                    .Select(g => g.OrderByDescending(w => w.CreatedOn).First())
+                    .ToListAsync(ct);
+
+                walletBalancesDict = lastTxns.ToDictionary(w => w.UserId, w => w.CurrentCreditBalance);
+            }
+
+            var usersDict = allBillingUserIds.Any()
+                ? await db.Users
+                      .Where(u => allBillingUserIds.Contains(u.RecId))
+                      .ToDictionaryAsync(u => u.RecId, ct)
+                : new Dictionary<string, OCPP.Core.Database.EVCDTO.Users>();
+
+            var walletsToAdd   = new List<OCPP.Core.Database.EVCDTO.WalletTransactionLog>();
+            var usersToUpdate  = new List<OCPP.Core.Database.EVCDTO.Users>();
+
+            int completedCount       = 0;
+            int limitStoppedCount    = 0;
+            int orphanInvalidated    = 0;
+
+            foreach (var session in activeSessions)
+            {
+                // ── A) Partner has set EndDateTime → mark COMPLETED and finalise billing ──
+                if (session.EndDateTime.HasValue)
+                {
+                    session.Status      = "COMPLETED";
+                    session.LastUpdated = DateTime.UtcNow;
+                    completedCount++;
+
+                    if (!session.LimitViolationHandled
+                        && session.UserId != null
+                        && session.TotalCost.HasValue
+                        && session.TotalCost > 0)
+                    {
+                        ApplyPartnerSessionBilling(
+                            session, walletBalancesDict, usersDict,
+                            walletsToAdd, usersToUpdate,
+                            violationReason: null);
+                        session.LimitViolationHandled = true;
+                    }
+
+                    _logger.LogInformation(
+                        "OcpiOrphanSessionService: partner session {SessionId} marked COMPLETED " +
+                        "(partner sent EndDateTime={End}, energy={Energy} kWh, cost={Cost} {Ccy})",
+                        session.SessionId, session.EndDateTime, session.TotalEnergy,
+                        session.TotalCost, session.Currency);
+                    continue;
+                }
+
+                // ── B) Stale orphan with no app user → invalidate after timeout ────────
+                var age = DateTime.UtcNow - session.LastUpdated;
+                if (session.UserId == null && age >= _orphanTimeout)
+                {
+                    session.Status      = "INVALID";
+                    session.EndDateTime = DateTime.UtcNow;
+                    session.LastUpdated = DateTime.UtcNow;
+                    orphanInvalidated++;
+
+                    _logger.LogWarning(
+                        "OcpiOrphanSessionService: partner session {SessionId} invalidated — " +
+                        "no app user and no update for {Age:F1} min (threshold {Threshold:F1} min)",
+                        session.SessionId, age.TotalMinutes, _orphanTimeout.TotalMinutes);
+                    continue;
+                }
+
+                // ── C) Check user-configured limits ───────────────────────────────────
+                if (session.LimitViolationHandled) continue;
+                if (session.UserId == null)        continue; // no limits to enforce
+                if (!session.EnergyLimit.HasValue && !session.CostLimit.HasValue
+                    && !session.TimeLimit.HasValue && !session.BatteryIncreaseLimit.HasValue)
+                    continue;
+
+                var violations = new List<string>();
+                var elapsed    = DateTime.UtcNow - session.StartDateTime;
+
+                if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
+                    && (double)session.TotalEnergy.Value >= session.EnergyLimit.Value)
+                {
+                    violations.Add(
+                        $"Energy {session.TotalEnergy:F3} kWh ≥ limit {session.EnergyLimit:F3} kWh");
+                }
+
+                if (session.CostLimit.HasValue && session.TotalCost.HasValue
+                    && (double)session.TotalCost.Value >= session.CostLimit.Value)
+                {
+                    violations.Add(
+                        $"Cost {session.TotalCost:F2} {session.Currency} ≥ limit {session.CostLimit:F2}");
+                }
+
+                if (session.TimeLimit.HasValue
+                    && elapsed.TotalMinutes >= session.TimeLimit.Value)
+                {
+                    violations.Add(
+                        $"Time {elapsed.TotalMinutes:F1} min ≥ limit {session.TimeLimit} min");
+                }
+
+                if (violations.Count == 0) continue;
+
+                _logger.LogWarning(
+                    "OcpiOrphanSessionService: partner session {SessionId} — limit(s) exceeded: {Violations}",
+                    session.SessionId, string.Join("; ", violations));
+
+                // Issue STOP_SESSION to the partner CPO (best-effort; session will be reconciled on next sync)
+                if (session.PartnerCredentialId.HasValue &&
+                    partners.TryGetValue(session.PartnerCredentialId.Value, out var partner) &&
+                    !string.IsNullOrEmpty(partner.OutboundToken))
+                {
+                    bool stopped = await IssueStopSessionToPartnerAsync(
+                        session, partner, httpFactory, ct);
+
+                    _logger.LogInformation(
+                        "OcpiOrphanSessionService: STOP_SESSION to partner {PartnerId} for session {SessionId}: {Result}",
+                        partner.Id, session.SessionId, stopped ? "ACCEPTED" : "not accepted / failed");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "OcpiOrphanSessionService: cannot send STOP for session {SessionId} — " +
+                        "partner credential missing or has no outbound token", session.SessionId);
+                }
+
+                // Bill the user for current consumption regardless of stop result
+                if (session.TotalCost.HasValue && session.TotalCost > 0)
+                {
+                    ApplyPartnerSessionBilling(
+                        session, walletBalancesDict, usersDict,
+                        walletsToAdd, usersToUpdate,
+                        violationReason: string.Join("; ", violations));
+                }
+
+                session.LimitViolationHandled = true;
+                session.LastUpdated           = DateTime.UtcNow;
+                limitStoppedCount++;
+            }
+
+            // ── Batch save ────────────────────────────────────────────────────────
+            if (walletsToAdd.Any())  db.WalletTransactionLogs.AddRange(walletsToAdd);
+            if (usersToUpdate.Any()) db.Users.UpdateRange(usersToUpdate);
+
+            await db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "OcpiOrphanSessionService: partner session cycle done — " +
+                "completed: {Completed}, limit-stopped: {LimitStopped}, invalidated: {Invalidated}",
+                completedCount, limitStoppedCount, orphanInvalidated);
+        }
+
+        // ── OCPI outbound STOP_SESSION ─────────────────────────────────────────
+
+        /// <summary>
+        /// Discovers the partner CPO's commands endpoint and POSTs a STOP_SESSION body.
+        /// Returns true if the partner responded ACCEPTED; false on any failure.
+        /// </summary>
+        private async Task<bool> IssueStopSessionToPartnerAsync(
+            OcpiPartnerSession session,
+            OcpiPartnerCredential partner,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            try
+            {
+                var commandsUrl = await DiscoverPartnerCommandsEndpointAsync(
+                    partner, httpFactory, ct);
+
+                if (commandsUrl == null)
+                {
+                    _logger.LogWarning(
+                        "OcpiOrphanSessionService: commands endpoint not found for partner {PartnerId} — " +
+                        "cannot stop session {SessionId}", partner.Id, session.SessionId);
+                    return false;
+                }
+
+                var http = httpFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {partner.OutboundToken}");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                var ourBaseUrl  = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
+                var commandBody = new
+                {
+                    response_url = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{session.SessionId}",
+                    session_id   = session.SessionId
+                };
+
+                var resp = await http.PostAsJsonAsync(
+                    $"{commandsUrl.TrimEnd('/')}/STOP_SESSION", commandBody, ct);
+
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                string cmdResult = "UNKNOWN";
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("data", out var data) &&
+                        data.TryGetProperty("result", out var r))
+                        cmdResult = r.GetString() ?? "UNKNOWN";
+                }
+                catch { /* ignore JSON parse errors */ }
+
+                return string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "OcpiOrphanSessionService: error issuing STOP_SESSION to partner {PartnerId} " +
+                    "for session {SessionId}", partner.Id, session.SessionId);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Walks the partner's /versions and version-details URLs to find the
+        /// commands receiver endpoint URL.  Returns null if discovery fails.
+        /// </summary>
+        private async Task<string?> DiscoverPartnerCommandsEndpointAsync(
+            OcpiPartnerCredential partner,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            try
+            {
+                var http = httpFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {partner.OutboundToken}");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                // Step 1: GET /versions
+                var vResp = await http.GetAsync(partner.Url, ct);
+                if (!vResp.IsSuccessStatusCode) return null;
+
+                using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
+
+                string? v221Url = null;
+                if (vDoc.RootElement.TryGetProperty("data", out var vData) &&
+                    vData.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var v in vData.EnumerateArray())
+                    {
+                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
+                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        if (ver == "2.2.1") { v221Url = url; break; }
+                        if (ver == "2.2")     v221Url = url;
+                    }
+                }
+
+                if (v221Url == null) return null;
+
+                // Step 2: GET version details
+                var dResp = await http.GetAsync(v221Url, ct);
+                if (!dResp.IsSuccessStatusCode) return null;
+
+                using var dDoc = JsonDocument.Parse(await dResp.Content.ReadAsStringAsync(ct));
+
+                if (dDoc.RootElement.TryGetProperty("data", out var dData) &&
+                    dData.TryGetProperty("endpoints", out var eps) &&
+                    eps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var ep in eps.EnumerateArray())
+                    {
+                        var id   = ep.TryGetProperty("identifier", out var idProp)  ? idProp.GetString()  : null;
+                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+
+                        if (!string.Equals(id, "commands", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        // Accept RECEIVER or CPO role (some implementations omit role)
+                        bool roleOk = role == null
+                            || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(role, "CPO",      StringComparison.OrdinalIgnoreCase);
+
+                        if (roleOk)
+                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "OcpiOrphanSessionService: endpoint discovery failed for partner {PartnerId}",
+                    partner.Id);
+                return null;
+            }
+        }
+
+        // ── Wallet billing helper ─────────────────────────────────────────────
+
+        /// <summary>
+        /// Debits <c>session.TotalCost</c> from the user's wallet and records a
+        /// <see cref="OCPP.Core.Database.EVCDTO.WalletTransactionLog"/> entry.
+        /// Mutates <paramref name="walletBalancesDict"/> so subsequent sessions in the same
+        /// cycle see the updated balance.
+        /// </summary>
+        private void ApplyPartnerSessionBilling(
+            OcpiPartnerSession session,
+            Dictionary<string, string> walletBalancesDict,
+            Dictionary<string, OCPP.Core.Database.EVCDTO.Users> usersDict,
+            List<OCPP.Core.Database.EVCDTO.WalletTransactionLog> walletsToAdd,
+            List<OCPP.Core.Database.EVCDTO.Users> usersToUpdate,
+            string? violationReason)
+        {
+            if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
+                return;
+
+            decimal totalFee = session.TotalCost.Value;
+
+            decimal previousBalance = 0;
+            if (walletBalancesDict.TryGetValue(session.UserId, out var balStr) &&
+                decimal.TryParse(balStr, out var lb))
+                previousBalance = lb;
+
+            decimal newBalance = previousBalance - totalFee;
+
+            if (newBalance < 0)
+                _logger.LogWarning(
+                    "OcpiOrphanSessionService: billing user {UserId} for partner session {SessionId} — " +
+                    "balance went negative. Previous: {Prev:F2}, Fee: {Fee:F2} {Ccy}, New: {New:F2}",
+                    session.UserId, session.SessionId, previousBalance, totalFee, session.Currency, newBalance);
+
+            var info1 = violationReason != null
+                ? $"OCPI partner session auto-stopped — limit exceeded: {session.SessionId}"
+                : $"OCPI partner session completed — {session.SessionId}";
+            var info2 = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}";
+            var info3 = violationReason ?? $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}";
+
+            var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
+            {
+                RecId                  = Guid.NewGuid().ToString(),
+                UserId                 = session.UserId,
+                PreviousCreditBalance  = previousBalance.ToString("F2"),
+                CurrentCreditBalance   = newBalance.ToString("F2"),
+                TransactionType        = "Debit",
+                ChargingSessionId      = session.SessionId,
+                AdditionalInfo1        = info1,
+                AdditionalInfo2        = info2,
+                AdditionalInfo3        = info3,
+                Active                 = 1,
+                CreatedOn              = DateTime.UtcNow,
+                UpdatedOn              = DateTime.UtcNow
+            };
+
+            walletsToAdd.Add(walletTx);
+
+            if (usersDict.TryGetValue(session.UserId, out var user))
+            {
+                user.CreditBalance = newBalance.ToString("F2");
+                user.UpdatedOn     = DateTime.UtcNow;
+                if (!usersToUpdate.Contains(user))
+                    usersToUpdate.Add(user);
+            }
+
+            // Update in-memory cache for subsequent sessions in the same cycle
+            walletBalancesDict[session.UserId] = newBalance.ToString("F2");
+
+            _logger.LogInformation(
+                "OcpiOrphanSessionService: debited {Fee:F2} {Ccy} from user {UserId} " +
+                "for partner session {SessionId}; new balance: {Balance:F2}",
+                totalFee, session.Currency, session.UserId, session.SessionId, newBalance);
         }
     }
 }

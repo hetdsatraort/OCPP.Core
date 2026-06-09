@@ -633,6 +633,292 @@ namespace OCPI.Core.Roaming.Controllers
             return Ok(new { success = true, data = result });
         }
 
+        // ── eMSP Outbound Commands (Our users at Partner CPO stations) ───────────
+
+        /// <summary>
+        /// Send a START_SESSION command to a partner CPO for one of our users (eMSP role).
+        /// Discovers the partner's commands endpoint at runtime, POSTs the OCPI command,
+        /// and creates an <see cref="OCPP.Core.Database.OCPIDTO.OcpiPartnerSession"/> record
+        /// with the user's optional limits so the orphan-session service can enforce them.
+        /// </summary>
+        [HttpPost("emsp/start-session")]
+        public async Task<IActionResult> EmspStartSession(
+            [FromBody] EmspStartSessionRequest request)
+        {
+            if (request.PartnerId <= 0)
+                return BadRequest(new { success = false, message = "PartnerId is required" });
+
+            var partner = await _dbContext.OcpiPartnerCredentials
+                .FirstOrDefaultAsync(p => p.Id == request.PartnerId && p.IsActive);
+            if (partner == null)
+                return NotFound(new { success = false, message = "Partner not found or inactive" });
+
+            if (string.IsNullOrEmpty(partner.OutboundToken))
+                return BadRequest(new { success = false, message = "Partner has no outbound token configured" });
+
+            // Discover the partner's commands endpoint
+            var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
+            if (commandsUrl == null)
+                return StatusCode(502, new { success = false, message = "Could not discover partner commands endpoint" });
+
+            var sessionId   = Guid.NewGuid().ToString();
+            var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/START_SESSION/{sessionId}";
+
+            var commandBody = new
+            {
+                response_url  = responseUrl,
+                token         = new
+                {
+                    country_code       = _configuration["Ocpi:CountryCode"] ?? "IN",
+                    party_id           = _configuration["Ocpi:PartyId"]     ?? "CPO",
+                    uid                = request.TokenUid,
+                    type               = "APP_USER",
+                    contract_id        = request.TokenUid,
+                    issuer             = _configuration["Ocpi:BusinessName"] ?? "HyCharge",
+                    valid              = true,
+                    whitelist          = "NEVER",
+                    last_updated       = DateTime.UtcNow.ToString("o")
+                },
+                location_id   = request.LocationId,
+                evse_uid      = request.EvseUid,
+                connector_id  = request.ConnectorId
+            };
+
+            var http = _httpClientFactory.CreateClient();
+            http.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Authorization", $"Token {partner.OutboundToken}");
+            http.Timeout = TimeSpan.FromSeconds(15);
+
+            try
+            {
+                var resp = await http.PostAsJsonAsync(
+                    $"{commandsUrl.TrimEnd('/')}/START_SESSION", commandBody);
+                var body = await resp.Content.ReadAsStringAsync();
+
+                string cmdResult = "UNKNOWN";
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("data", out var data) &&
+                        data.TryGetProperty("result", out var resultProp))
+                        cmdResult = resultProp.GetString() ?? "UNKNOWN";
+                }
+                catch { /* ignore parse errors */ }
+
+                bool accepted = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase);
+
+                // Persist the session record so limits can be tracked by the background service
+                var session = new OCPP.Core.Database.OCPIDTO.OcpiPartnerSession
+                {
+                    CountryCode          = partner.CountryCode,
+                    PartyId              = partner.PartyId,
+                    SessionId            = sessionId,
+                    StartDateTime        = DateTime.UtcNow,
+                    Status               = accepted ? "ACTIVE" : "INVALID",
+                    LocationId           = request.LocationId,
+                    EvseUid              = request.EvseUid,
+                    ConnectorId          = request.ConnectorId,
+                    TokenUid             = request.TokenUid,
+                    Currency             = "INR",
+                    PartnerCredentialId  = partner.Id,
+                    UserId               = request.UserId,
+                    EnergyLimit          = request.EnergyLimit,
+                    CostLimit            = request.CostLimit,
+                    TimeLimit            = request.TimeLimit,
+                    BatteryIncreaseLimit = request.BatteryIncreaseLimit,
+                    CreatedOn            = DateTime.UtcNow,
+                    LastUpdated          = DateTime.UtcNow
+                };
+
+                _dbContext.OcpiPartnerSessions.Add(session);
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "[Admin/eMSP] START_SESSION → partner {PartnerId} ({BusinessName}): result={Result}, sessionId={SessionId}",
+                    request.PartnerId, partner.BusinessName, cmdResult, sessionId);
+
+                return Ok(new
+                {
+                    success   = accepted,
+                    result    = cmdResult,
+                    sessionId = accepted ? sessionId : (string?)null,
+                    message   = accepted
+                        ? "Session started at partner CPO"
+                        : $"Partner rejected the command: {cmdResult}"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[Admin/eMSP] Error sending START_SESSION to partner {PartnerId}", request.PartnerId);
+                return StatusCode(502,
+                    new { success = false, message = $"Error communicating with partner: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// Send a STOP_SESSION command to the partner CPO for an active eMSP session.
+        /// Looks up the session by <paramref name="request"/>.<c>SessionId</c>, discovers the
+        /// partner's commands endpoint, and POSTs the OCPI STOP_SESSION body.
+        /// </summary>
+        [HttpPost("emsp/stop-session")]
+        public async Task<IActionResult> EmspStopSession(
+            [FromBody] EmspStopSessionRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.SessionId))
+                return BadRequest(new { success = false, message = "SessionId is required" });
+
+            var session = await _dbContext.OcpiPartnerSessions
+                .FirstOrDefaultAsync(s => s.SessionId == request.SessionId);
+            if (session == null)
+                return NotFound(new { success = false, message = "Partner session not found" });
+
+            if (!session.PartnerCredentialId.HasValue)
+                return BadRequest(new { success = false, message = "Session has no associated partner credential" });
+
+            var partner = await _dbContext.OcpiPartnerCredentials
+                .FirstOrDefaultAsync(p => p.Id == session.PartnerCredentialId.Value && p.IsActive);
+            if (partner == null)
+                return NotFound(new { success = false, message = "Partner not found or inactive" });
+
+            if (string.IsNullOrEmpty(partner.OutboundToken))
+                return BadRequest(new { success = false, message = "Partner has no outbound token configured" });
+
+            var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
+            if (commandsUrl == null)
+                return StatusCode(502, new { success = false, message = "Could not discover partner commands endpoint" });
+
+            var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{request.SessionId}";
+
+            var commandBody = new
+            {
+                response_url = responseUrl,
+                session_id   = request.SessionId
+            };
+
+            var http = _httpClientFactory.CreateClient();
+            http.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Authorization", $"Token {partner.OutboundToken}");
+            http.Timeout = TimeSpan.FromSeconds(15);
+
+            try
+            {
+                var resp = await http.PostAsJsonAsync(
+                    $"{commandsUrl.TrimEnd('/')}/STOP_SESSION", commandBody);
+                var body = await resp.Content.ReadAsStringAsync();
+
+                string cmdResult = "UNKNOWN";
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("data", out var data) &&
+                        data.TryGetProperty("result", out var resultProp))
+                        cmdResult = resultProp.GetString() ?? "UNKNOWN";
+                }
+                catch { /* ignore parse errors */ }
+
+                _logger.LogInformation(
+                    "[Admin/eMSP] STOP_SESSION → partner {PartnerId}: result={Result}, sessionId={SessionId}",
+                    session.PartnerCredentialId, cmdResult, request.SessionId);
+
+                return Ok(new
+                {
+                    success   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase),
+                    result    = cmdResult,
+                    sessionId = request.SessionId,
+                    message   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase)
+                        ? "Stop command accepted by partner CPO"
+                        : $"Partner response: {cmdResult}"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[Admin/eMSP] Error sending STOP_SESSION for session {SessionId}", request.SessionId);
+                return StatusCode(502,
+                    new { success = false, message = $"Error communicating with partner: {ex.Message}" });
+            }
+        }
+
+        // ── eMSP helper ───────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Discovers a specific module endpoint URL for a partner by walking their /versions
+        /// and version-details URLs.  Returns the first matching URL or null on failure.
+        /// </summary>
+        private async Task<string?> DiscoverPartnerEndpointAsync(
+            OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential partner,
+            string moduleIdentifier)
+        {
+            try
+            {
+                var http = _httpClientFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {partner.OutboundToken}");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                // Step 1: GET /versions
+                var versionsResp = await http.GetAsync(partner.Url);
+                if (!versionsResp.IsSuccessStatusCode) return null;
+
+                using var versionsDoc = JsonDocument.Parse(
+                    await versionsResp.Content.ReadAsStringAsync());
+
+                string? v221Url = null;
+                if (versionsDoc.RootElement.TryGetProperty("data", out var vData) &&
+                    vData.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var v in vData.EnumerateArray())
+                    {
+                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
+                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        if (ver == "2.2.1") { v221Url = url; break; }
+                        if (ver == "2.2")     v221Url = url;   // keep searching for 2.2.1
+                    }
+                }
+
+                if (v221Url == null) return null;
+
+                // Step 2: GET version details
+                var detailsResp = await http.GetAsync(v221Url);
+                if (!detailsResp.IsSuccessStatusCode) return null;
+
+                using var detailsDoc = JsonDocument.Parse(
+                    await detailsResp.Content.ReadAsStringAsync());
+
+                if (detailsDoc.RootElement.TryGetProperty("data", out var dData) &&
+                    dData.TryGetProperty("endpoints", out var eps) &&
+                    eps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var ep in eps.EnumerateArray())
+                    {
+                        var id   = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
+                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+                        if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        // For commands, we want the RECEIVER role (CPO side)
+                        bool roleMatch = role == null ||
+                            string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(role, "CPO",      StringComparison.OrdinalIgnoreCase);
+                        if (roleMatch)
+                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[Admin] Endpoint discovery failed for partner {Id} module={Module}",
+                    partner.Id, moduleIdentifier);
+                return null;
+            }
+        }
+
         // ── Request DTOs ──────────────────────────────────────────────────────────
 
         public record AdminStartRequest(
@@ -654,5 +940,19 @@ namespace OCPI.Core.Roaming.Controllers
             string? BusinessName);
 
         public record IssueATokenRequest(string Label, int ExpiryHours = 72);
+
+        public record EmspStartSessionRequest(
+            int     PartnerId,
+            string  LocationId,
+            string? EvseUid,
+            string? ConnectorId,
+            string  TokenUid,
+            string? UserId               = null,
+            double? EnergyLimit          = null,
+            double? CostLimit            = null,
+            int?    TimeLimit            = null,
+            double? BatteryIncreaseLimit = null);
+
+        public record EmspStopSessionRequest(string SessionId);
     }
 }

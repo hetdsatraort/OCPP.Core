@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
+using System.Text;
 
 namespace OCPI.Core.Roaming.Services
 {
@@ -17,8 +18,9 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<OcpiPartnerCredential?> GetPartnerByTokenAsync(string token)
         {
+            string decodedToken = Encoding.UTF8.GetString(Convert.FromBase64String(token.Trim()));
             return await _dbContext.OcpiPartnerCredentials
-                .FirstOrDefaultAsync(p => p.Token == token && p.IsActive);
+                .FirstOrDefaultAsync(p => p.Token == decodedToken && p.IsActive);
         }
 
         public async Task<OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId)
