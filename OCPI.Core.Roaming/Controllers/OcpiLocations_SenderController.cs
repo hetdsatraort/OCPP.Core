@@ -29,7 +29,7 @@ namespace OCPI.Core.Roaming.Controllers
         /// Get paginated list of all locations
         /// </summary>
         [HttpGet]
-        public async Task<IActionResult> GetLocations([FromQuery] BitzArt.Pagination.PageRequest pageRequest)
+        public async Task<IActionResult> GetLocations([FromQuery] OcpiPageRequest pageRequest)
         {
             try
             {
@@ -42,7 +42,7 @@ namespace OCPI.Core.Roaming.Controllers
                 // Fetch from database
                 var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-                var result = new PageResult<Contracts.OcpiLocation, PageRequest>(locations, pageRequest, locations.Count);
+                var result = new PageResult<Contracts.OcpiLocation, OcpiPageRequest>(locations, pageRequest, locations.Count);
                 // OcpiOk with PageResult automatically adds pagination headers
                 var finalResult = OcpiOk(result);
                 return finalResult;
