@@ -280,7 +280,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var dateFrom = partner.LastSyncOn?.ToString("o");
             var pulled   = 0;
 
-            await foreach (var location in PaginateAsync<OcpiLocation>(http, url, dateFrom, ct))
+            await foreach (var location in PaginateAsync<OCPI.Core.Roaming.Services.OcpiLocation>(http, url, dateFrom, ct))
             {
                 try   { await locationService.StorePartnerLocationAsync(partner.Id, location); pulled++; }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to store location {Id}", location.Id); }

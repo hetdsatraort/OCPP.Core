@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
+using System.Text.Json.Serialization;
 
 namespace OCPI.Core.Roaming.Services
 {
@@ -21,7 +22,7 @@ namespace OCPI.Core.Roaming.Services
             _configuration = configuration;
         }
 
-        public async Task<List<OcpiLocation>> GetOurLocationsAsync(int offset, int limit)
+        public async Task<IEnumerable<OcpiLocation>> GetOurLocationsAsync(int offset, int limit)
         {
             var countryCode = _configuration["OCPI:CountryCode"] ?? "IN";
             var partyId = _configuration["OCPI:PartyId"] ?? "CPO";
@@ -41,7 +42,7 @@ namespace OCPI.Core.Roaming.Services
                 .Where(g => g.Active == 1 && stations.Select(s => s.RecId).Contains(g.ChargingStationId))
                 .ToListAsync();
 
-            return hubs.Select(h => MapToOcpiLocation(h, stations, guns, countryCode, partyId)).ToList();
+            return hubs.Select(h => MapToOcpiLocation(h, stations, guns, countryCode, partyId));
         }
 
         public async Task<int> GetOurLocationCountAsync()
@@ -257,7 +258,7 @@ namespace OCPI.Core.Roaming.Services
 
             return new OcpiLocation
             {
-                CountryCode = CountryCode.India,
+                CountryCode = "IN",
                 PartyId = partyId,
                 Id = hub.RecId,
                 Publish = true,
@@ -265,7 +266,7 @@ namespace OCPI.Core.Roaming.Services
                 Address = hub.AddressLine1 + (string.IsNullOrEmpty(hub.AddressLine2) ? "" : ", " + hub.AddressLine2) + (string.IsNullOrEmpty(hub.City) ? "" : ", " + hub.City),
                 City = hub.City ?? "Unknown",
                 PostalCode = hub.Pincode ?? "",
-                Country = CountryCode.India.ToString(),
+                Country = "IN",
                 Coordinates = new OcpiGeolocation
                 {
                     Latitude = hub.Latitude?.ToString() ?? "0",
@@ -383,5 +384,89 @@ namespace OCPI.Core.Roaming.Services
         }
 
         #endregion
+    }
+
+    public class OcpiLocation
+    {
+        [JsonPropertyName("country_code")]
+        public string? CountryCode { get; set; }
+
+        [JsonPropertyName("party_id")]
+        public string? PartyId { get; set; }
+
+        [JsonPropertyName("id")]
+        public string? Id { get; set; }
+
+        [JsonPropertyName("publish")]
+        public bool? Publish { get; set; }
+
+        [JsonPropertyName("publish_allowed_to")]
+        public IEnumerable<OcpiPublishTokenType>? PublishAllowedTo { get; set; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("address")]
+        public string? Address { get; set; }
+
+        [JsonPropertyName("city")]
+        public string? City { get; set; }
+
+        [JsonPropertyName("postal_code")]
+        public string? PostalCode { get; set; }
+
+        [JsonPropertyName("state")]
+        public string? State { get; set; }
+
+        [JsonPropertyName("country")]
+        public string? Country { get; set; }
+
+        [JsonPropertyName("coordinates")]
+        public OcpiGeolocation? Coordinates { get; set; }
+
+        [JsonPropertyName("related_locations")]
+        public IEnumerable<OcpiAdditionalGeolocation>? RelatedLocations { get; set; }
+
+        [JsonPropertyName("parking_type")]
+        public ParkingType? ParkingType { get; set; }
+
+        [JsonPropertyName("evses")]
+        public IEnumerable<OcpiEvse>? Evses { get; set; }
+
+        [JsonPropertyName("directions")]
+        public IEnumerable<OcpiDisplayText>? Directions { get; set; }
+
+        [JsonPropertyName("operator")]
+        public OcpiBusinessDetails? Operator { get; set; }
+
+        [JsonPropertyName("suboperator")]
+        public OcpiBusinessDetails? Suboperator { get; set; }
+
+        [JsonPropertyName("owner")]
+        public OcpiBusinessDetails? Owner { get; set; }
+
+        [JsonPropertyName("facilities")]
+        public IEnumerable<FacilityType>? Facilities { get; set; }
+
+        [JsonPropertyName("time_zone")]
+        public string? TimeZone { get; set; }
+
+        [JsonPropertyName("opening_times")]
+        public OcpiHours? OpeningTimes { get; set; }
+
+        [JsonPropertyName("charging_when_closed")]
+        public bool? ChargingWhenClosed { get; set; }
+
+        [JsonPropertyName("images")]
+        public IEnumerable<OcpiImage>? Images { get; set; }
+
+        [JsonPropertyName("energy_mix")]
+        public OcpiEnergyMix? EnergyMix { get; set; }
+
+        [JsonPropertyName("last_updated")]
+        public DateTime? LastUpdated { get; set; }
+
+        [JsonPropertyName("type")]
+        public LocationType? Type { get; set; }
     }
 }

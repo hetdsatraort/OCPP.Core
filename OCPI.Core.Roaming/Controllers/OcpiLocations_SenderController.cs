@@ -39,7 +39,7 @@ namespace OCPI.Core.Roaming.Controllers
                 var total = await _locationService.GetOurLocationCountAsync();
                 var locations = await _locationService.GetOurLocationsAsync(pageRequest.Offset.Value, pageRequest.Limit.Value);
 
-                var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, total);
+                var result = new PageResult<OCPI.Core.Roaming.Services.OcpiLocation, OcpiPageRequest>(locations, pageRequest, total);
                 return OcpiOk(result);
             }
             catch (Exception ex)

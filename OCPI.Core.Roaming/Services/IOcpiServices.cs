@@ -77,7 +77,7 @@ namespace OCPI.Core.Roaming.Services
 
     public interface IOcpiLocationService
     {
-        Task<List<OcpiLocation>> GetOurLocationsAsync(int offset, int limit);
+        Task<IEnumerable<OcpiLocation>> GetOurLocationsAsync(int offset, int limit);
         Task<int> GetOurLocationCountAsync();
         Task<OcpiLocation> GetOurLocationAsync(string locationId);
         Task<OcpiEvse> GetOurEvseAsync(string locationId, string evseUid);

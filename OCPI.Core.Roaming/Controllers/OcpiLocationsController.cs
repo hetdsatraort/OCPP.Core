@@ -34,7 +34,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
-            [FromBody] OcpiLocation location)
+            [FromBody] OCPI.Core.Roaming.Services.OcpiLocation location)
         {
             // Validate location data
             OcpiValidate(location);
@@ -62,7 +62,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromRoute] string countryCode,
             [FromRoute] string partyId,
             [FromRoute] string locationId,
-            [FromBody] OcpiLocation location)
+            [FromBody] OCPI.Core.Roaming.Services.OcpiLocation location)
         {
             // Validate location data
             OcpiValidate(location);
