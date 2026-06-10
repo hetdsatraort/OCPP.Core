@@ -31,17 +31,14 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpGet]
         public async Task<IActionResult> GetTariffs([FromQuery] OcpiPageRequest pageRequest)
         {
-            // Set maximum Limit value
             SetMaxLimit(pageRequest, 100);
+            pageRequest.Offset ??= 0;
+            pageRequest.Limit ??= 100;
 
-            var offset = pageRequest.Offset ?? 0;
-            var limit = pageRequest.Limit ?? 100;
+            var total = await _tariffService.GetTariffCountAsync();
+            var tariffs = await _tariffService.GetTariffsAsync(pageRequest.Offset.Value, pageRequest.Limit.Value);
 
-            // Fetch tariffs from database
-            var tariffs = await _tariffService.GetTariffsAsync(offset, limit);
-
-            var result = new PageResult<OcpiTariff, OcpiPageRequest>(tariffs, pageRequest, tariffs.Count);
-
+            var result = new PageResult<OcpiTariff, OcpiPageRequest>(tariffs, pageRequest, total);
             return OcpiOk(result);
         }
 

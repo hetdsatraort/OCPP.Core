@@ -38,16 +38,15 @@ namespace OCPI.Core.Roaming.Controllers
             [FromQuery(Name = "date_to")]   DateTime? dateTo   = null)
         {
             SetMaxLimit(pageRequest, 100);
+            pageRequest.Offset ??= 0;
+            pageRequest.Limit ??= 100;
 
-            var offset = pageRequest.Offset ?? 0;
-            var limit  = pageRequest.Limit  ?? 100;
-
-            var cdrs  = await _cdrService.GetCdrsAsync(dateFrom, dateTo, offset, limit);
+            var cdrs  = await _cdrService.GetCdrsAsync(dateFrom, dateTo, pageRequest.Offset.Value, pageRequest.Limit.Value);
             var total = await _cdrService.GetCdrCountAsync(dateFrom, dateTo);
 
             _logger.LogInformation(
                 "GET CDRs (sender): offset={Offset}, limit={Limit}, dateFrom={DateFrom}, dateTo={DateTo}, total={Total}",
-                offset, limit, dateFrom, dateTo, total);
+                pageRequest.Offset.Value, pageRequest.Limit.Value, dateFrom, dateTo, total);
 
             var result = new PageResult<OcpiCdr, OcpiPageRequest>(cdrs, pageRequest, total);
             return OcpiOk(result);

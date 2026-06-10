@@ -112,6 +112,7 @@ namespace OCPI.Core.Roaming.Services
     public interface IOcpiTariffService
     {
         Task<List<OcpiTariff>> GetTariffsAsync(int offset = 0, int limit = 100);
+        Task<int> GetTariffCountAsync();
         Task<OcpiTariff> GetTariffAsync(string tariffId);
         Task<string> CreateOrUpdateTariffAsync(OcpiTariff tariff);
     }

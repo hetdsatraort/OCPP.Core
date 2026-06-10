@@ -32,16 +32,14 @@ namespace OCPI.Core.Roaming.Controllers
         {
             try
             {
-                // Set maximum Limit value (required for OCPI.Net PageResult handling)
                 SetMaxLimit(pageRequest, 100);
-
-                var offset = pageRequest.Offset ?? 0;
-                var limit = pageRequest.Limit ?? 100;
+                pageRequest.Offset ??= 0;
+                pageRequest.Limit ??= 100;
 
                 var total = await _locationService.GetOurLocationCountAsync();
-                var locations = await _locationService.GetOurLocationsAsync(offset, limit);
+                var locations = await _locationService.GetOurLocationsAsync(pageRequest.Offset.Value, pageRequest.Limit.Value);
 
-                var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, total, locations.Count());
+                var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, total);
                 return OcpiOk(result);
             }
             catch (Exception ex)

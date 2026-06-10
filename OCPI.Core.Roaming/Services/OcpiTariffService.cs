@@ -33,6 +33,11 @@ namespace OCPI.Core.Roaming.Services
             return dbTariffs.Select(s => MapToOcpiTariff(s)).ToList();
         }
 
+        public async Task<int> GetTariffCountAsync()
+        {
+            return await _dbContext.OcpiTariffs.Where(t => t.IsActive).CountAsync();
+        }
+
         public async Task<OcpiTariff> GetTariffAsync(string tariffId)
         {
             var dbTariff = await _dbContext.OcpiTariffs
