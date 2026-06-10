@@ -1,7 +1,6 @@
-using Microsoft.AspNetCore.Mvc;
-using OCPP.Core.Database;
-using Microsoft.EntityFrameworkCore;
 using BitzArt.Pagination;
+using Microsoft.AspNetCore.Mvc;
+using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
 
 namespace OCPI.Core.Roaming.Controllers
@@ -39,13 +38,11 @@ namespace OCPI.Core.Roaming.Controllers
                 var offset = pageRequest.Offset ?? 0;
                 var limit = pageRequest.Limit ?? 100;
 
-                // Fetch from database
+                var total = await _locationService.GetOurLocationCountAsync();
                 var locations = await _locationService.GetOurLocationsAsync(offset, limit);
 
-                var result = new PageResult<Contracts.OcpiLocation, OcpiPageRequest>(locations, pageRequest, locations.Count);
-                // OcpiOk with PageResult automatically adds pagination headers
-                var finalResult = OcpiOk(result);
-                return finalResult;
+                var result = new PageResult<OcpiLocation, OcpiPageRequest>(locations, pageRequest, total, locations.Count());
+                return OcpiOk(result);
             }
             catch (Exception ex)
             {

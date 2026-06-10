@@ -44,6 +44,11 @@ namespace OCPI.Core.Roaming.Services
             return hubs.Select(h => MapToOcpiLocation(h, stations, guns, countryCode, partyId)).ToList();
         }
 
+        public async Task<int> GetOurLocationCountAsync()
+        {
+            return await _dbContext.ChargingHubs.Where(h => h.Active == 1).CountAsync();
+        }
+
         public async Task<OcpiLocation> GetOurLocationAsync(string locationId)
         {
             var countryCode = _configuration["OCPI:CountryCode"] ?? "IN";
