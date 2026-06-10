@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="OCPI.Net" Version="0.18.0" />
+    <PackageReference Include="Serilog" Version="4.3.1" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
 
