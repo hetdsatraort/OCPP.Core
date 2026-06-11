@@ -266,7 +266,7 @@ namespace OCPI.Core.Roaming.Services
                 Address = hub.AddressLine1 + (string.IsNullOrEmpty(hub.AddressLine2) ? "" : ", " + hub.AddressLine2) + (string.IsNullOrEmpty(hub.City) ? "" : ", " + hub.City),
                 City = hub.City ?? "Unknown",
                 PostalCode = hub.Pincode ?? "",
-                Country = "IN",
+                Country = "India",
                 Coordinates = new OcpiGeolocation
                 {
                     Latitude = hub.Latitude?.ToString() ?? "0",
