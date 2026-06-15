@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"class OcpiController\\\\|OcpiController\")",
+      "PowerShell(dotnet tool install ilspycmd -g 2>&1)",
+      "Bash(cd \"E:\\\\Work\\\\ORT\\\\EV Chaging Misc\\\\OCPI.Net\" && find . -type f -name \"*.cs\" | head -20)",
+      "Read(//e/Work/ORT/EV Chaging Misc/OCPI.Net/**)",
+      "Bash(xargs grep -l \"BitzArt\")"
+    ]
+  }
+}

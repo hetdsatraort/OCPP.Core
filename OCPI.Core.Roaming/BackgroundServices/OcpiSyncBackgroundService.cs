@@ -120,6 +120,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             _logger.LogInformation("OCPI sync round — {Count} partner(s)", partners.Count);
 
+            // Pre-compute the set of charge points that are currently online (via OCPP server
+            // /ConnectionStatus API).  Done once per round so all partner loops share the result.
+            var stationChargePointIds = await dbContext.ChargingStations
+                .Where(s => s.Active == 1 && !string.IsNullOrEmpty(s.ChargingPointId))
+                .Select(s => s.ChargingPointId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            var onlineChargePoints = await GetOnlineChargePointsAsync(httpFactory, stationChargePointIds, ct);
+
+            _logger.LogDebug(
+                "OCPI sync round: {Online}/{Total} charge point(s) online",
+                onlineChargePoints.Count, stationChargePointIds.Count);
+
             foreach (var partner in partners)
             {
                 if (ct.IsCancellationRequested) break;
@@ -149,6 +163,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         await PullTokensFromEmspAsync(partner, endpoints, http, tokenService, ct);
                         await PushLocationsToEmspAsync(partner, endpoints, http, locationService, ct);
                         await PushHostedSessionsToEmspAsync(partner, endpoints, http, dbContext, ct);
+                        await PushEvseStatusesToEmspAsync(partner, endpoints, http, dbContext, onlineChargePoints, ct);
                     }
 
                     partner.LastSyncOn = DateTime.UtcNow;
@@ -520,6 +535,180 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _logger.LogInformation(
                 "Pushed sessions to EMSP {CC}-{Party}: {Pushed} ok, {Failed} failed",
                 partner.CountryCode, partner.PartyId, pushed, failed);
+        }
+
+        // ── PUSH EVSE status to EMSP partner ──────────────────────────────────
+
+        /// <summary>
+        /// Reads real-time connector status from <c>ConnectorStatuses</c> (populated by OCPP
+        /// StatusNotification messages) and PATCHes each EVSE status to the EMSP partner so
+        /// they always see the live availability of our chargers.
+        /// </summary>
+        private async Task PushEvseStatusesToEmspAsync(
+            OcpiPartnerCredential partner,
+            Dictionary<string, string> endpoints,
+            HttpClient http,
+            OCPPCoreContext dbContext,
+            HashSet<string> onlineChargePoints,
+            CancellationToken ct)
+        {
+            if (!endpoints.TryGetValue("locations_receiver", out var baseUrl))
+            {
+                _logger.LogDebug(
+                    "Partner {CC}-{Party} has no locations_receiver endpoint — skipping EVSE status push",
+                    partner.CountryCode, partner.PartyId);
+                return;
+            }
+
+            var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
+            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+
+            var stations = await dbContext.ChargingStations
+                .Where(s => s.Active == 1 && !string.IsNullOrEmpty(s.ChargingPointId))
+                .ToListAsync(ct);
+
+            if (stations.Count == 0) return;
+
+            var chargePointIds = stations.Select(s => s.ChargingPointId).Distinct().ToList();
+
+            // Real-time status from OCPP StatusNotification messages
+            var connectorStatuses = await dbContext.ConnectorStatuses
+                .Where(cs => chargePointIds.Contains(cs.ChargePointId) && cs.Active == 1)
+                .ToListAsync(ct);
+
+            var statusByChargePoint = connectorStatuses
+                .GroupBy(cs => cs.ChargePointId)
+                .ToDictionary(g => g.Key, g => g.Select(cs => cs.LastStatus).ToList());
+
+            var hubIds = stations.Select(s => s.ChargingHubId).Distinct().ToList();
+            var hubs   = await dbContext.ChargingHubs
+                .Where(h => hubIds.Contains(h.RecId) && h.Active == 1)
+                .ToDictionaryAsync(h => h.RecId, ct);
+
+            int pushed = 0, failed = 0;
+
+            foreach (var station in stations)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (!hubs.TryGetValue(station.ChargingHubId, out var hub)) continue;
+
+                // Offline charge points must be reported as OUTOFORDER regardless of the
+                // last status stored in ConnectorStatuses (which could be stale).
+                string ocpiStatus;
+                if (!onlineChargePoints.Contains(station.ChargingPointId))
+                {
+                    ocpiStatus = "OUTOFORDER";
+                }
+                else if (statusByChargePoint.TryGetValue(station.ChargingPointId, out var rawStatuses))
+                {
+                    ocpiStatus = DeriveEvseOcpiStatus(rawStatuses);
+                }
+                else
+                {
+                    ocpiStatus = "UNKNOWN";
+                }
+
+                // OCPI PUT URL: /{cc}/{partyId}/{locationId}/{evseUid}
+                var url = $"{baseUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{hub.RecId}/{station.RecId}";
+
+                try
+                {
+                    var patch = new { status = ocpiStatus, last_updated = DateTime.UtcNow };
+                    var resp  = await http.PatchAsJsonAsync(url, patch, _jsonOptions, ct);
+
+                    if (resp.IsSuccessStatusCode)
+                        pushed++;
+                    else
+                    {
+                        failed++;
+                        _logger.LogWarning(
+                            "PATCH EVSE {EvseUid}={Status} to partner {CC}-{Party} → HTTP {Code}",
+                            station.RecId, ocpiStatus, partner.CountryCode, partner.PartyId, resp.StatusCode);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    _logger.LogError(ex,
+                        "Failed to PATCH EVSE status {EvseUid} to partner {CC}-{Party}",
+                        station.RecId, partner.CountryCode, partner.PartyId);
+                }
+            }
+
+            _logger.LogInformation(
+                "EVSE status push to EMSP {CC}-{Party}: {Pushed} ok, {Failed} failed",
+                partner.CountryCode, partner.PartyId, pushed, failed);
+        }
+
+        /// <summary>
+        /// Calls the OCPP server's /ConnectionStatus API for each charge-point ID and returns
+        /// the subset that are currently online.  Mirrors the same check in
+        /// <c>GunStatusSyncService.GetChargePointOnlineAsync</c> so EVSE status is never
+        /// based solely on (potentially stale) <c>ConnectorStatuses</c> rows.
+        /// When <c>ServerApiUrl</c> is not configured every ID is treated as online so
+        /// real connector statuses are still pushed.
+        /// </summary>
+        private async Task<HashSet<string>> GetOnlineChargePointsAsync(
+            IHttpClientFactory httpFactory,
+            IEnumerable<string?> chargePointIds,
+            CancellationToken ct)
+        {
+            var serverApiUrl = _configuration["ServerApiUrl"];
+            var ids = chargePointIds.Where(id => !string.IsNullOrEmpty(id)).ToList();
+
+            if (string.IsNullOrEmpty(serverApiUrl))
+            {
+                _logger.LogDebug(
+                    "ServerApiUrl not configured — treating all charge points as online for EVSE status push");
+                return new HashSet<string>(ids!, StringComparer.OrdinalIgnoreCase);
+            }
+
+            var apiKey  = _configuration["ApiKey"] ?? string.Empty;
+            var baseUrl = serverApiUrl.TrimEnd('/');
+            var online  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var id in ids)
+            {
+                if (ct.IsCancellationRequested) break;
+                try
+                {
+                    var client = httpFactory.CreateClient();
+                    client.Timeout = TimeSpan.FromSeconds(5);
+                    if (!string.IsNullOrWhiteSpace(apiKey))
+                        client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
+
+                    var resp = await client.GetAsync(
+                        $"{baseUrl}/ConnectionStatus/{Uri.EscapeDataString(id!)}", ct);
+
+                    if (!resp.IsSuccessStatusCode) continue;
+
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("isOnline", out var prop) && prop.GetBoolean())
+                        online.Add(id!);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex,
+                        "GetOnlineChargePointsAsync: status check failed for {Id} — treating as offline", id);
+                }
+            }
+
+            return online;
+        }
+
+        /// <summary>
+        /// Aggregates OCPP connector statuses for one EVSE into a single OCPI status string.
+        /// Priority: CHARGING > BLOCKED > OUTOFORDER > AVAILABLE > UNKNOWN.
+        /// </summary>
+        private static string DeriveEvseOcpiStatus(IEnumerable<string?> ocppStatuses)
+        {
+            var statuses = ocppStatuses.Select(s => s?.ToUpperInvariant()).ToList();
+            if (statuses.Any(s => s is "OCCUPIED" or "CHARGING"))   return "CHARGING";
+            if (statuses.Any(s => s is "UNAVAILABLE" or "FAULTED")) return "BLOCKED";
+            if (statuses.Any(s => s == "OFFLINE"))                   return "OUTOFORDER";
+            if (statuses.All(s => s == "AVAILABLE"))                 return "AVAILABLE";
+            return "UNKNOWN";
         }
 
         // ── Pagination helper ──────────────────────────────────────────────────
