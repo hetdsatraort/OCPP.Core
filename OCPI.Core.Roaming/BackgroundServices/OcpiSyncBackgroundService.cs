@@ -678,7 +678,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
 
                     var resp = await client.GetAsync(
-                        $"{baseUrl}/ConnectionStatus/{Uri.EscapeDataString(id!)}", ct);
+                        $"{baseUrl}/API/ConnectionStatus/{Uri.EscapeDataString(id!)}", ct);
 
                     if (!resp.IsSuccessStatusCode) continue;
 
