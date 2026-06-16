@@ -51,52 +51,53 @@ namespace OCPI.Core.Roaming.Services
         public async Task StorePartnerTokenAsync(int partnerCredentialId, OcpiToken token)
         {
             var existing = await _dbContext.OcpiTokens
-                .FirstOrDefaultAsync(t => t.CountryCode == token.CountryCode.ToString() 
-                    && t.PartyId == token.PartyId 
+                .FirstOrDefaultAsync(t => t.CountryCode == token.CountryCode.ToString()
+                    && t.PartyId == token.PartyId
                     && t.TokenUid == token.Uid);
 
             if (existing != null)
             {
-                // Update existing
-                existing.Type = token.Type?.ToString();
-                existing.VisualNumber = token.VisualNumber;
-                existing.Issuer = token.Issuer;
-                existing.GroupId = token.GroupId;
-                existing.Valid = token.Valid ?? true;
-                existing.Whitelist = token.Whitelist?.ToString();
-                existing.Language = token.LanguageCode;
-                existing.DefaultProfileType = token.DefaultProfileType?.ToString();
-                existing.LastUpdated = token.LastUpdated ?? DateTime.MinValue;
-                
+                existing.Type              = Trunc(token.Type?.ToString(), 50);
+                existing.VisualNumber      = Trunc(token.VisualNumber, 64);
+                existing.Issuer            = Trunc(token.Issuer, 64);
+                existing.GroupId           = Trunc(token.GroupId, 36);
+                existing.Valid             = token.Valid ?? true;
+                existing.Whitelist         = Trunc(token.Whitelist?.ToString(), 50);
+                existing.Language          = Trunc(token.LanguageCode, 2);
+                existing.DefaultProfileType = Trunc(token.DefaultProfileType?.ToString(), 50);
+                existing.LastUpdated       = token.LastUpdated ?? DateTime.MinValue;
+
                 _dbContext.OcpiTokens.Update(existing);
                 _logger.LogInformation("Updated partner token {TokenUid}", token.Uid);
             }
             else
             {
-                // Create new
                 var newToken = new OCPP.Core.Database.OCPIDTO.OcpiToken
                 {
-                    CountryCode = token.CountryCode?.ToString(),
-                    PartyId = token.PartyId,
-                    TokenUid = token.Uid,
-                    Type = token.Type?.ToString(),
-                    VisualNumber = token.VisualNumber,
-                    Issuer = token.Issuer,
-                    GroupId = token.GroupId,
-                    Valid = token.Valid ?? true,
-                    Whitelist = token.Whitelist?.ToString(),
-                    Language = token.LanguageCode,
-                    DefaultProfileType = token.DefaultProfileType?.ToString(),
+                    CountryCode         = Trunc(token.CountryCode?.ToString(), 2),
+                    PartyId             = Trunc(token.PartyId, 3),
+                    TokenUid            = Trunc(token.Uid, 36),
+                    Type                = Trunc(token.Type?.ToString(), 50),
+                    VisualNumber        = Trunc(token.VisualNumber, 64),
+                    Issuer              = Trunc(token.Issuer, 64),
+                    GroupId             = Trunc(token.GroupId, 36),
+                    Valid               = token.Valid ?? true,
+                    Whitelist           = Trunc(token.Whitelist?.ToString(), 50),
+                    Language            = Trunc(token.LanguageCode, 2),
+                    DefaultProfileType  = Trunc(token.DefaultProfileType?.ToString(), 50),
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated = token.LastUpdated ?? DateTime.MinValue
+                    LastUpdated         = token.LastUpdated ?? DateTime.MinValue
                 };
-                
+
                 await _dbContext.OcpiTokens.AddAsync(newToken);
                 _logger.LogInformation("Created new partner token {TokenUid}", token.Uid);
             }
 
             await _dbContext.SaveChangesAsync();
         }
+
+        private static string? Trunc(string? value, int maxLength) =>
+            value is null ? null : value.Length <= maxLength ? value : value[..maxLength];
 
         public async Task UpdatePartnerTokenAsync(string tokenUid, OcpiToken token)
         {

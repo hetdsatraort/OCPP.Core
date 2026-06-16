@@ -462,13 +462,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
         /// <summary>
         /// Aggregates OCPP connector statuses for one EVSE into a single OCPI status string.
-        /// Priority: CHARGING > BLOCKED > OUTOFORDER > AVAILABLE > UNKNOWN.
+        /// Covers all OCPP 1.6 connector status values that indicate an active or transitional
+        /// charging session (Preparing, SuspendedEV, SuspendedEVSE, Finishing) so they are
+        /// never reported as OUTOFORDER while a partner's user is connected.
+        /// Priority: CHARGING > BLOCKED > RESERVED > OUTOFORDER > AVAILABLE > UNKNOWN.
         /// </summary>
         private static string DeriveEvseOcpiStatus(IEnumerable<string?> ocppStatuses)
         {
             var statuses = ocppStatuses.Select(s => s?.ToUpperInvariant()).ToList();
-            if (statuses.Any(s => s is "OCCUPIED" or "CHARGING"))   return "CHARGING";
+            if (statuses.Any(s => s is "OCCUPIED" or "CHARGING"
+                                     or "PREPARING" or "SUSPENDEDEV"
+                                     or "SUSPENDEDEVSE" or "FINISHING"))
+                return "CHARGING";
             if (statuses.Any(s => s is "UNAVAILABLE" or "FAULTED")) return "BLOCKED";
+            if (statuses.Any(s => s == "RESERVED"))                  return "RESERVED";
             if (statuses.Any(s => s == "OFFLINE"))                   return "OUTOFORDER";
             if (statuses.All(s => s == "AVAILABLE"))                 return "AVAILABLE";
             return "UNKNOWN";

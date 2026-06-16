@@ -22,7 +22,7 @@ namespace OCPP.Core.Management.Services
             _logger = logger;
             _scopeFactory = scopeFactory;
 
-            var intervalMinutes = configuration.GetValue<int>("GunStatus:CheckIntervalMinutes", 10);
+            var intervalMinutes = configuration.GetValue<int>("GunStatus:CheckIntervalMinutes", 1);
             _checkInterval = TimeSpan.FromMinutes(intervalMinutes);
 
             _logger.LogInformation(

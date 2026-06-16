@@ -169,7 +169,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     partner.LastSyncOn = DateTime.UtcNow;
                     dbContext.OcpiPartnerCredentials.Update(partner);
                     await dbContext.SaveChangesAsync(ct);
-
+                    
                     _logger.LogInformation(
                         "Sync complete for partner {CountryCode}-{PartyId}",
                         partner.CountryCode, partner.PartyId);
@@ -585,6 +585,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .Where(h => hubIds.Contains(h.RecId) && h.Active == 1)
                 .ToDictionaryAsync(h => h.RecId, ct);
 
+            // Chargers with an active OCPI hosted session are provably in use.  Override any
+            // stale ConnectorStatus or failed online-check so partners see CHARGING, not OUTOFORDER.
+            var activeSessionChargePointIds = await dbContext.OcpiHostedSessions
+                .Where(s => s.Status == "ACTIVE" && !string.IsNullOrEmpty(s.ChargePointId))
+                .Select(s => s.ChargePointId!)
+                .Distinct()
+                .ToListAsync(ct);
+            var activeSessionSet = new HashSet<string>(activeSessionChargePointIds, StringComparer.OrdinalIgnoreCase);
+
             int pushed = 0, failed = 0;
 
             foreach (var station in stations)
@@ -592,11 +601,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (ct.IsCancellationRequested) break;
                 if (!hubs.TryGetValue(station.ChargingHubId, out var hub)) continue;
 
-                // Offline charge points must be reported as OUTOFORDER regardless of the
-                // last status stored in ConnectorStatuses (which could be stale).
                 string ocpiStatus;
-                if (!onlineChargePoints.Contains(station.ChargingPointId))
+                if (activeSessionSet.Contains(station.ChargingPointId))
                 {
+                    // Active OCPI session — charger is definitely in use; report CHARGING
+                    // regardless of the online check or stale ConnectorStatuses value.
+                    ocpiStatus = "CHARGING";
+                }
+                else if (!onlineChargePoints.Contains(station.ChargingPointId))
+                {
+                    // Offline charge points must be reported as OUTOFORDER regardless of the
+                    // last status stored in ConnectorStatuses (which could be stale).
                     ocpiStatus = "OUTOFORDER";
                 }
                 else if (statusByChargePoint.TryGetValue(station.ChargingPointId, out var rawStatuses))
@@ -699,13 +714,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
         /// <summary>
         /// Aggregates OCPP connector statuses for one EVSE into a single OCPI status string.
-        /// Priority: CHARGING > BLOCKED > OUTOFORDER > AVAILABLE > UNKNOWN.
+        /// Covers all OCPP 1.6 connector status values that indicate an active or transitional
+        /// charging session (Preparing, SuspendedEV, SuspendedEVSE, Finishing) so they are
+        /// never reported as OUTOFORDER while a partner's user is connected.
+        /// Priority: CHARGING > BLOCKED > RESERVED > OUTOFORDER > AVAILABLE > UNKNOWN.
         /// </summary>
         private static string DeriveEvseOcpiStatus(IEnumerable<string?> ocppStatuses)
         {
             var statuses = ocppStatuses.Select(s => s?.ToUpperInvariant()).ToList();
-            if (statuses.Any(s => s is "OCCUPIED" or "CHARGING"))   return "CHARGING";
+            if (statuses.Any(s => s is "OCCUPIED" or "CHARGING"
+                                     or "PREPARING" or "SUSPENDEDEV"
+                                     or "SUSPENDEDEVSE" or "FINISHING"))
+                return "CHARGING";
             if (statuses.Any(s => s is "UNAVAILABLE" or "FAULTED")) return "BLOCKED";
+            if (statuses.Any(s => s == "RESERVED"))                  return "RESERVED";
             if (statuses.Any(s => s == "OFFLINE"))                   return "OUTOFORDER";
             if (statuses.All(s => s == "AVAILABLE"))                 return "AVAILABLE";
             return "UNKNOWN";

@@ -42,7 +42,23 @@ namespace OCPI.Core.Roaming.Services
                 .Where(g => g.Active == 1 && stations.Select(s => s.RecId).Contains(g.ChargingStationId))
                 .ToListAsync();
 
-            return hubs.Select(h => MapToOcpiLocation(h, stations, guns, countryCode, partyId));
+            var stationChargePointIds = stations
+                .Where(s => !string.IsNullOrEmpty(s.ChargingPointId))
+                .Select(s => s.ChargingPointId!)
+                .Distinct()
+                .ToList();
+
+            var activeOcpiChargePointIds = stationChargePointIds.Any()
+                ? await _dbContext.OcpiHostedSessions
+                    .Where(s => s.Status == "ACTIVE" && stationChargePointIds.Contains(s.ChargePointId))
+                    .Select(s => s.ChargePointId!)
+                    .Distinct()
+                    .ToListAsync()
+                : [];
+
+            var activeOcpiSet = new HashSet<string>(activeOcpiChargePointIds, StringComparer.OrdinalIgnoreCase);
+
+            return hubs.Select(h => MapToOcpiLocation(h, stations, guns, countryCode, partyId, activeOcpiSet));
         }
 
         public async Task<int> GetOurLocationCountAsync()
@@ -58,6 +74,9 @@ namespace OCPI.Core.Roaming.Services
             var hub = await _dbContext.ChargingHubs
                 .FirstOrDefaultAsync(h => h.RecId == locationId && h.Active == 1);
 
+            if (hub == null)
+                return new OcpiLocation();
+
             var stations = await _dbContext.ChargingStations
                 .Where(s => s.Active == 1 && s.ChargingHubId == locationId)
                 .ToListAsync();
@@ -65,10 +84,24 @@ namespace OCPI.Core.Roaming.Services
             var guns = await _dbContext.ChargingGuns
                 .Where(g => g.Active == 1 && stations.Select(s => s.RecId).Contains(g.ChargingStationId))
                 .ToListAsync();
-            if (hub == null)
-                return new OcpiLocation();
 
-            return MapToOcpiLocation(hub, stations, guns, countryCode, partyId);
+            var stationChargePointIds = stations
+                .Where(s => !string.IsNullOrEmpty(s.ChargingPointId))
+                .Select(s => s.ChargingPointId!)
+                .Distinct()
+                .ToList();
+
+            var activeOcpiChargePointIds = stationChargePointIds.Count > 0
+                ? await _dbContext.OcpiHostedSessions
+                    .Where(s => s.Status == "ACTIVE" && stationChargePointIds.Contains(s.ChargePointId))
+                    .Select(s => s.ChargePointId!)
+                    .Distinct()
+                    .ToListAsync()
+                : [];
+
+            var activeOcpiSet = new HashSet<string>(activeOcpiChargePointIds, StringComparer.OrdinalIgnoreCase);
+
+            return MapToOcpiLocation(hub, stations, guns, countryCode, partyId, activeOcpiSet);
         }
 
         public async Task<OcpiEvse> GetOurEvseAsync(string locationId, string evseUid)
@@ -109,45 +142,43 @@ namespace OCPI.Core.Roaming.Services
         public async Task StorePartnerLocationAsync(int partnerCredentialId, OcpiLocation location)
         {
             var existing = await _dbContext.OcpiPartnerLocations
-                .FirstOrDefaultAsync(l => l.CountryCode == location.CountryCode.ToString() 
-                    && l.PartyId == location.PartyId 
+                .FirstOrDefaultAsync(l => l.CountryCode == location.CountryCode!.ToString()
+                    && l.PartyId == location.PartyId
                     && l.LocationId == location.Id);
 
             if (existing != null)
             {
-                // Update existing
-                existing.Name = location.Name;
-                existing.Address = location.Address;
-                existing.City = location.City;
-                existing.PostalCode = location.PostalCode;
-                existing.Country = location.Country!.ToString();
-                existing.Latitude = location.Coordinates?.Latitude;
-                existing.Longitude = location.Coordinates?.Longitude;
-                existing.LocationType = location.Type?.ToString();
-                existing.LastUpdated = location.LastUpdated ?? DateTime.UtcNow;
-                
+                existing.Name          = Trunc(location.Name, 255);
+                existing.Address       = Trunc(location.Address, 500);
+                existing.City          = Trunc(location.City, 100);
+                existing.PostalCode    = Trunc(location.PostalCode, 20);
+                existing.Country       = Trunc(location.Country?.ToString(), 3);
+                existing.Latitude      = Trunc(location.Coordinates?.Latitude, 20);
+                existing.Longitude     = Trunc(location.Coordinates?.Longitude, 20);
+                existing.LocationType  = Trunc(location.Type?.ToString(), 50);
+                existing.LastUpdated   = location.LastUpdated ?? DateTime.UtcNow;
+
                 _dbContext.OcpiPartnerLocations.Update(existing);
             }
             else
             {
-                // Create new
                 var newLocation = new OcpiPartnerLocation
                 {
-                    CountryCode = location.CountryCode.ToString(),
-                    PartyId = location.PartyId,
-                    LocationId = location.Id,
-                    Name = location.Name,
-                    Address = location.Address,
-                    City = location.City,
-                    PostalCode = location.PostalCode,
-                    Country = location.Country!.ToString(),
-                    Latitude = location.Coordinates?.Latitude,
-                    Longitude = location.Coordinates?.Longitude,
-                    LocationType = location.Type?.ToString(),
+                    CountryCode         = Trunc(location.CountryCode?.ToString(), 2),
+                    PartyId             = Trunc(location.PartyId, 3),
+                    LocationId          = Trunc(location.Id, 36),
+                    Name                = Trunc(location.Name, 255),
+                    Address             = Trunc(location.Address, 500),
+                    City                = Trunc(location.City, 100),
+                    PostalCode          = Trunc(location.PostalCode, 20),
+                    Country             = Trunc(location.Country?.ToString(), 3),
+                    Latitude            = Trunc(location.Coordinates?.Latitude, 20),
+                    Longitude           = Trunc(location.Coordinates?.Longitude, 20),
+                    LocationType        = Trunc(location.Type?.ToString(), 50),
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated = location.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated         = location.LastUpdated ?? DateTime.UtcNow
                 };
-                
+
                 await _dbContext.OcpiPartnerLocations.AddAsync(newLocation);
             }
 
@@ -161,31 +192,29 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                // Update existing
-                existing.EvseId = evse.EvseId;
-                existing.Status = evse.Status.ToString();
-                existing.StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow;
-                existing.FloorLevel = evse.FloorLevel;
-                existing.PhysicalReference = evse.PhysicalReference;
-                existing.LastUpdated = evse.LastUpdated ?? DateTime.UtcNow;
-                
+                existing.EvseId            = Trunc(evse.EvseId, 48);
+                existing.Status            = Trunc(evse.Status.ToString(), 50);
+                existing.StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow;
+                existing.FloorLevel        = Trunc(evse.FloorLevel, 10);
+                existing.PhysicalReference = Trunc(evse.PhysicalReference, 50);
+                existing.LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow;
+
                 _dbContext.OcpiPartnerEvses.Update(existing);
             }
             else
             {
-                // Create new
                 var newEvse = new OcpiPartnerEvse
                 {
-                    EvseUid = evse.Uid,
-                    EvseId = evse.EvseId,
-                    Status = evse.Status.ToString(),
-                    StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow,
-                    FloorLevel = evse.FloorLevel,
-                    PhysicalReference = evse.PhysicalReference,
+                    EvseUid           = Trunc(evse.Uid, 36),
+                    EvseId            = Trunc(evse.EvseId, 48),
+                    Status            = Trunc(evse.Status.ToString(), 50),
+                    StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow,
+                    FloorLevel        = Trunc(evse.FloorLevel, 10),
+                    PhysicalReference = Trunc(evse.PhysicalReference, 50),
                     PartnerLocationId = partnerLocationId,
-                    LastUpdated = evse.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow
                 };
-                
+
                 await _dbContext.OcpiPartnerEvses.AddAsync(newEvse);
             }
 
@@ -199,33 +228,31 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                // Update existing
-                existing.Standard = connector.Standard.ToString();
-                existing.Format = connector.Format.ToString();
-                existing.PowerType = connector.PowerType.ToString();
-                existing.MaxVoltage = connector.MaxVoltage;
-                existing.MaxAmperage = connector.MaxAmperage;
+                existing.Standard       = Trunc(connector.Standard.ToString(), 50);
+                existing.Format         = Trunc(connector.Format.ToString(), 20);
+                existing.PowerType      = Trunc(connector.PowerType.ToString(), 50);
+                existing.MaxVoltage     = connector.MaxVoltage;
+                existing.MaxAmperage    = connector.MaxAmperage;
                 existing.MaxElectricPower = connector.MaxElectricPower;
-                existing.LastUpdated = connector.LastUpdated ?? DateTime.UtcNow;
-                
+                existing.LastUpdated    = connector.LastUpdated ?? DateTime.UtcNow;
+
                 _dbContext.OcpiPartnerConnectors.Update(existing);
             }
             else
             {
-                // Create new
                 var newConnector = new OcpiPartnerConnector
                 {
-                    ConnectorId = connector.Id,
-                    Standard = connector.Standard.ToString(),
-                    Format = connector.Format.ToString(),
-                    PowerType = connector.PowerType.ToString(),
-                    MaxVoltage = connector.MaxVoltage,
-                    MaxAmperage = connector.MaxAmperage,
-                    MaxElectricPower = connector.MaxElectricPower,
-                    PartnerEvseId = partnerEvseId,
-                    LastUpdated = connector.LastUpdated ?? DateTime.UtcNow
+                    ConnectorId       = Trunc(connector.Id, 36),
+                    Standard          = Trunc(connector.Standard.ToString(), 50),
+                    Format            = Trunc(connector.Format.ToString(), 20),
+                    PowerType         = Trunc(connector.PowerType.ToString(), 50),
+                    MaxVoltage        = connector.MaxVoltage,
+                    MaxAmperage       = connector.MaxAmperage,
+                    MaxElectricPower  = connector.MaxElectricPower,
+                    PartnerEvseId     = partnerEvseId,
+                    LastUpdated       = connector.LastUpdated ?? DateTime.UtcNow
                 };
-                
+
                 await _dbContext.OcpiPartnerConnectors.AddAsync(newConnector);
             }
 
@@ -250,12 +277,19 @@ namespace OCPI.Core.Roaming.Services
             return evse;
         }
 
+        private static string? Trunc(string? value, int maxLength) =>
+            value is null ? null : value.Length <= maxLength ? value : value[..maxLength];
+
         #region Mapping Methods
 
-        private OcpiLocation MapToOcpiLocation(OCPP.Core.Database.EVCDTO.ChargingHub hub, List<OCPP.Core.Database.EVCDTO.ChargingStation> stations, List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns, string countryCode, string partyId)
+        private OcpiLocation MapToOcpiLocation(
+            OCPP.Core.Database.EVCDTO.ChargingHub hub,
+            List<OCPP.Core.Database.EVCDTO.ChargingStation> stations,
+            List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns,
+            string countryCode,
+            string partyId,
+            HashSet<string> activeOcpiSessions)
         {
-            var cc = Enum.Parse<CountryCode>("356", true);
-
             return new OcpiLocation
             {
                 CountryCode = "IN",
@@ -273,7 +307,9 @@ namespace OCPI.Core.Roaming.Services
                     Longitude = hub.Longitude?.ToString() ?? "0"
                 },
                 Type = LocationType.OnStreet,
-                Evses = stations.Where(s => s.ChargingHubId == hub.RecId).Select(s => MapToOcpiEvse(s, guns)).ToList() ?? new List<OcpiEvse>(),
+                Evses = stations.Where(s => s.ChargingHubId == hub.RecId)
+                                .Select(s => MapToOcpiEvse(s, guns, activeOcpiSessions))
+                                .ToList(),
                 Operator = new OcpiBusinessDetails
                 {
                     Name = _configuration["OCPI:BusinessName"] ?? "EV Charging Platform"
@@ -282,21 +318,33 @@ namespace OCPI.Core.Roaming.Services
             };
         }
 
-        private OcpiEvse MapToOcpiEvse(OCPP.Core.Database.EVCDTO.ChargingStation station, List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns)
+        private OcpiEvse MapToOcpiEvse(
+            OCPP.Core.Database.EVCDTO.ChargingStation station,
+            List<OCPP.Core.Database.EVCDTO.ChargingGuns> guns,
+            HashSet<string>? activeOcpiSessions = null)
         {
             var chargePointId = station.ChargingPointId ?? station.RecId;
             var chargePoint = _dbContext.ChargePoints.FirstOrDefault(cp => cp.ChargePointId == chargePointId);
 
+            EvseStatus status;
+            if (activeOcpiSessions?.Contains(chargePointId) == true)
+            {
+                // There is an active OCPI partner session on this charger — it is definitively
+                // in use, so override whatever GunStatusSyncService last wrote to ChargerStatus.
+                status = EvseStatus.Charging;
+            }
+            else
+            {
+                status = MapStatus(guns.FirstOrDefault(g => g.ChargingStationId == station.RecId)?.ChargerStatus ?? "UNKNOWN");
+            }
 
-            var status = MapStatus(guns.FirstOrDefault(g => g.ChargingStationId == station.RecId)?.ChargerStatus ?? "UNKNOWN");
-            
             return new OcpiEvse
             {
                 Uid = station.RecId,
                 EvseId = $"IN*CPO*E{station.RecId}",
                 Status = status,
-                StatusSchedule = null, // For simplicity, not implementing schedule in this example
-                Connectors = guns?.Where(g => g.ChargingStationId == station.RecId).Select(MapToOcpiConnector).ToList() ?? new List<OcpiConnector>(),
+                StatusSchedule = null,
+                Connectors = guns?.Where(g => g.ChargingStationId == station.RecId).Select(MapToOcpiConnector).ToList() ?? [],
                 PhysicalReference = chargePoint?.Name ?? "Station " + station.ChargingPointId,
                 LastUpdated = station.UpdatedOn
             };
