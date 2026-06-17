@@ -295,7 +295,7 @@ namespace OCPI.Core.Roaming.Controllers
                     {
                         new OcpiCredentialsRole
                         {
-                            Role = "CPO",
+                            Role = "EMSP",
                             BusinessDetails = new OcpiBusinessDetails { Name = ourBusinessName },
                             CountryCode = ourCountryCode,
                             PartyId = ourPartyId
