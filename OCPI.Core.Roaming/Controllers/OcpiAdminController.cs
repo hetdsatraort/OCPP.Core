@@ -199,7 +199,8 @@ namespace OCPI.Core.Roaming.Controllers
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                var resp = await httpClient.GetAsync($"{partner.Url.TrimEnd('/')}/versions");
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var resp = await httpClient.GetAsync(partnerURL);
                 sw.Stop();
 
                 return Ok(new
@@ -665,7 +666,7 @@ namespace OCPI.Core.Roaming.Controllers
             // Discover the partner's commands endpoint
             var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
             if (commandsUrl == null)
-                return StatusCode(502, new { success = false, message = "Could not discover partner commands endpoint" });
+                return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
 
             var sessionId   = Guid.NewGuid().ToString();
             var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
@@ -758,7 +759,7 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 _logger.LogError(ex,
                     "[Admin/eMSP] Error sending START_SESSION to partner {PartnerId}", request.PartnerId);
-                return StatusCode(502,
+                return StatusCode(200,
                     new { success = false, message = $"Error communicating with partner: {ex.Message}" });
             }
         }
@@ -793,7 +794,7 @@ namespace OCPI.Core.Roaming.Controllers
 
             var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
             if (commandsUrl == null)
-                return StatusCode(502, new { success = false, message = "Could not discover partner commands endpoint" });
+                return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
 
             var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
             var responseUrl = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{request.SessionId}";
@@ -843,7 +844,7 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 _logger.LogError(ex,
                     "[Admin/eMSP] Error sending STOP_SESSION for session {SessionId}", request.SessionId);
-                return StatusCode(502,
+                return StatusCode(200,
                     new { success = false, message = $"Error communicating with partner: {ex.Message}" });
             }
         }
@@ -882,6 +883,7 @@ namespace OCPI.Core.Roaming.Controllers
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 // Step 1: GET /versions
+                var urlToUse = partner.Url.EndsWith("/versions") ? partner.Url : $"{partner.Url}/versions";
                 var versionsResp = await http.GetAsync(partner.Url);
                 if (!versionsResp.IsSuccessStatusCode) return null;
 

@@ -356,7 +356,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "Authorization", $"Token {partner.OutboundToken}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
-                var vResp = await http.GetAsync(partner.Url, ct);
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var vResp = await http.GetAsync(partnerURL, ct);
                 if (!vResp.IsSuccessStatusCode) return null;
 
                 using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
@@ -775,7 +776,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 // Step 1: GET /versions
-                var vResp = await http.GetAsync(partner.Url, ct);
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var vResp = await http.GetAsync(partnerURL, ct);
                 if (!vResp.IsSuccessStatusCode) return null;
 
                 using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));

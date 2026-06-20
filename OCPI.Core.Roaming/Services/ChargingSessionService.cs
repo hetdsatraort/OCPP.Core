@@ -73,7 +73,9 @@ namespace OCPI.Core.Roaming.Services
                 {
                     var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
                     var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
-                    var url         = $"{partner.Url.TrimEnd('/')}/2.2.1/sessions/{countryCode}/{partyId}/{sessionId}";
+                    var partnerBaseURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/').Replace("/versions", "") : $"{partner.Url.TrimEnd('/')}";
+
+                    var url         = $"{partnerBaseURL.TrimEnd('/')}/2.2.1/sessions/{countryCode}/{partyId}/{sessionId}";
 
                     using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                     httpClient.DefaultRequestHeaders.Add("Authorization", $"Token {partner.Token}");

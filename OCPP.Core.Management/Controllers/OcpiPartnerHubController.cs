@@ -476,7 +476,7 @@ namespace OCPP.Core.Management.Controllers
                 // Forward to OCPI roaming service
                 var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
                 if (string.IsNullOrEmpty(roamingApiUrl))
-                    return StatusCode(503, new
+                    return StatusCode(200, new
                     {
                         success = false,
                         message = "OCPI roaming service is not configured (OcpiRoamingApiUrl missing from appsettings)"
@@ -547,7 +547,7 @@ namespace OCPP.Core.Management.Controllers
 
                 var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
                 if (string.IsNullOrEmpty(roamingApiUrl))
-                    return StatusCode(503, new { success = false, message = "OCPI roaming service not configured" });
+                    return StatusCode(200, new { success = false, message = "OCPI roaming service not configured" });
 
                 var http = _httpClientFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(20);
