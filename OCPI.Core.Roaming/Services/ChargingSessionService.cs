@@ -119,7 +119,7 @@ namespace OCPI.Core.Roaming.Services
 
                 return new OcpiSession
                 {
-                    CountryCode           = Enum.Parse<CountryCode>(countryCode),
+                    CountryCode           = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode),
                     PartyId               = partyId,
                     Id                    = ops.SessionId,
                     StartDateTime         = ops.StartDateTime,

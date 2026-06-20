@@ -5,6 +5,34 @@ using System.Text.Json.Serialization;
 
 namespace OCPI.Core.Roaming.Services
 {
+    /// <summary>
+    /// OCPI.Net enums use the full English name as the C# member (e.g. <c>CountryCode.India</c>)
+    /// and carry the wire-format value (e.g. "IN") in an <see cref="EnumMemberAttribute"/>.
+    /// Calling plain <c>.ToString()</c> on one of these enums therefore returns "India", not "IN" —
+    /// which both corrupts data and overflows narrow DB columns (CountryCode is 2 chars, Currency
+    /// is 3). Use <c>BitzArt.EnumToMemberValue</c>'s <c>.ToMemberValue()</c> extension to go
+    /// enum → wire string, and <see cref="ParseMemberValue{T}"/> below to go wire string → enum
+    /// (the reverse direction isn't provided by that package).
+    /// </summary>
+    public static class OcpiEnumMemberHelper
+    {
+        public static T? ParseMemberValue<T>(string? value) where T : struct, Enum
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+
+            foreach (var enumValue in Enum.GetValues<T>())
+            {
+                var memberInfo = typeof(T).GetMember(enumValue.ToString());
+                var attr = memberInfo.Length > 0 ? memberInfo[0].GetCustomAttribute<EnumMemberAttribute>() : null;
+                var memberValue = attr?.Value ?? enumValue.ToString();
+
+                if (string.Equals(memberValue, value, StringComparison.OrdinalIgnoreCase))
+                    return enumValue;
+            }
+
+            return null;
+        }
+    }
 
     public class JsonStringEnumMemberConverterV2 : JsonConverterFactory
     {

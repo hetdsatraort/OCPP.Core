@@ -137,11 +137,11 @@ namespace OCPI.Core.Roaming.Services
         {
             var tariff = new OcpiTariff
             {
-                CountryCode = Enum.Parse<CountryCode>(dbTariff.CountryCode, true),
+                CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(dbTariff.CountryCode),
                 PartyId = dbTariff.PartyId,
                 Id = dbTariff.TariffId,
-                Currency = Enum.Parse<CurrencyCode>(dbTariff.Currency, true),
-                Type = !string.IsNullOrEmpty(dbTariff.Type) ? Enum.Parse<TariffType>(dbTariff.Type) : null,
+                Currency = OcpiEnumMemberHelper.ParseMemberValue<CurrencyCode>(dbTariff.Currency),
+                Type = !string.IsNullOrEmpty(dbTariff.Type) ? OcpiEnumMemberHelper.ParseMemberValue<TariffType>(dbTariff.Type) : null,
                 LastUpdated = dbTariff.LastUpdated
             };
 

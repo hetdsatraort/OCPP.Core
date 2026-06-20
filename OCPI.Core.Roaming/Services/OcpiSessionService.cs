@@ -1,3 +1,4 @@
+using BitzArt.EnumToMemberValue;
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
@@ -43,8 +44,14 @@ namespace OCPI.Core.Roaming.Services
 
             // Fall back to matching on the CPO-assigned session id directly (sessions we didn't
             // initiate ourselves, or a second update for an already-resolved session).
+            // OCPI.Net enums (CountryCode/CurrencyCode/SessionStatus/...) carry the wire value
+            // ("IN", "ACTIVE") in an [EnumMember] attribute, not in the C# member name ("India",
+            // "Active") — plain .ToString() returns the member name, which both corrupts the
+            // stored value and overflows the narrow DB columns. Always go through ToMemberValue().
+            var sessionCountryCode = session.CountryCode?.ToMemberValue();
+
             existing ??= await _dbContext.OcpiPartnerSessions.FirstOrDefaultAsync(s =>
-                s.CountryCode == session.CountryCode.ToString()
+                s.CountryCode == sessionCountryCode
                 && s.PartyId == session.PartyId
                 && s.SessionId == session.Id);
 
@@ -56,13 +63,13 @@ namespace OCPI.Core.Roaming.Services
                 existing.StartDateTime = session.StartDateTime ?? existing.StartDateTime;
                 existing.EndDateTime = session.EndDateTime;
                 existing.TotalEnergy = session.Kwh;
-                existing.Status = session.Status?.ToString() ?? existing.Status;
+                existing.Status = session.Status?.ToMemberValue() ?? existing.Status;
                 existing.LocationId = session.LocationId ?? existing.LocationId;
                 existing.EvseUid = session.EvseId ?? existing.EvseUid;
                 existing.ConnectorId = session.ConnectorId ?? existing.ConnectorId;
                 existing.AuthorizationReference = session.AuthorizationReference ?? existing.AuthorizationReference;
                 existing.TokenUid = session.CdrToken?.Uid ?? existing.TokenUid;
-                existing.Currency = session.Currency?.ToString() ?? existing.Currency;
+                existing.Currency = session.Currency?.ToMemberValue() ?? existing.Currency;
                 existing.TotalCost = session.TotalCost?.ExclVat ?? existing.TotalCost;
                 existing.LastUpdated = session.LastUpdated ?? DateTime.UtcNow;
 
@@ -76,19 +83,19 @@ namespace OCPI.Core.Roaming.Services
                 // Create new session
                 var newSession = new OcpiPartnerSession
                 {
-                    CountryCode = session.CountryCode?.ToString(),
+                    CountryCode = sessionCountryCode,
                     PartyId = session.PartyId,
                     SessionId = session.Id,
                     StartDateTime = session.StartDateTime ?? DateTime.UtcNow,
                     EndDateTime = session.EndDateTime,
                     TotalEnergy = session.Kwh,
-                    Status = session.Status?.ToString(),
+                    Status = session.Status?.ToMemberValue(),
                     LocationId = session.LocationId,
                     EvseUid = session.EvseId,
                     ConnectorId = session.ConnectorId,
                     AuthorizationReference = session.AuthorizationReference,
                     TokenUid = session.CdrToken?.Uid,
-                    Currency = session.Currency?.ToString(),
+                    Currency = session.Currency?.ToMemberValue(),
                     TotalCost = session.TotalCost?.ExclVat,
                     PartnerCredentialId = partnerCredentialId,
                     LastUpdated = session.LastUpdated ?? DateTime.UtcNow
@@ -117,7 +124,7 @@ namespace OCPI.Core.Roaming.Services
             // Update fields that may have changed
             existing.EndDateTime = session.EndDateTime;
             existing.TotalEnergy = session.Kwh;
-            existing.Status = session.Status?.ToString();
+            existing.Status = session.Status?.ToMemberValue() ?? existing.Status;
             existing.TotalCost = session.TotalCost?.ExclVat;
             existing.LastUpdated = session.LastUpdated ?? DateTime.UtcNow;
 

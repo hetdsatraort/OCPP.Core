@@ -120,14 +120,14 @@ namespace OCPI.Core.Roaming.Services
         {
             return new OCPI.Contracts.OcpiCdr
             {
-                CountryCode = Enum.Parse<CountryCode>(dbCdr.CountryCode, true),
+                CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(dbCdr.CountryCode),
                 PartyId = dbCdr.PartyId,
                 Id = dbCdr.CdrId,
                 StartDateTime = dbCdr.StartDateTime,
                 EndDateTime = dbCdr.EndDateTime,
                 SessionId = dbCdr.SessionId,
                 AuthorizationReference = dbCdr.AuthorizationReference,
-                AuthMethod = Enum.Parse<AuthMethodType>(dbCdr.AuthMethod, true),
+                AuthMethod = OcpiEnumMemberHelper.ParseMemberValue<AuthMethodType>(dbCdr.AuthMethod),
                 CdrLocation = new Contracts.OcpiCdrLocation
                 {
                     Id = dbCdr.LocationId,
@@ -135,7 +135,7 @@ namespace OCPI.Core.Roaming.Services
                     ConnectorId = dbCdr.ConnectorId
                 },
                 MeterId = dbCdr.MeterId,
-                Currency = Enum.Parse<CurrencyCode>(dbCdr.Currency, true),
+                Currency = OcpiEnumMemberHelper.ParseMemberValue<CurrencyCode>(dbCdr.Currency),
                 TotalEnergy = dbCdr.TotalEnergy,
                 TotalTime = dbCdr.TotalTime,
                 TotalParkingTime = dbCdr.TotalParkingTime,

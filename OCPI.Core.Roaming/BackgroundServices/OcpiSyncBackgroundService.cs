@@ -851,13 +851,16 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var isActive = s.EndDateTime == null || s.EndDateTime == DateTime.MinValue;
             return new OcpiSession
             {
-                CountryCode   = Enum.Parse<CountryCode>(countryCode),
+                // OCPI.Net enums carry the wire value ("IN") in an [EnumMember] attribute, not in
+                // the C# member name ("India") — Enum.Parse matches member names, so it throws here.
+                CountryCode   = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode),
                 PartyId       = partyId,
                 Id            = s.SessionId,
                 StartDateTime = s.StartDateTime,
                 EndDateTime   = isActive ? null : s.EndDateTime,
                 Kwh           = Convert.ToDecimal(s.TotalEnergy ?? 0),
                 AuthMethod    = AuthMethodType.Command,
+                AuthorizationReference = s.AuthorizationReference,
                 LocationId    = s.LocationId,
                 EvseId        = s.EvseUid,
                 ConnectorId   = s.ConnectorId,

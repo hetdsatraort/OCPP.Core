@@ -546,7 +546,7 @@ namespace OCPI.Core.Roaming.Services
 
                 var wireSession = new OcpiSession
                 {
-                    CountryCode             = CountryCode.India,
+                    CountryCode             = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
                     PartyId                 = ourPartyId,
                     Id                      = hostedSession.SessionId,
                     StartDateTime           = hostedSession.StartDateTime,

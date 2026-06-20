@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
+using OCPI.Core.Roaming.Services;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
 using System.Net.Http.Json;
@@ -366,7 +367,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var wireSession = new OcpiSession
                 {
-                    CountryCode            = Enum.Parse<CountryCode>(ourCountryCode),
+                    CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
                     PartyId                = ourPartyId,
                     Id                     = session.SessionId,
                     StartDateTime          = session.StartDateTime,
@@ -415,7 +416,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var wireCdr = new OCPI.Contracts.OcpiCdr
                 {
-                    CountryCode            = Enum.Parse<CountryCode>(ourCountryCode),
+                    CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
                     PartyId                = ourPartyId,
                     Id                     = cdr.CdrId,
                     StartDateTime          = cdr.StartDateTime,
