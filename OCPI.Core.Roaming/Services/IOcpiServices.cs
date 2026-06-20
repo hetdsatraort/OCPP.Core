@@ -64,7 +64,7 @@ namespace OCPI.Core.Roaming.Services
     public interface IOcpiCredentialsService
     {
         Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential?> GetPartnerByTokenAsync(string token);
-        Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId);
+        Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId, string roleId);
         Task<OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential> CreateOrUpdatePartnerAsync(string token, string url, string countryCode, string partyId, string businessName, string role, string version, string? outboundToken = null);
         Task DeletePartnerAsync(string token);
 

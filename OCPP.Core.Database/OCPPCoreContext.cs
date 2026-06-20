@@ -762,12 +762,12 @@ namespace OCPP.Core.Database
             {
                 entity.ToTable("OcpiPartnerCredential");
                 entity.HasKey(e => e.Id);
-                
-                entity.HasIndex(e => new { e.CountryCode, e.PartyId })
-                    .IsUnique()
-                    .HasFilter("[IsActive] = 1")
-                    .HasDatabaseName("IX_OcpiPartnerCredential_CountryCode_PartyId");
-                
+
+                entity.HasIndex(e => new { e.CountryCode, e.PartyId, e.Role })
+                   .IsUnique()
+                   .HasFilter("[IsActive] = 1")
+                   .HasDatabaseName("IX_OcpiPartnerCredential_Role_CountryCode_PartyId");
+
                 entity.HasIndex(e => e.Token)
                     .IsUnique()
                     .HasFilter("[IsActive] = 1")

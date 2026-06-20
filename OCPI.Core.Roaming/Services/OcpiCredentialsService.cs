@@ -23,10 +23,10 @@ namespace OCPI.Core.Roaming.Services
                 .FirstOrDefaultAsync(p => ( !string.IsNullOrEmpty(p.Token) ? p.Token : p.Token) == decodedToken && p.IsActive);
         }
 
-        public async Task<OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId)
+        public async Task<OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId, string roleId)
         {
             return await _dbContext.OcpiPartnerCredentials
-                .FirstOrDefaultAsync(p => p.CountryCode == countryCode && p.PartyId == partyId && p.IsActive);
+                .FirstOrDefaultAsync(p => p.CountryCode == countryCode && p.PartyId == partyId && p.Role == roleId && p.IsActive);
         }
 
         public async Task<OcpiPartnerCredential> CreateOrUpdatePartnerAsync(
@@ -39,7 +39,7 @@ namespace OCPI.Core.Roaming.Services
             string version,
             string? outboundToken = null)
         {
-            var existing = await GetPartnerByCountryAndPartyAsync(countryCode, partyId);
+            var existing = await GetPartnerByCountryAndPartyAsync(countryCode, partyId, role);
 
             if (existing != null)
             {

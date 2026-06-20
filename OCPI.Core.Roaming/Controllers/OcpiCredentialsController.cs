@@ -132,7 +132,7 @@ namespace OCPI.Core.Roaming.Controllers
             // Check if platform is registered
             var existing = await _credentialsService.GetPartnerByCountryAndPartyAsync(
                 firstRole.CountryCode.ToString(),
-                firstRole.PartyId);
+                firstRole.PartyId, firstRole.Role);
 
             if (existing == null)
                 throw OcpiException.InvalidParameters("Platform must be registered first");

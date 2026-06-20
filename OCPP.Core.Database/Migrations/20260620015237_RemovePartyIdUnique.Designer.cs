@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OCPP.Core.Database;
 
@@ -11,9 +12,11 @@ using OCPP.Core.Database;
 namespace OCPP.Core.Database.Migrations
 {
     [DbContext(typeof(OCPPCoreContext))]
-    partial class OCPPCoreContextModelSnapshot : ModelSnapshot
+    [Migration("20260620015237_RemovePartyIdUnique")]
+    partial class RemovePartyIdUnique
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1641,9 +1644,9 @@ namespace OCPP.Core.Database.Migrations
                         .HasDatabaseName("IX_OcpiPartnerCredential_Token")
                         .HasFilter("[IsActive] = 1");
 
-                    b.HasIndex("CountryCode", "PartyId", "Role")
+                    b.HasIndex("CountryCode", "PartyId")
                         .IsUnique()
-                        .HasDatabaseName("IX_OcpiPartnerCredential_Role_CountryCode_PartyId")
+                        .HasDatabaseName("IX_OcpiPartnerCredential_CountryCode_PartyId")
                         .HasFilter("[IsActive] = 1");
 
                     b.ToTable("OcpiPartnerCredential", (string)null);
