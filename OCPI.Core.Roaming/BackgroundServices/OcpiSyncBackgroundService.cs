@@ -198,7 +198,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
             try
             {
                 // 1. GET /versions → list of version objects
-                var versionsResp = await http.GetAsync($"{partner.Url.TrimEnd('/')}/versions", ct);
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var versionsResp = await http.GetAsync(partnerURL, ct);
                 if (!versionsResp.IsSuccessStatusCode)
                 {
                     _logger.LogWarning(
@@ -292,7 +293,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.ToString("o");
+            var dateFrom = partner.LastSyncOn?.ToString("yyyy-MM-dd");
             var pulled   = 0;
 
             await foreach (var location in PaginateAsync<OCPI.Core.Roaming.Services.OcpiLocation>(http, url, dateFrom, ct))
@@ -752,7 +753,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var sep = url.Contains('?') ? "&" : "?";
             var firstUrl = $"{url}{sep}limit={pageSize}";
             if (!string.IsNullOrEmpty(dateFrom))
-                firstUrl += $"&date_from={Uri.EscapeDataString(dateFrom)}";
+                firstUrl += $"&date_from={dateFrom}";
 
             string? nextUrl = firstUrl;
 
@@ -804,7 +805,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
         {
             var http = factory.CreateClient();
             http.DefaultRequestHeaders.Clear();
-            http.DefaultRequestHeaders.Add("Authorization", $"Token  {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.Token))}");
+            var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
+            http.DefaultRequestHeaders.Add("Authorization", $"Token  {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
             http.Timeout = TimeSpan.FromSeconds(30);
             return http;
         }
