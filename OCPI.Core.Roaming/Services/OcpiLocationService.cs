@@ -156,7 +156,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.Latitude      = Trunc(location.Coordinates?.Latitude, 20);
                 existing.Longitude     = Trunc(location.Coordinates?.Longitude, 20);
                 existing.LocationType  = Trunc(location.Type?.ToString(), 50);
-                existing.LastUpdated   = location.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated   = location.LastUpdated ?? DateTime.Now;
 
                 _dbContext.OcpiPartnerLocations.Update(existing);
             }
@@ -176,7 +176,7 @@ namespace OCPI.Core.Roaming.Services
                     Longitude           = Trunc(location.Coordinates?.Longitude, 20),
                     LocationType        = Trunc(location.Type?.ToString(), 50),
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated         = location.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated         = location.LastUpdated ?? DateTime.Now
                 };
 
                 await _dbContext.OcpiPartnerLocations.AddAsync(newLocation);
@@ -194,10 +194,10 @@ namespace OCPI.Core.Roaming.Services
             {
                 existing.EvseId            = Trunc(evse.EvseId, 48);
                 existing.Status            = Trunc(evse.Status.ToString(), 50);
-                existing.StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow;
+                existing.StatusDateTime    = evse.LastUpdated ?? DateTime.Now;
                 existing.FloorLevel        = Trunc(evse.FloorLevel, 10);
                 existing.PhysicalReference = Trunc(evse.PhysicalReference, 50);
-                existing.LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated       = evse.LastUpdated ?? DateTime.Now;
 
                 _dbContext.OcpiPartnerEvses.Update(existing);
             }
@@ -208,11 +208,11 @@ namespace OCPI.Core.Roaming.Services
                     EvseUid           = Trunc(evse.Uid, 36),
                     EvseId            = Trunc(evse.EvseId, 48),
                     Status            = Trunc(evse.Status.ToString(), 50),
-                    StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow,
+                    StatusDateTime    = evse.LastUpdated ?? DateTime.Now,
                     FloorLevel        = Trunc(evse.FloorLevel, 10),
                     PhysicalReference = Trunc(evse.PhysicalReference, 50),
                     PartnerLocationId = partnerLocationId,
-                    LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated       = evse.LastUpdated ?? DateTime.Now
                 };
 
                 await _dbContext.OcpiPartnerEvses.AddAsync(newEvse);
@@ -234,7 +234,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.MaxVoltage     = connector.MaxVoltage;
                 existing.MaxAmperage    = connector.MaxAmperage;
                 existing.MaxElectricPower = connector.MaxElectricPower;
-                existing.LastUpdated    = connector.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated    = connector.LastUpdated ?? DateTime.Now;
 
                 _dbContext.OcpiPartnerConnectors.Update(existing);
             }
@@ -250,7 +250,7 @@ namespace OCPI.Core.Roaming.Services
                     MaxAmperage       = connector.MaxAmperage,
                     MaxElectricPower  = connector.MaxElectricPower,
                     PartnerEvseId     = partnerEvseId,
-                    LastUpdated       = connector.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated       = connector.LastUpdated ?? DateTime.Now
                 };
 
                 await _dbContext.OcpiPartnerConnectors.AddAsync(newConnector);

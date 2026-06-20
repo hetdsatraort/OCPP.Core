@@ -141,7 +141,8 @@ namespace OCPI.Core.Roaming.Services
                             ConnectorId     = gun?.RecId     ?? command.ConnectorId,
                             TokenUid        = tokenUid,
                             LocationId      = command.LocationId,
-                            StartDateTime   = ocppTransaction?.StartTime ?? DateTime.UtcNow,
+                            // StartDateTime   = ocppTransaction?.StartTime ?? DateTime.Now,
+                            StartDateTime   = DateTime.Now,
                             Status          = "ACTIVE",
                             PartnerCredentialId    = requestingPartner?.Id,
                             AuthorizationReference = authorizationReference
@@ -485,7 +486,7 @@ namespace OCPI.Core.Roaming.Services
                 if (result.Result != CommandResultType.Accepted)
                 {
                     pending.Status = "REJECTED";
-                    pending.LastUpdated = DateTime.UtcNow;
+                    pending.LastUpdated = DateTime.Now;
                     await _dbContext.SaveChangesAsync();
                     _logger.LogWarning(
                         "Partner rejected START_SESSION (authRef={AuthRef}): {Result}", correlationId, result.Result);

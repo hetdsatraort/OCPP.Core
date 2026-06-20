@@ -71,7 +71,7 @@ namespace OCPI.Core.Roaming.Controllers
             if (update.Status == "OFFLINE")
                 partner.IsActive = false;
 
-            partner.LastSyncOn = DateTime.UtcNow;
+            partner.LastSyncOn = DateTime.Now;
             await _dbContext.SaveChangesAsync();
 
             return OcpiOk(new { countryCode, partyId, status = update.Status });

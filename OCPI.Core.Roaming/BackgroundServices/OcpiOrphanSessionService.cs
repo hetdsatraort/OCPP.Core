@@ -168,7 +168,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         if (tx.MeterStop.HasValue && tx.MeterStop.Value >= tx.MeterStart)
                             session.TotalEnergy = (decimal)Math.Round(tx.MeterStop.Value - tx.MeterStart, 4);
 
-                        session.LastUpdated = DateTime.UtcNow;
+                        session.LastUpdated = DateTime.Now;
                         closedByTx++;
 
                         if (!string.IsNullOrEmpty(session.ChargePointId))
@@ -197,7 +197,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                                 connStatus.LastMeter.Value - tx.MeterStart, 4);
 
                             session.TotalEnergy = liveEnergy;
-                            session.LastUpdated = DateTime.UtcNow;
+                            session.LastUpdated = DateTime.Now;
                             liveUpdated++;
 
                             _logger.LogDebug(
@@ -212,12 +212,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 }
 
                 // ── No TransactionId → orphan timeout check ───────────────────────
-                var age = DateTime.UtcNow - session.LastUpdated;
+                var age = DateTime.Now - session.LastUpdated;
                 if (age >= _orphanTimeout)
                 {
                     session.Status      = "INVALID";
-                    session.EndDateTime = DateTime.UtcNow;
-                    session.LastUpdated = DateTime.UtcNow;
+                    session.EndDateTime = DateTime.Now;
+                    session.LastUpdated = DateTime.Now;
                     closedAsInvalid++;
 
                     _logger.LogWarning(
@@ -305,7 +305,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     var kwh          = session.TotalEnergy ?? 0m;
                     var costExclVat  = Math.Round(kwh * (decimal)tariffRate, 2);
                     var costInclVat  = Math.Round(costExclVat * 1.18m, 2);
-                    var endDateTime  = session.EndDateTime ?? DateTime.UtcNow;
+                    var endDateTime  = session.EndDateTime ?? DateTime.Now;
 
                     cdr = new OCPP.Core.Database.OCPIDTO.OcpiCdr
                     {
@@ -328,8 +328,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         TokenUid               = session.TokenUid,
                         PartnerCredentialId    = partner.Id,
                         LocalSessionId         = session.SessionId,
-                        CreatedOn              = DateTime.UtcNow,
-                        LastUpdated            = DateTime.UtcNow
+                        CreatedOn              = DateTime.Now,
+                        LastUpdated            = DateTime.Now
                     };
 
                     newCdrs.Add(cdr);
@@ -625,7 +625,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     {
                         var resp = await http.PatchAsJsonAsync(
                             url,
-                            new { status = ocpiStatus, last_updated = DateTime.UtcNow },
+                            new { status = ocpiStatus, last_updated = DateTime.Now },
                             ct);
 
                         if (!resp.IsSuccessStatusCode)
@@ -879,7 +879,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (session.EndDateTime.HasValue)
                 {
                     session.Status      = "COMPLETED";
-                    session.LastUpdated = DateTime.UtcNow;
+                    session.LastUpdated = DateTime.Now;
                     completedCount++;
 
                     if (!session.LimitViolationHandled
@@ -903,12 +903,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 }
 
                 // ── B) Stale orphan with no app user → invalidate after timeout ────────
-                var age = DateTime.UtcNow - session.LastUpdated;
+                var age = DateTime.Now - session.LastUpdated;
                 if (session.UserId == null && age >= _orphanTimeout)
                 {
                     session.Status      = "INVALID";
-                    session.EndDateTime = DateTime.UtcNow;
-                    session.LastUpdated = DateTime.UtcNow;
+                    session.EndDateTime = DateTime.Now;
+                    session.LastUpdated = DateTime.Now;
                     orphanInvalidated++;
 
                     _logger.LogWarning(
@@ -926,7 +926,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     continue;
 
                 var violations = new List<string>();
-                var elapsed    = DateTime.UtcNow - session.StartDateTime;
+                var elapsed    = DateTime.Now - session.StartDateTime;
 
                 if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
                     && (double)session.TotalEnergy.Value >= session.EnergyLimit.Value)
@@ -984,7 +984,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 }
 
                 session.LimitViolationHandled = true;
-                session.LastUpdated           = DateTime.UtcNow;
+                session.LastUpdated           = DateTime.Now;
                 limitStoppedCount++;
             }
 
@@ -1191,8 +1191,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 AdditionalInfo2        = info2,
                 AdditionalInfo3        = info3,
                 Active                 = 1,
-                CreatedOn              = DateTime.UtcNow,
-                UpdatedOn              = DateTime.UtcNow
+                CreatedOn              = DateTime.Now,
+                UpdatedOn              = DateTime.Now
             };
 
             walletsToAdd.Add(walletTx);
@@ -1200,7 +1200,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (usersDict.TryGetValue(session.UserId, out var user))
             {
                 user.CreditBalance = newBalance.ToString("F2");
-                user.UpdatedOn     = DateTime.UtcNow;
+                user.UpdatedOn     = DateTime.Now;
                 if (!usersToUpdate.Contains(user))
                     usersToUpdate.Add(user);
             }

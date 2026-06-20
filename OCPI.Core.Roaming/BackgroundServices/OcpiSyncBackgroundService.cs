@@ -172,7 +172,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         await PushEvseStatusesToEmspAsync(partner, endpoints, http, dbContext, onlineChargePoints, ct);
                     }
 
-                    partner.LastSyncOn = DateTime.UtcNow;
+                    partner.LastSyncOn = DateTime.Now;
                     dbContext.OcpiPartnerCredentials.Update(partner);
                     await dbContext.SaveChangesAsync(ct);
                     
@@ -505,7 +505,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
 
             // Only push sessions that this partner initiated at our stations.
-            var cutoff = partner.LastSyncOn ?? DateTime.UtcNow.AddDays(-1);
+            var cutoff = partner.LastSyncOn ?? DateTime.Now.AddDays(-1);
             var sessions = await dbContext.OcpiHostedSessions
                 .Where(s => s.PartnerCredentialId == partner.Id
                     && (s.Status == "ACTIVE" || s.LastUpdated >= cutoff))
@@ -635,7 +635,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 try
                 {
-                    var patch = new { status = ocpiStatus, last_updated = DateTime.UtcNow };
+                    var patch = new { status = ocpiStatus, last_updated = DateTime.Now };
                     var resp  = await http.PatchAsJsonAsync(url, patch, _jsonOptions, ct);
 
                     if (resp.IsSuccessStatusCode)
@@ -866,7 +866,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 ConnectorId   = s.ConnectorId,
                 Status        = isActive ? SessionStatus.Active : SessionStatus.Completed,
                 Currency      = CurrencyCode.IndianRupee,
-                LastUpdated   = s.LastUpdated == DateTime.MinValue ? DateTime.UtcNow : s.LastUpdated,
+                LastUpdated   = s.LastUpdated == DateTime.MinValue ? DateTime.Now : s.LastUpdated,
                 CdrToken      = string.IsNullOrEmpty(s.TokenUid)
                                     ? null
                                     : new OcpiCdrToken { Uid = s.TokenUid, Type = TokenType.Rfid }

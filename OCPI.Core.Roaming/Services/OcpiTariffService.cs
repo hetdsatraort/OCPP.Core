@@ -62,7 +62,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.Currency = tariff.Currency.ToString();
                 existing.Type = tariff.Type?.ToString();
                 existing.ElementsJson = JsonSerializer.Serialize(tariff.Elements);
-                existing.LastUpdated = tariff.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated = tariff.LastUpdated ?? DateTime.Now;
 
                 // Extract simple pricing for quick queries
                 if (tariff.Elements?.Any() == true)
@@ -100,8 +100,8 @@ namespace OCPI.Core.Roaming.Services
                     Type = tariff.Type?.ToString(),
                     ElementsJson = JsonSerializer.Serialize(tariff.Elements),
                     IsActive = true,
-                    StartDateTime = tariff.TariffAltUrl != null ? DateTime.UtcNow : null,
-                    LastUpdated = tariff.LastUpdated ?? DateTime.UtcNow
+                    StartDateTime = tariff.TariffAltUrl != null ? DateTime.Now : null,
+                    LastUpdated = tariff.LastUpdated ?? DateTime.Now
                 };
 
                 // Extract simple pricing

@@ -172,7 +172,7 @@ namespace OCPI.Core.Roaming.Controllers
                 return NotFound(new { success = false, message = "Partner not found" });
 
             partner.IsActive = false;
-            partner.LastUpdated = DateTime.UtcNow;
+            partner.LastUpdated = DateTime.Now;
             await _dbContext.SaveChangesAsync();
 
             _logger.LogInformation("[Admin] Deactivated OCPI partner Id={Id} ({BusinessName})", id, partner.BusinessName);
@@ -635,7 +635,7 @@ namespace OCPI.Core.Roaming.Controllers
                 isUsed              = t.IsUsed,
                 usedOn              = t.UsedOn,
                 partnerCredentialId = t.PartnerCredentialId,
-                isExpired           = !t.IsUsed && t.ExpiresAt <= DateTime.UtcNow
+                isExpired           = !t.IsUsed && t.ExpiresAt <= DateTime.Now
             });
             return Ok(new { success = true, data = result });
         }
@@ -693,7 +693,7 @@ namespace OCPI.Core.Roaming.Controllers
                     issuer             = _configuration["Ocpi:BusinessName"] ?? "HyCharge",
                     valid              = true,
                     whitelist          = "NEVER",
-                    last_updated       = DateTime.UtcNow.ToString("o")
+                    last_updated       = DateTime.Now.ToString("o")
                 },
                 location_id             = request.LocationId,
                 evse_uid                = request.EvseUid,
@@ -733,7 +733,7 @@ namespace OCPI.Core.Roaming.Controllers
                     PartyId              = partner.PartyId,
                     SessionId            = authorizationReference,
                     AuthorizationReference = authorizationReference,
-                    StartDateTime        = DateTime.UtcNow,
+                    StartDateTime        = DateTime.Now,
                     Status               = accepted ? "PENDING" : "INVALID",
                     LocationId           = request.LocationId,
                     EvseUid              = request.EvseUid,
@@ -746,8 +746,8 @@ namespace OCPI.Core.Roaming.Controllers
                     CostLimit            = request.CostLimit,
                     TimeLimit            = request.TimeLimit,
                     BatteryIncreaseLimit = request.BatteryIncreaseLimit,
-                    CreatedOn            = DateTime.UtcNow,
-                    LastUpdated          = DateTime.UtcNow
+                    CreatedOn            = DateTime.Now,
+                    LastUpdated          = DateTime.Now
                 };
 
                 _dbContext.OcpiPartnerSessions.Add(session);
@@ -757,17 +757,47 @@ namespace OCPI.Core.Roaming.Controllers
                     "[Admin/eMSP] START_SESSION → partner {PartnerId} ({BusinessName}): result={Result}, authRef={AuthRef}",
                     request.PartnerId, partner.BusinessName, cmdResult, authorizationReference);
 
+                // Wait for the CPO to push the real session back via the Sessions receiver
+                // (OcpiSessionService resolves SessionId from the placeholder once it arrives)
+                // so the caller gets the CPO-assigned sessionId instead of having to poll
+                // GetPartnerSessionByReference themselves.
+                bool resolved = false;
+                if (accepted)
+                {
+                    const int maxPollAttempts = 16;
+                    const int pollIntervalMs = 1500;
+                    for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
+                    {
+                        await Task.Delay(pollIntervalMs);
+                        await _dbContext.Entry(session).ReloadAsync();
+
+                        if (session.SessionId != session.AuthorizationReference)
+                        {
+                            resolved = true;
+                            break;
+                        }
+
+                        if (string.Equals(session.Status, "REJECTED", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(session.Status, "INVALID", StringComparison.OrdinalIgnoreCase))
+                        {
+                            break; // rejected via the async CommandResult callback — stop polling
+                        }
+                    }
+                }
+
                 return Ok(new
                 {
-                    success                 = accepted,
+                    success                 = accepted && resolved,
                     result                  = cmdResult,
-                    sessionId               = (string?)null,
+                    sessionId               = resolved ? session.SessionId : null,
                     authorizationReference  = accepted ? authorizationReference : null,
-                    status                  = accepted ? "PENDING" : "REJECTED",
-                    message                 = accepted
-                        ? "Command accepted by partner CPO; awaiting session confirmation. " +
-                          "Poll GET admin/partner-sessions/by-reference/{authorizationReference} for the resolved sessionId."
-                        : $"Partner rejected the command: {cmdResult}"
+                    status                  = resolved ? session.Status : (accepted ? "PENDING" : "REJECTED"),
+                    message                 = resolved
+                        ? "Session confirmed by partner CPO"
+                        : accepted
+                            ? "Partner CPO accepted the command but has not yet confirmed the session. " +
+                              "Poll GET admin/partner-sessions/by-reference/{authorizationReference} for the resolved sessionId."
+                            : $"Partner rejected the command: {cmdResult}"
                 });
             }
             catch (Exception ex)
@@ -885,14 +915,42 @@ namespace OCPI.Core.Roaming.Controllers
                     "[Admin/eMSP] STOP_SESSION → partner {PartnerId}: result={Result}, sessionId={SessionId}",
                     session.PartnerCredentialId, cmdResult, session.SessionId);
 
+                bool accepted = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase);
+
+                // Wait for the CPO to push the final (COMPLETED) session — and, since billing runs
+                // off that same Status/EndDateTime, for OcpiOrphanSessionService to pick it up —
+                // before responding, so the caller learns the real outcome instead of just "accepted".
+                bool confirmed = false;
+                if (accepted)
+                {
+                    const int maxPollAttempts = 16;
+                    const int pollIntervalMs = 1500;
+                    for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
+                    {
+                        await Task.Delay(pollIntervalMs);
+                        await _dbContext.Entry(session).ReloadAsync();
+
+                        if (session.EndDateTime.HasValue ||
+                            string.Equals(session.Status, "COMPLETED", StringComparison.OrdinalIgnoreCase))
+                        {
+                            confirmed = true;
+                            break;
+                        }
+                    }
+                }
+
                 return Ok(new
                 {
-                    success   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase),
+                    success   = accepted,
                     result    = cmdResult,
                     sessionId = session.SessionId,
-                    message   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase)
-                        ? "Stop command accepted by partner CPO"
-                        : $"Partner response: {cmdResult}"
+                    status    = session.Status,
+                    confirmed,
+                    message   = !accepted
+                        ? $"Partner response: {cmdResult}"
+                        : confirmed
+                            ? "Session stopped and confirmed by partner CPO"
+                            : "Stop command accepted; partner CPO has not yet confirmed completion. Check status later."
                 });
             }
             catch (Exception ex)
