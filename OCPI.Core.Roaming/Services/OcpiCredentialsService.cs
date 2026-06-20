@@ -52,7 +52,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.Version = version;
                 if (outboundToken != null)
                     existing.OutboundToken = outboundToken;
-                existing.LastUpdated = DateTime.Now;
+                existing.LastUpdated = DateTime.UtcNow;
                 
                 _dbContext.OcpiPartnerCredentials.Update(existing);
                 _logger.LogInformation("Updated OCPI partner credentials for {CountryCode}-{PartyId}", countryCode, partyId);
@@ -71,8 +71,8 @@ namespace OCPI.Core.Roaming.Services
                     Version = version,
                     OutboundToken = outboundToken,
                     IsActive = true,
-                    CreatedOn = DateTime.Now,
-                    LastUpdated = DateTime.Now
+                    CreatedOn = DateTime.UtcNow,
+                    LastUpdated = DateTime.UtcNow
                 };
                 
                 await _dbContext.OcpiPartnerCredentials.AddAsync(existing);
@@ -89,7 +89,7 @@ namespace OCPI.Core.Roaming.Services
             if (partner != null)
             {
                 partner.IsActive = false;
-                partner.LastUpdated = DateTime.Now;
+                partner.LastUpdated = DateTime.UtcNow;
                 _dbContext.OcpiPartnerCredentials.Update(partner);
                 await _dbContext.SaveChangesAsync();
                 
@@ -105,8 +105,8 @@ namespace OCPI.Core.Roaming.Services
             {
                 AToken = Guid.NewGuid().ToString("N").ToUpperInvariant(),
                 Label = label,
-                ExpiresAt = DateTime.Now.AddHours(expiryHours),
-                CreatedOn = DateTime.Now,
+                ExpiresAt = DateTime.UtcNow.AddHours(expiryHours),
+                CreatedOn = DateTime.UtcNow,
                 IsUsed = false
             };
 
@@ -122,7 +122,7 @@ namespace OCPI.Core.Roaming.Services
             var decodedToken = Encoding.UTF8.GetString(Convert.FromBase64String(aToken.Trim()));
 
             return await _dbContext.OcpiPendingRegistrations
-                .FirstOrDefaultAsync(p => p.AToken == decodedToken && !p.IsUsed && p.ExpiresAt > DateTime.Now);
+                .FirstOrDefaultAsync(p => p.AToken == decodedToken && !p.IsUsed && p.ExpiresAt > DateTime.UtcNow);
         }
 
         public async Task<List<OcpiPendingRegistration>> GetAllPendingRegistrationsAsync()
@@ -138,7 +138,7 @@ namespace OCPI.Core.Roaming.Services
             if (pending == null) return;
 
             pending.IsUsed = true;
-            pending.UsedOn = DateTime.Now;
+            pending.UsedOn = DateTime.UtcNow;
             pending.PartnerCredentialId = partnerCredentialId;
             _dbContext.OcpiPendingRegistrations.Update(pending);
             await _dbContext.SaveChangesAsync();

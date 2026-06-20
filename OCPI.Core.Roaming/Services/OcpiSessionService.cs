@@ -70,13 +70,8 @@ namespace OCPI.Core.Roaming.Services
                 existing.AuthorizationReference = session.AuthorizationReference ?? existing.AuthorizationReference;
                 existing.TokenUid = session.CdrToken?.Uid ?? existing.TokenUid;
                 existing.Currency = session.Currency?.ToMemberValue() ?? existing.Currency;
-                // Bill the tax-inclusive total — that's the amount the partner will actually
-                // invoice us for, matching how ChargingSessionController bills our own users
-                // (energy × tariff × 1.18). Wallet debits run off this field
-                // (OcpiOrphanSessionService.ApplyPartnerSessionBilling), so using ExclVat here
-                // would under-charge the user relative to what the partner actually charges us.
-                existing.TotalCost = session.TotalCost?.InclVat ?? session.TotalCost?.ExclVat ?? existing.TotalCost;
-                existing.LastUpdated = session.LastUpdated ?? DateTime.Now;
+                existing.TotalCost = session.TotalCost?.ExclVat ?? existing.TotalCost;
+                existing.LastUpdated = session.LastUpdated ?? DateTime.UtcNow;
 
                 _logger.LogInformation($"------Updating Partner Session {session.Id}--------");
 
@@ -91,7 +86,7 @@ namespace OCPI.Core.Roaming.Services
                     CountryCode = sessionCountryCode,
                     PartyId = session.PartyId,
                     SessionId = session.Id,
-                    StartDateTime = session.StartDateTime ?? DateTime.Now,
+                    StartDateTime = session.StartDateTime ?? DateTime.UtcNow,
                     EndDateTime = session.EndDateTime,
                     TotalEnergy = session.Kwh,
                     Status = session.Status?.ToMemberValue(),
@@ -101,9 +96,9 @@ namespace OCPI.Core.Roaming.Services
                     AuthorizationReference = session.AuthorizationReference,
                     TokenUid = session.CdrToken?.Uid,
                     Currency = session.Currency?.ToMemberValue(),
-                    TotalCost = session.TotalCost?.InclVat ?? session.TotalCost?.ExclVat,
+                    TotalCost = session.TotalCost?.ExclVat,
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated = session.LastUpdated ?? DateTime.Now
+                    LastUpdated = session.LastUpdated ?? DateTime.UtcNow
                 };
 
                 _logger.LogInformation($"--------Adding Partner Session {session.Id}--------");
@@ -130,8 +125,8 @@ namespace OCPI.Core.Roaming.Services
             existing.EndDateTime = session.EndDateTime;
             existing.TotalEnergy = session.Kwh;
             existing.Status = session.Status?.ToMemberValue() ?? existing.Status;
-            existing.TotalCost = session.TotalCost?.InclVat ?? session.TotalCost?.ExclVat ?? existing.TotalCost;
-            existing.LastUpdated = session.LastUpdated ?? DateTime.Now;
+            existing.TotalCost = session.TotalCost?.ExclVat;
+            existing.LastUpdated = session.LastUpdated ?? DateTime.UtcNow;
 
             _dbContext.OcpiPartnerSessions.Update(existing);
             await _dbContext.SaveChangesAsync();

@@ -460,52 +460,17 @@ namespace OCPP.Core.Management.Controllers
                     tokenUid = chargeTag.TagId;
                 }
 
-                // Check wallet balance — mirrors ChargingSessionController.StartChargingSession's
-                // minimum-balance estimate, adapted for partner EVSEs where we don't have a local
-                // tariff to turn EnergyLimit/TimeLimit into a cost estimate, so only CostLimit and
-                // BatteryIncreaseLimit (flat ₹100, same as our own chargers) are used.
+                // Check wallet balance if a cost limit is not the only guard
                 var lastWalletTx = await _dbContext.WalletTransactionLogs
                     .Where(w => w.UserId == userId && w.Active == 1)
                     .OrderByDescending(w => w.CreatedOn)
                     .FirstOrDefaultAsync();
 
-                decimal currentBalance = 0;
-                if (lastWalletTx != null && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out var balance))
-                    currentBalance = balance;
-
-                decimal minBalanceRequired = 20m; // default minimum, same as ChargingSessionController
-                string balanceRequirementSource = "default minimum";
-                var estimatedCosts = new List<(string source, decimal amount)>();
-
-                if (request.CostLimit.HasValue && request.CostLimit.Value > 0)
-                    estimatedCosts.Add(("Cost Limit", (decimal)request.CostLimit.Value));
-
-                if (request.BatteryIncreaseLimit.HasValue && request.BatteryIncreaseLimit.Value > 0)
-                    estimatedCosts.Add(("Battery Limit", 100m));
-
-                if (estimatedCosts.Count > 0)
+                if (lastWalletTx != null
+                    && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out decimal balance)
+                    && balance <= 0)
                 {
-                    var maxCost = estimatedCosts.OrderByDescending(x => x.amount).First();
-                    minBalanceRequired = maxCost.amount;
-                    balanceRequirementSource = maxCost.source;
-                }
-
-                if (currentBalance < 0)
-                {
-                    return Ok(new
-                    {
-                        success = false,
-                        message = $"Cannot start session. Your wallet balance is negative (₹{currentBalance:F2}). Please recharge your wallet to continue."
-                    });
-                }
-
-                if (currentBalance < minBalanceRequired)
-                {
-                    return Ok(new
-                    {
-                        success = false,
-                        message = $"Insufficient wallet balance. Minimum ₹{minBalanceRequired:F2} required to start charging (based on {balanceRequirementSource}). Your current balance: ₹{currentBalance:F2}. Please recharge your wallet."
-                    });
+                    return Ok(new { success = false, message = "Insufficient wallet balance to start a session" });
                 }
 
                 // Forward to OCPI roaming service

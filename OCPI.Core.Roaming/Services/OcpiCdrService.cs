@@ -46,8 +46,8 @@ namespace OCPI.Core.Roaming.Services
                 CountryCode = ocpiCdr.CountryCode?.ToString(),
                 PartyId = ocpiCdr.PartyId,
                 CdrId = ocpiCdr.Id,
-                StartDateTime = ocpiCdr.StartDateTime ?? DateTime.Now,
-                EndDateTime = ocpiCdr.EndDateTime ?? DateTime.Now,
+                StartDateTime = ocpiCdr.StartDateTime ?? DateTime.UtcNow,
+                EndDateTime = ocpiCdr.EndDateTime ?? DateTime.UtcNow,
                 SessionId = ocpiCdr.SessionId,
                 AuthorizationReference = ocpiCdr.AuthorizationReference,
                 AuthMethod = ocpiCdr.AuthMethod?.ToString(),
@@ -63,7 +63,7 @@ namespace OCPI.Core.Roaming.Services
                 TotalCostInclVat = ocpiCdr.TotalCost?.InclVat,
                 TokenUid = ocpiCdr.CdrToken?.Uid,
                 PartnerCredentialId = partnerCredentialId,
-                LastUpdated = ocpiCdr.LastUpdated ?? DateTime.Now
+                LastUpdated = ocpiCdr.LastUpdated ?? DateTime.UtcNow
             };
 
             await _dbContext.OcpiCdrs.AddAsync(newCdr);
