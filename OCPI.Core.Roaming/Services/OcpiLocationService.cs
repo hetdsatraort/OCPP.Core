@@ -494,7 +494,7 @@ namespace OCPI.Core.Roaming.Services
         public OcpiBusinessDetails? Owner { get; set; }
 
         [JsonPropertyName("facilities")]
-        public IEnumerable<FacilityType>? Facilities { get; set; }
+        public IEnumerable<string>? Facilities { get; set; }
 
         [JsonPropertyName("time_zone")]
         public string? TimeZone { get; set; }

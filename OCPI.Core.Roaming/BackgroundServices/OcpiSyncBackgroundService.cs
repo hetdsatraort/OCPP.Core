@@ -36,11 +36,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly TimeSpan _syncInterval;
 
         // OCPI standard JSON options — enums as strings, case-insensitive property names.
+        // JsonStringEnumMemberConverterV2 honours [EnumMember(Value = "...")] attributes (e.g.
+        // PowerType.Ac1Phase → "AC_1_PHASE"). It must be the only enum converter registered:
+        // System.Text.Json picks the first converter in the list whose CanConvert() matches a
+        // given type, so a generic JsonStringEnumConverter listed alongside it would shadow it
+        // for every enum and silently fall back to naming-policy conversion (wrong for members
+        // whose EnumMember value doesn't match the policy-derived name, causing JsonExceptions).
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             PropertyNameCaseInsensitive = true,
             DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingNull,
-            Converters                  = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper) }
+            Converters                  = { new JsonStringEnumMemberConverterV2() }
         };
         
 
@@ -293,7 +299,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.ToString("yyyy-MM-dd");
+            var dateFrom = partner.LastSyncOn?.AddDays(-1).ToString("yyyy-MM-dd");
             var pulled   = 0;
 
             await foreach (var location in PaginateAsync<OCPI.Core.Roaming.Services.OcpiLocation>(http, url, dateFrom, ct))

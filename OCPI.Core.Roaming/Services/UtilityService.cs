@@ -6,39 +6,52 @@ using System.Text.Json.Serialization;
 namespace OCPI.Core.Roaming.Services
 {
 
-    public class SourceGenEnumMemberConverter<T> : JsonConverter<T> where T : struct, Enum
+    public class JsonStringEnumMemberConverterV2 : JsonConverterFactory
     {
-        public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        public override bool CanConvert(Type typeToConvert)
         {
-            string? value = reader.GetString();
-            if (value == null) return default;
-
-            foreach (var field in typeof(T).GetFields(BindingFlags.Public | BindingFlags.Static))
-            {
-                var attr = field.GetCustomAttribute<EnumMemberAttribute>();
-                if ((attr != null && attr.Value == value) || field.Name == value)
-                {
-                    return (T)field.GetValue(null)!;
-                }
-            }
-            throw new JsonException($"Unable to parse enum value: {value}");
+            return typeToConvert.IsEnum;
         }
 
-        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
         {
-            string name = value.ToString();
-            var field = typeof(T).GetField(name, BindingFlags.Public | BindingFlags.Static);
+            var converterType = typeof(EnumMemberConverter<>).MakeGenericType(typeToConvert);
+            return (JsonConverter)Activator.CreateInstance(converterType);
+        }
 
-            if (field != null)
+        private class EnumMemberConverter<T> : JsonConverter<T> where T : struct, Enum
+        {
+            private readonly Dictionary<string, T> _stringToEnum = new(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<T, string> _enumToString = new();
+
+            public EnumMemberConverter()
             {
-                var attr = field.GetCustomAttribute<EnumMemberAttribute>();
-                if (attr != null)
+                foreach (var value in Enum.GetValues<T>())
                 {
-                    writer.WriteStringValue(attr.Value);
-                    return;
+                    var memInfo = typeof(T).GetMember(value.ToString());
+                    var attr = memInfo[0].GetCustomAttribute<EnumMemberAttribute>();
+
+                    string name = attr?.Value ?? value.ToString();
+
+                    _stringToEnum[name] = value;
+                    _enumToString[value] = name;
                 }
             }
-            writer.WriteStringValue(name);
+
+            public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            {
+                string stringValue = reader.GetString();
+                if (_stringToEnum.TryGetValue(stringValue, out var enumValue))
+                {
+                    return enumValue;
+                }
+                throw new JsonException($"Unable to convert \"{stringValue}\" to enum {typeof(T).Name}.");
+            }
+
+            public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+            {
+                writer.WriteStringValue(_enumToString[value]);
+            }
         }
     }
 }
