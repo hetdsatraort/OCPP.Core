@@ -599,6 +599,18 @@ namespace OCPP.Core.Management.Controllers
                 }
 
                 var result = await resp.Content.ReadFromJsonAsync<JsonElement>();
+
+                // The roaming service waits for the partner CPO to confirm completion before
+                // responding (see OcpiAdminController.EmspStopSession), so by the time we get here
+                // the session row may already carry the final TotalCost. Bill it immediately rather
+                // than waiting for OcpiOrphanSessionService's next tick. Re-read from the DB — the
+                // roaming service updated it through its own DbContext/process.
+                await _dbContext.Entry(session).ReloadAsync();
+                if (!session.LimitViolationHandled && session.TotalCost.HasValue && session.TotalCost.Value > 0)
+                {
+                    await ApplyPartnerSessionWalletDeductionAsync(session);
+                }
+
                 return Ok(result);
             }
             catch (Exception ex)
@@ -606,6 +618,70 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogError(ex, "Error stopping partner session");
                 return Ok(new { success = false, message = "Error stopping session at partner CPO" });
             }
+        }
+
+        /// <summary>
+        /// Debits <c>session.TotalCost</c> (tax-inclusive, as reported by the partner CPO) from the
+        /// user's wallet and marks the session handled, mirroring
+        /// OcpiOrphanSessionService.ApplyPartnerSessionBilling so the session isn't billed twice
+        /// when that background service later sees the same completed/handled session.
+        /// </summary>
+        private async Task ApplyPartnerSessionWalletDeductionAsync(OcpiPartnerSession session)
+        {
+            if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
+                return;
+
+            var lastWalletTx = await _dbContext.WalletTransactionLogs
+                .Where(w => w.UserId == session.UserId && w.Active == 1)
+                .OrderByDescending(w => w.CreatedOn)
+                .FirstOrDefaultAsync();
+
+            decimal previousBalance = 0;
+            if (lastWalletTx != null && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out var lastBalance))
+                previousBalance = lastBalance;
+
+            decimal totalFee = session.TotalCost.Value;
+            decimal newBalance = previousBalance - totalFee;
+
+            if (newBalance < 0)
+                _logger.LogWarning(
+                    "Billing user {UserId} for partner session {SessionId} — balance went negative. " +
+                    "Previous: {Prev:F2}, Fee: {Fee:F2} {Ccy}, New: {New:F2}",
+                    session.UserId, session.SessionId, previousBalance, totalFee, session.Currency, newBalance);
+
+            var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
+            {
+                RecId                 = Guid.NewGuid().ToString(),
+                UserId                = session.UserId,
+                PreviousCreditBalance = previousBalance.ToString("F2"),
+                CurrentCreditBalance  = newBalance.ToString("F2"),
+                TransactionType       = "Debit",
+                ChargingSessionId     = session.SessionId,
+                AdditionalInfo1       = $"OCPI partner session stopped — {session.SessionId}",
+                AdditionalInfo2       = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}",
+                AdditionalInfo3       = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
+                Active                = 1,
+                CreatedOn             = DateTime.UtcNow,
+                UpdatedOn             = DateTime.UtcNow
+            };
+
+            _dbContext.WalletTransactionLogs.Add(walletTx);
+
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId);
+            if (user != null)
+            {
+                user.CreditBalance = newBalance.ToString("F2");
+                user.UpdatedOn = DateTime.UtcNow;
+            }
+
+            session.LimitViolationHandled = true;
+            session.LastUpdated = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Debited {Fee:F2} {Ccy} from user {UserId} for partner session {SessionId}; new balance: {Balance:F2}",
+                totalFee, session.Currency, session.UserId, session.SessionId, newBalance);
         }
 
         /// <summary>

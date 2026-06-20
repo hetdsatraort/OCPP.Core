@@ -974,17 +974,21 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         "partner credential missing or has no outbound token", session.SessionId);
                 }
 
-                // Bill the user for current consumption regardless of stop result
+                // Bill the user for current consumption if we already have a cost figure. If the
+                // partner hasn't reported TotalCost yet, leave LimitViolationHandled false (do NOT
+                // set it here) so the "Partner has set EndDateTime" branch above can still bill the
+                // session once the partner reports the final cost on a later sync — otherwise this
+                // session would be marked handled with zero billed and never charged at all.
                 if (session.TotalCost.HasValue && session.TotalCost > 0)
                 {
                     ApplyPartnerSessionBilling(
                         session, walletBalancesDict, usersDict,
                         walletsToAdd, usersToUpdate,
                         violationReason: string.Join("; ", violations));
+                    session.LimitViolationHandled = true;
                 }
 
-                session.LimitViolationHandled = true;
-                session.LastUpdated           = DateTime.Now;
+                session.LastUpdated = DateTime.UtcNow;
                 limitStoppedCount++;
             }
 
