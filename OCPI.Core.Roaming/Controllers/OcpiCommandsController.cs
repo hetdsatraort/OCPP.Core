@@ -29,7 +29,7 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost("START_SESSION")]
         public async Task<IActionResult> StartSession([FromBody] OcpiStartSessionCommand command)
         {
-            OcpiValidate(command);
+            // OcpiValidate(command);
             _logger.LogInformation("Received START_SESSION for location={LocationId}", command.LocationId);
 
             var (result, _) = await _commandService.HandleStartSessionAsync(command);
@@ -46,7 +46,7 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost("STOP_SESSION")]
         public async Task<IActionResult> StopSession([FromBody] OcpiStopSessionCommand command)
         {
-            OcpiValidate(command);
+            // OcpiValidate(command);
             _logger.LogInformation("Received STOP_SESSION for session={SessionId}", command.SessionId);
 
             var result = await _commandService.HandleStopSessionAsync(command);
@@ -63,7 +63,7 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost("RESERVE_NOW")]
         public async Task<IActionResult> ReserveNow([FromBody] OcpiReserveNowCommand command)
         {
-            OcpiValidate(command);
+            // OcpiValidate(command);
             _logger.LogInformation("Received RESERVE_NOW for location={LocationId}", command.LocationId);
 
             var result = await _commandService.HandleReserveNowAsync(command);
@@ -80,7 +80,7 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost("CANCEL_RESERVATION")]
         public async Task<IActionResult> CancelReservation([FromBody] OcpiCancelReservationCommand command)
         {
-            OcpiValidate(command);
+            // OcpiValidate(command);
             _logger.LogInformation("Received CANCEL_RESERVATION for reservation={ReservationId}", command.ReservationId);
 
             var result = await _commandService.HandleCancelReservationAsync(command);
@@ -97,7 +97,7 @@ namespace OCPI.Core.Roaming.Controllers
         [HttpPost("UNLOCK_CONNECTOR")]
         public async Task<IActionResult> UnlockConnector([FromBody] OcpiUnlockConnectorCommand command)
         {
-            OcpiValidate(command);
+            // OcpiValidate(command);
             _logger.LogInformation("Received UNLOCK_CONNECTOR for location={LocationId} evse={EvseUid}",
                 command.LocationId, command.EvseUid);
 

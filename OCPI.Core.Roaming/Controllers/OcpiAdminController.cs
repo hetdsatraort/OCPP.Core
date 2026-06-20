@@ -694,7 +694,7 @@ namespace OCPI.Core.Roaming.Controllers
 
             var http = _httpClientFactory.CreateClient();
             http.DefaultRequestHeaders.TryAddWithoutValidation(
-                "Authorization", $"Token {partner.OutboundToken}");
+                "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
 
             try
@@ -807,7 +807,7 @@ namespace OCPI.Core.Roaming.Controllers
 
             var http = _httpClientFactory.CreateClient();
             http.DefaultRequestHeaders.TryAddWithoutValidation(
-                "Authorization", $"Token {partner.OutboundToken}");
+                "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
 
             try
@@ -879,12 +879,12 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 var http = _httpClientFactory.CreateClient();
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {partner.OutboundToken}");
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 // Step 1: GET /versions
-                var urlToUse = partner.Url.EndsWith("/versions") ? partner.Url : $"{partner.Url}/versions";
-                var versionsResp = await http.GetAsync(partner.Url);
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var versionsResp = await http.GetAsync(partnerURL);
                 if (!versionsResp.IsSuccessStatusCode) return null;
 
                 using var versionsDoc = JsonDocument.Parse(

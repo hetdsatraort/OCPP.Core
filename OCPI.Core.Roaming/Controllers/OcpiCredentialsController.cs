@@ -123,7 +123,7 @@ namespace OCPI.Core.Roaming.Controllers
         public async Task<IActionResult> Put([FromBody] OcpiCredentials partnerCredentials)
         {
             // Validate incoming credentials
-            OcpiValidate(partnerCredentials);
+            // OcpiValidate(partnerCredentials);
 
             var firstRole = partnerCredentials.Roles?.FirstOrDefault();
             if (firstRole == null)

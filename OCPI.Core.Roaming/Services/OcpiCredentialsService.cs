@@ -18,9 +18,10 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<OcpiPartnerCredential?> GetPartnerByTokenAsync(string token)
         {
-            string decodedToken = Encoding.UTF8.GetString(Convert.FromBase64String(token.Trim()));
+            string decodedToken = Encoding.UTF8.GetString(Convert.FromBase64String(token));
+            Console.WriteLine($"decoded token : {decodedToken}");
             return await _dbContext.OcpiPartnerCredentials
-                .FirstOrDefaultAsync(p => ( !string.IsNullOrEmpty(p.Token) ? p.Token : p.Token) == decodedToken && p.IsActive);
+                .FirstOrDefaultAsync(p => p.Token == decodedToken && p.IsActive);
         }
 
         public async Task<OcpiPartnerCredential?> GetPartnerByCountryAndPartyAsync(string countryCode, string partyId, string roleId)
@@ -119,6 +120,7 @@ namespace OCPI.Core.Roaming.Services
         public async Task<OcpiPendingRegistration?> GetPendingRegistrationByTokenAsync(string aToken)
         {
             var decodedToken = Encoding.UTF8.GetString(Convert.FromBase64String(aToken.Trim()));
+
             return await _dbContext.OcpiPendingRegistrations
                 .FirstOrDefaultAsync(p => p.AToken == decodedToken && !p.IsUsed && p.ExpiresAt > DateTime.UtcNow);
         }

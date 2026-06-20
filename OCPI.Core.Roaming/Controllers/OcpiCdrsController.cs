@@ -34,7 +34,7 @@ namespace OCPI.Core.Roaming.Controllers
         public async Task<IActionResult> PostCdr([FromBody] OcpiCdr cdr)
         {
             // Validate CDR data
-            OcpiValidate(cdr);
+            // OcpiValidate(cdr);
 
             // Get partner credential from Authorization header
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");

@@ -44,7 +44,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromRoute] string sessionId,
             [FromBody] OcpiSetChargingProfileRequest request)
         {
-            OcpiValidate(request);
+            // OcpiValidate(request);
             _logger.LogInformation("PUT charging profile for session {SessionId}", sessionId);
 
             var result = await _profileService.SetChargingProfileAsync(sessionId, request);

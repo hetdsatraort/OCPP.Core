@@ -55,7 +55,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiToken token)
         {
             // Validate token data
-            OcpiValidate(token);
+            // OcpiValidate(token);
 
             // Get partner credential from Authorization header
             var authToken = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
@@ -83,7 +83,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiToken token)
         {
             // Validate token data
-            OcpiValidate(token);
+            // OcpiValidate(token);
 
             // Partially update token in database
             var existing = await _tokenService.GetPartnerTokenAsync(tokenUid);

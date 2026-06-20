@@ -24,8 +24,11 @@ public class OcpiAuthorizeAttribute : Attribute, IAsyncAuthorizationFilter
 
         var partner = await credentialsService.GetPartnerByTokenAsync(token);
 
+        Console.WriteLine($"Partner Info: {partner.BusinessName} - {partner.PartyId} - {partner.Role}");
+
         if (partner == null)
         {
+            Console.WriteLine("Partner Not Found");
             context.Result = new UnauthorizedResult();
             return;
         }

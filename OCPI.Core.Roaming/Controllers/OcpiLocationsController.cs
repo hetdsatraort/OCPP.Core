@@ -37,7 +37,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OCPI.Core.Roaming.Services.OcpiLocation location)
         {
             // Validate location data
-            OcpiValidate(location);
+            // OcpiValidate(location);
 
             // Get partner credential from Authorization header
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
@@ -65,7 +65,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OCPI.Core.Roaming.Services.OcpiLocation location)
         {
             // Validate location data
-            OcpiValidate(location);
+            // OcpiValidate(location);
 
             // Get partner credential
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
@@ -94,7 +94,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiEvse evse)
         {
             // Validate EVSE data
-            OcpiValidate(evse);
+            // OcpiValidate(evse);
 
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
             var partner = await _credentialsService.GetPartnerByTokenAsync(token);
@@ -127,7 +127,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiConnector connector)
         {
             // Validate connector data
-            OcpiValidate(connector);
+            // OcpiValidate(connector);
 
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
             var partner = await _credentialsService.GetPartnerByTokenAsync(token);

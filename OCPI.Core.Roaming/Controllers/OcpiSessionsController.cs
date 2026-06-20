@@ -36,7 +36,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiSession session)
         {
             // Validate session data
-            OcpiValidate(session);
+            // OcpiValidate(session);
 
             // Get partner credential from Authorization header
             var token = HttpContext.Request.Headers["Authorization"].ToString().Replace("Token ", "");
@@ -64,7 +64,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromBody] OcpiSession session)
         {
             // Validate session data
-            OcpiValidate(session);
+            // OcpiValidate(session);
 
             // Partially update session in database
             var existing = await _sessionService.GetPartnerSessionAsync(sessionId);

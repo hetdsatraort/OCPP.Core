@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 namespace OCPI.Core.Roaming.BackgroundServices
@@ -295,7 +296,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 var http = httpFactory.CreateClient();
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {partner.OutboundToken}");
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 foreach (var station in stations)
@@ -353,7 +354,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var http = httpFactory.CreateClient();
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {partner.OutboundToken}");
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
@@ -724,7 +725,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 var http = httpFactory.CreateClient();
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {partner.OutboundToken}");
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 var ourBaseUrl  = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
@@ -772,7 +773,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var http = httpFactory.CreateClient();
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {partner.OutboundToken}");
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
                 // Step 1: GET /versions
