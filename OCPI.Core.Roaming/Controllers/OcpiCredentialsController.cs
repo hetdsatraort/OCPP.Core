@@ -199,7 +199,7 @@ namespace OCPI.Core.Roaming.Controllers
                     new OcpiCredentialsRole
                     {
                         CountryCode = "IN",
-                        PartyId = _configuration["OCPI:PartyId"] ?? "CPO",
+                        PartyId = _configuration["OCPI:PartyId"] ?? "HYC",
                         Role = "CPO",
                         BusinessDetails = new OCPI.Contracts.OcpiBusinessDetails
                         {

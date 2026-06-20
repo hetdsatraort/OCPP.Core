@@ -73,6 +73,14 @@ namespace OCPP.Core.Database.OCPIDTO
         /// </summary>
         public int? PartnerCredentialId { get; set; }
 
+        /// <summary>
+        /// Reference echoed from the eMSP's START_SESSION command (OCPI <c>authorization_reference</c>).
+        /// Echoed back on the Session push and on the CDR so the eMSP can correlate them with
+        /// their original request.
+        /// </summary>
+        [MaxLength(36)]
+        public string? AuthorizationReference { get; set; }
+
         /// <summary>Session start timestamp.</summary>
         public DateTime StartDateTime { get; set; }
 

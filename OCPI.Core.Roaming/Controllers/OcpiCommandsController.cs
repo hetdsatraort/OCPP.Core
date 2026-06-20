@@ -110,5 +110,21 @@ namespace OCPI.Core.Roaming.Controllers
                 Message = new[] { new OcpiDisplayText { Language = "en", Text = result.ToString() } }
             });
         }
+
+        /// <summary>
+        /// Receives the async CommandResult callback (eMSP role). When WE issue a command to a
+        /// partner CPO (see OcpiAdminController.EmspStartSession/EmspStopSession), we give them a
+        /// response_url of the form "/2.2.1/commands/{commandType}/{correlationId}" — this is
+        /// where that POST lands.
+        /// </summary>
+        [HttpPost("{commandType}/{correlationId}")]
+        public async Task<IActionResult> ReceiveCommandResult(
+            [FromRoute] string commandType,
+            [FromRoute] string correlationId,
+            [FromBody] OcpiCommandResult result)
+        {
+            await _commandService.HandleCommandResultAsync(commandType, correlationId, result);
+            return OcpiOk(new { });
+        }
     }
 }

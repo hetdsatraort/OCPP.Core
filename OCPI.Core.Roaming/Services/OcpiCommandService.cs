@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using OCPI.Contracts;
@@ -15,17 +17,20 @@ namespace OCPI.Core.Roaming.Services
         private readonly ILogger<OcpiCommandService> _logger;
         private readonly IConfiguration _config;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
         public OcpiCommandService(
             OCPPCoreContext dbContext,
             ILogger<OcpiCommandService> logger,
             IConfiguration config,
-            IServiceScopeFactory scopeFactory)
+            IServiceScopeFactory scopeFactory,
+            IHttpContextAccessor httpContextAccessor)
         {
             _dbContext = dbContext;
             _logger = logger;
             _config = config;
             _scopeFactory = scopeFactory;
+            _httpContextAccessor = httpContextAccessor;
         }
 
         // ───────────────────────────── START SESSION ─────────────────────────────
@@ -48,6 +53,13 @@ namespace OCPI.Core.Roaming.Services
             var sessionId  = Guid.NewGuid().ToString();
             var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
             var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
+
+            // Capture the requesting eMSP partner now — HttpContext is only valid for the
+            // duration of this request, not inside the fire-and-forget background task below.
+            // OcpiAuthorizeAttribute stashes the resolved partner here for partner-initiated
+            // commands; it stays null for locally-initiated commands (e.g. /admin/commands/start).
+            var requestingPartner = _httpContextAccessor.HttpContext?.Items["OcpiPartner"] as OcpiPartnerCredential;
+            var authorizationReference = command.AuthorizationReference;
 
             // Snapshot the highest TransactionId for this chargepoint/connector BEFORE sending the
             // OCPP command — used to identify the new transaction that appears after StartTransaction.
@@ -131,14 +143,20 @@ namespace OCPI.Core.Roaming.Services
                             LocationId      = command.LocationId,
                             StartDateTime   = ocppTransaction?.StartTime ?? DateTime.UtcNow,
                             Status          = "ACTIVE",
-                            PartnerCredentialId = null   // resolved separately if roaming token
+                            PartnerCredentialId    = requestingPartner?.Id,
+                            AuthorizationReference = authorizationReference
                         };
 
                         await db.OcpiHostedSessions.AddAsync(hostedSession);
                         await db.SaveChangesAsync();
+
                         _logger.LogInformation(
                             "Created OcpiHostedSession {SessionId} with TransactionId={TxId}",
                             sessionId, ocppTransaction?.TransactionId.ToString() ?? "none");
+
+                        // The CPO (us) assigns the session_id — push it to the requesting eMSP
+                        // in real time instead of waiting for the next periodic sync round.
+                        await PushHostedSessionToPartnerAsync(hostedSession, requestingPartner);
                     }
 
                     var resultType = success ? CommandResultType.Accepted : CommandResultType.Rejected;
@@ -433,5 +451,202 @@ namespace OCPI.Core.Roaming.Services
             }
         }
 
+        // ─────────────────────── COMMAND RESULT CALLBACK (eMSP role) ─────────────────────
+        //
+        // When WE act as eMSP and issue a command to a partner CPO (see OcpiAdminController
+        // .EmspStartSession/.EmspStopSession and OcpiOrphanSessionService), we hand the CPO a
+        // response_url of the form "{ourBaseUrl}/2.2.1/commands/{commandType}/{correlationId}".
+        // The CPO POSTs the async CommandResult back there once they've executed the command.
+        // This does NOT carry the CPO-assigned session_id (the CommandResult contract has no
+        // such field) — that arrives separately via their Session PUT, handled in
+        // OcpiSessionService.StorePartnerSessionAsync. This callback only tells us whether the
+        // command itself was accepted or rejected.
+
+        public async Task HandleCommandResultAsync(string commandType, string correlationId, OcpiCommandResult result)
+        {
+            _logger.LogInformation(
+                "Received CommandResult for {CommandType} correlation={CorrelationId}: {Result}",
+                commandType, correlationId, result.Result);
+
+            if (string.Equals(commandType, "START_SESSION", StringComparison.OrdinalIgnoreCase))
+            {
+                // correlationId is the authorization_reference we generated when sending
+                // START_SESSION; the placeholder row still has SessionId == AuthorizationReference
+                // until the CPO's Session push resolves it to the real session_id.
+                var pending = await _dbContext.OcpiPartnerSessions.FirstOrDefaultAsync(s =>
+                    s.AuthorizationReference == correlationId && s.SessionId == s.AuthorizationReference);
+
+                if (pending == null)
+                {
+                    _logger.LogWarning("CommandResult for unknown START_SESSION correlation {CorrelationId}", correlationId);
+                    return;
+                }
+
+                if (result.Result != CommandResultType.Accepted)
+                {
+                    pending.Status = "REJECTED";
+                    pending.LastUpdated = DateTime.UtcNow;
+                    await _dbContext.SaveChangesAsync();
+                    _logger.LogWarning(
+                        "Partner rejected START_SESSION (authRef={AuthRef}): {Result}", correlationId, result.Result);
+                }
+                // ACCEPTED: leave the PENDING row as-is — the CPO's subsequent Session push
+                // carries the real session_id and authoritative session state.
+            }
+            else if (string.Equals(commandType, "STOP_SESSION", StringComparison.OrdinalIgnoreCase))
+            {
+                // correlationId here is the CPO-assigned SessionId — by the time we issue a
+                // stop, the session has already been resolved via the Session push.
+                var session = await _dbContext.OcpiPartnerSessions.FirstOrDefaultAsync(s => s.SessionId == correlationId);
+                if (session == null)
+                {
+                    _logger.LogWarning("CommandResult for unknown STOP_SESSION session {SessionId}", correlationId);
+                    return;
+                }
+
+                if (result.Result != CommandResultType.Accepted)
+                    _logger.LogWarning(
+                        "Partner rejected STOP_SESSION for session {SessionId}: {Result}", correlationId, result.Result);
+                // Final state (EndDateTime / Status=COMPLETED) arrives via the partner's Session push.
+            }
+            else
+            {
+                _logger.LogDebug("CommandResult for {CommandType}/{CorrelationId} not tracked", commandType, correlationId);
+            }
+        }
+
+        // ─────────────────────── REAL-TIME SESSION PUSH (CPO role) ───────────────────────
+
+        /// <summary>
+        /// Immediately pushes a newly-created/updated hosted session to the eMSP partner that
+        /// initiated it, instead of waiting for the next periodic <c>OcpiSyncBackgroundService</c>
+        /// round. Best-effort: on failure the partner will still pick the session up on the
+        /// next sync, so errors are logged but never propagated.
+        /// </summary>
+        private async Task PushHostedSessionToPartnerAsync(OcpiHostedSession hostedSession, OcpiPartnerCredential? partner)
+        {
+            if (partner == null || string.IsNullOrEmpty(partner.OutboundToken))
+                return;
+
+            try
+            {
+                var sessionsUrl = await DiscoverPartnerEndpointAsync(partner, "sessions");
+                if (sessionsUrl == null)
+                {
+                    _logger.LogWarning(
+                        "Could not discover sessions receiver endpoint for partner {PartnerId} — " +
+                        "session {SessionId} will reach them on the next periodic sync instead",
+                        partner.Id, hostedSession.SessionId);
+                    return;
+                }
+
+                var ourCountryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
+                var ourPartyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
+                var isActive       = hostedSession.EndDateTime == null;
+
+                var wireSession = new OcpiSession
+                {
+                    CountryCode             = CountryCode.India,
+                    PartyId                 = ourPartyId,
+                    Id                      = hostedSession.SessionId,
+                    StartDateTime           = hostedSession.StartDateTime,
+                    EndDateTime             = isActive ? null : hostedSession.EndDateTime,
+                    Kwh                     = hostedSession.TotalEnergy ?? 0m,
+                    AuthMethod              = AuthMethodType.Command,
+                    AuthorizationReference  = hostedSession.AuthorizationReference,
+                    LocationId              = hostedSession.LocationId,
+                    EvseId                  = hostedSession.EvseUid,
+                    ConnectorId             = hostedSession.ConnectorId,
+                    Status                  = isActive ? SessionStatus.Active : SessionStatus.Completed,
+                    Currency                = CurrencyCode.IndianRupee,
+                    LastUpdated             = hostedSession.LastUpdated,
+                    CdrToken                = string.IsNullOrEmpty(hostedSession.TokenUid)
+                                                  ? null
+                                                  : new OcpiCdrToken { Uid = hostedSession.TokenUid, Type = TokenType.Rfid }
+                };
+
+                var url = $"{sessionsUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{hostedSession.SessionId}";
+
+                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+
+                var resp = await httpClient.PutAsJsonAsync(url, wireSession);
+                if (resp.IsSuccessStatusCode)
+                    _logger.LogInformation(
+                        "Pushed hosted session {SessionId} to partner {PartnerId} in real time",
+                        hostedSession.SessionId, partner.Id);
+                else
+                    _logger.LogWarning(
+                        "Real-time push of session {SessionId} to partner {PartnerId} failed: HTTP {Status}",
+                        hostedSession.SessionId, partner.Id, resp.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Error pushing hosted session {SessionId} to partner {PartnerId} in real time",
+                    hostedSession.SessionId, partner.Id);
+            }
+        }
+
+        /// <summary>
+        /// Discovers a specific module endpoint URL for a partner by walking their /versions
+        /// and version-details URLs. Returns the first matching receiver/EMSP-role URL, or null.
+        /// </summary>
+        private async Task<string?> DiscoverPartnerEndpointAsync(OcpiPartnerCredential partner, string moduleIdentifier)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var versionsResp = await http.GetAsync(partnerURL);
+                if (!versionsResp.IsSuccessStatusCode) return null;
+
+                using var versionsDoc = JsonDocument.Parse(await versionsResp.Content.ReadAsStringAsync());
+
+                string? v221Url = null;
+                if (versionsDoc.RootElement.TryGetProperty("data", out var vData) && vData.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var v in vData.EnumerateArray())
+                    {
+                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
+                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
+                        if (ver == "2.2.1") { v221Url = url; break; }
+                        if (ver == "2.2") v221Url = url;
+                    }
+                }
+                if (v221Url == null) return null;
+
+                var detailsResp = await http.GetAsync(v221Url);
+                if (!detailsResp.IsSuccessStatusCode) return null;
+
+                using var detailsDoc = JsonDocument.Parse(await detailsResp.Content.ReadAsStringAsync());
+                if (detailsDoc.RootElement.TryGetProperty("data", out var dData) &&
+                    dData.TryGetProperty("endpoints", out var eps) && eps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var ep in eps.EnumerateArray())
+                    {
+                        var id   = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
+                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
+                        if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase)) continue;
+
+                        bool roleMatch = role == null ||
+                            string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(role, "EMSP", StringComparison.OrdinalIgnoreCase);
+                        if (roleMatch)
+                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
+                    }
+                }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Endpoint discovery failed for partner {Id} module={Module}", partner.Id, moduleIdentifier);
+                return null;
+            }
+        }
     }
 }

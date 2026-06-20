@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using OCPI.Contracts;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
 using System.Net.Http.Json;
@@ -39,7 +40,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _logger         = logger;
             _configuration  = configuration;
 
-            var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 30);
+            var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
             var timeouSeconds  = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
 
             _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
@@ -142,6 +143,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             int closedByTx      = 0;
             int closedAsInvalid = 0;
             var completedChargePointIds = new List<string>();
+            var completedPartnerSessions = new List<OcpiHostedSession>();
 
             foreach (var session in activeSessions)
             {
@@ -170,6 +172,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                         if (!string.IsNullOrEmpty(session.ChargePointId))
                             completedChargePointIds.Add(session.ChargePointId);
+
+                        if (session.PartnerCredentialId.HasValue)
+                            completedPartnerSessions.Add(session);
 
                         _logger.LogInformation(
                             "OcpiOrphanSessionService: COMPLETED session {SessionId} (TxId={TxId}) " +
@@ -223,19 +228,315 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             await db.SaveChangesAsync(ct);
 
+            var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+
             // Immediately notify EMSP/HUB partners of status change for any EVSEs whose
             // sessions just completed (so partners see "AVAILABLE" without waiting for the
             // next full sync round).
             if (completedChargePointIds.Count > 0)
             {
-                var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
                 await NotifyEmspPartnersOfEvseStatusAsync(
                     db, httpFactory, completedChargePointIds.Distinct().ToList(), ct);
+            }
+
+            // Generate the CDR for each completed partner-initiated session and push the final
+            // session + CDR to the originating eMSP partner in real time, instead of waiting for
+            // them to pull it on the next periodic sync round.
+            if (completedPartnerSessions.Count > 0)
+            {
+                await PushCompletedSessionsAndCdrsAsync(db, httpFactory, completedPartnerSessions, ct);
             }
 
             _logger.LogInformation(
                 "OcpiOrphanSessionService: cycle done — live-updated: {Live}, completed: {Tx}, invalidated: {Inv}",
                 liveUpdated, closedByTx, closedAsInvalid);
+        }
+
+        // ── Real-time CDR generation + push to EMSP partners (CPO role) ──────────
+
+        /// <summary>
+        /// For each just-completed <see cref="OcpiHostedSession"/> that was initiated by an
+        /// eMSP partner, generates the corresponding <see cref="OCPP.Core.Database.OCPIDTO.OcpiCdr"/>
+        /// (idempotent on <c>LocalSessionId</c>) and pushes both the final session state and the
+        /// CDR to that partner in real time, rather than relying solely on their periodic pull of
+        /// our /sessions/sender and /cdrs/sender endpoints.
+        /// </summary>
+        private async Task PushCompletedSessionsAndCdrsAsync(
+            OCPPCoreContext db,
+            IHttpClientFactory httpFactory,
+            List<OcpiHostedSession> sessions,
+            CancellationToken ct)
+        {
+            var partnerIds = sessions
+                .Where(s => s.PartnerCredentialId.HasValue)
+                .Select(s => s.PartnerCredentialId!.Value)
+                .Distinct()
+                .ToList();
+            if (partnerIds.Count == 0) return;
+
+            var partners = await db.OcpiPartnerCredentials
+                .Where(p => partnerIds.Contains(p.Id) && p.IsActive)
+                .ToDictionaryAsync(p => p.Id, ct);
+
+            var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
+            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+
+            var connectorIds = sessions.Select(s => s.ConnectorId).Where(x => x != null).Distinct().ToList();
+            var guns = connectorIds.Count > 0
+                ? await db.ChargingGuns.Where(g => connectorIds.Contains(g.RecId)).ToListAsync(ct)
+                : new List<OCPP.Core.Database.EVCDTO.ChargingGuns>();
+
+            var newCdrs = new List<OCPP.Core.Database.OCPIDTO.OcpiCdr>();
+
+            foreach (var session in sessions)
+            {
+                if (!session.PartnerCredentialId.HasValue) continue;
+                if (!partners.TryGetValue(session.PartnerCredentialId.Value, out var partner)) continue;
+                if (string.IsNullOrEmpty(partner.OutboundToken)) continue;
+
+                // Idempotent: skip if we already generated a CDR for this hosted session.
+                var cdr = await db.OcpiCdrs.FirstOrDefaultAsync(c => c.LocalSessionId == session.SessionId, ct);
+                if (cdr == null)
+                {
+                    var gun = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
+                    double.TryParse(gun?.ChargerTariff, out var tariffRate);
+
+                    var kwh          = session.TotalEnergy ?? 0m;
+                    var costExclVat  = Math.Round(kwh * (decimal)tariffRate, 2);
+                    var costInclVat  = Math.Round(costExclVat * 1.18m, 2);
+                    var endDateTime  = session.EndDateTime ?? DateTime.UtcNow;
+
+                    cdr = new OCPP.Core.Database.OCPIDTO.OcpiCdr
+                    {
+                        CountryCode            = ourCountryCode,
+                        PartyId                = ourPartyId,
+                        CdrId                  = Guid.NewGuid().ToString(),
+                        StartDateTime          = session.StartDateTime,
+                        EndDateTime            = endDateTime,
+                        SessionId              = session.SessionId,
+                        AuthorizationReference = session.AuthorizationReference,
+                        AuthMethod             = "COMMAND",
+                        LocationId             = session.LocationId,
+                        EvseUid                = session.EvseUid,
+                        ConnectorId            = session.ConnectorId,
+                        Currency               = "INR",
+                        TotalEnergy            = kwh,
+                        TotalTime              = (decimal)(endDateTime - session.StartDateTime).TotalHours,
+                        TotalCostExclVat       = costExclVat,
+                        TotalCostInclVat       = costInclVat,
+                        TokenUid               = session.TokenUid,
+                        PartnerCredentialId    = partner.Id,
+                        LocalSessionId         = session.SessionId,
+                        CreatedOn              = DateTime.UtcNow,
+                        LastUpdated            = DateTime.UtcNow
+                    };
+
+                    newCdrs.Add(cdr);
+                }
+
+                await PushSessionAndCdrToPartnerAsync(partner, session, cdr, httpFactory, ct);
+            }
+
+            if (newCdrs.Count > 0)
+            {
+                db.OcpiCdrs.AddRange(newCdrs);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        /// <summary>Pushes the final (COMPLETED) session state and its CDR to one eMSP partner.</summary>
+        private async Task PushSessionAndCdrToPartnerAsync(
+            OcpiPartnerCredential partner,
+            OcpiHostedSession session,
+            OCPP.Core.Database.OCPIDTO.OcpiCdr cdr,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
+            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+
+            var http = httpFactory.CreateClient();
+            http.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+            http.Timeout = TimeSpan.FromSeconds(15);
+
+            // ── Push final session state ──────────────────────────────
+            var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "sessions", httpFactory, ct);
+            if (sessionsUrl != null)
+            {
+                var wireSession = new OcpiSession
+                {
+                    CountryCode            = Enum.Parse<CountryCode>(ourCountryCode),
+                    PartyId                = ourPartyId,
+                    Id                     = session.SessionId,
+                    StartDateTime          = session.StartDateTime,
+                    EndDateTime            = session.EndDateTime,
+                    Kwh                    = session.TotalEnergy ?? 0m,
+                    AuthMethod             = AuthMethodType.Command,
+                    AuthorizationReference = session.AuthorizationReference,
+                    LocationId             = session.LocationId,
+                    EvseId                 = session.EvseUid,
+                    ConnectorId            = session.ConnectorId,
+                    Status                 = SessionStatus.Completed,
+                    Currency               = CurrencyCode.IndianRupee,
+                    LastUpdated            = session.LastUpdated,
+                    CdrToken               = string.IsNullOrEmpty(session.TokenUid)
+                                                  ? null
+                                                  : new OcpiCdrToken { Uid = session.TokenUid, Type = TokenType.Rfid }
+                };
+
+                try
+                {
+                    var url  = $"{sessionsUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{session.SessionId}";
+                    var resp = await http.PutAsJsonAsync(url, wireSession, ct);
+                    if (!resp.IsSuccessStatusCode)
+                        _logger.LogWarning(
+                            "Real-time completed-session push for {SessionId} to partner {PartnerId} failed: HTTP {Status}",
+                            session.SessionId, partner.Id, resp.StatusCode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Error pushing completed session {SessionId} to partner {PartnerId}",
+                        session.SessionId, partner.Id);
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Could not discover sessions receiver endpoint for partner {PartnerId} — " +
+                    "completed session {SessionId} will reach them on the next periodic sync instead",
+                    partner.Id, session.SessionId);
+            }
+
+            // ── Push CDR ───────────────────────────────────────────────
+            var cdrsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "cdrs", httpFactory, ct);
+            if (cdrsUrl != null)
+            {
+                var wireCdr = new OCPI.Contracts.OcpiCdr
+                {
+                    CountryCode            = Enum.Parse<CountryCode>(ourCountryCode),
+                    PartyId                = ourPartyId,
+                    Id                     = cdr.CdrId,
+                    StartDateTime          = cdr.StartDateTime,
+                    EndDateTime            = cdr.EndDateTime,
+                    SessionId              = cdr.SessionId,
+                    AuthorizationReference = cdr.AuthorizationReference,
+                    AuthMethod             = AuthMethodType.Command,
+                    CdrLocation            = new OcpiCdrLocation
+                    {
+                        Id          = cdr.LocationId,
+                        EvseUid     = cdr.EvseUid,
+                        ConnectorId = cdr.ConnectorId
+                    },
+                    Currency               = CurrencyCode.IndianRupee,
+                    TotalEnergy            = cdr.TotalEnergy,
+                    TotalTime              = cdr.TotalTime,
+                    TotalCost              = new OcpiPrice { ExclVat = cdr.TotalCostExclVat, InclVat = cdr.TotalCostInclVat },
+                    CdrToken               = string.IsNullOrEmpty(cdr.TokenUid)
+                                                  ? null
+                                                  : new OcpiCdrToken { Uid = cdr.TokenUid, Type = TokenType.Rfid },
+                    LastUpdated            = cdr.LastUpdated
+                };
+
+                try
+                {
+                    var resp = await http.PostAsJsonAsync(cdrsUrl, wireCdr, ct);
+                    if (resp.IsSuccessStatusCode)
+                        _logger.LogInformation(
+                            "Pushed CDR {CdrId} for session {SessionId} to partner {PartnerId} in real time",
+                            cdr.CdrId, session.SessionId, partner.Id);
+                    else
+                        _logger.LogWarning(
+                            "Real-time CDR push for {CdrId} to partner {PartnerId} failed: HTTP {Status}",
+                            cdr.CdrId, partner.Id, resp.StatusCode);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error pushing CDR {CdrId} to partner {PartnerId}", cdr.CdrId, partner.Id);
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Could not discover CDRs receiver endpoint for partner {PartnerId} — " +
+                    "CDR {CdrId} will reach them on the next periodic sync instead",
+                    partner.Id, cdr.CdrId);
+            }
+        }
+
+        /// <summary>
+        /// Walks the partner's /versions and version-details URLs to find the receiver endpoint
+        /// URL for the given OCPI module (e.g. "sessions", "cdrs", "commands"). Returns null if
+        /// discovery fails or the partner doesn't expose that module.
+        /// </summary>
+        private async Task<string?> DiscoverPartnerModuleEndpointAsync(
+            OcpiPartnerCredential partner,
+            string moduleIdentifier,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            try
+            {
+                var http = httpFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
+                var vResp = await http.GetAsync(partnerURL, ct);
+                if (!vResp.IsSuccessStatusCode) return null;
+
+                using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
+                string? v221Url = null;
+                if (vDoc.RootElement.TryGetProperty("data", out var vData) &&
+                    vData.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var v in vData.EnumerateArray())
+                    {
+                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
+                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        if (ver == "2.2.1") { v221Url = url; break; }
+                        if (ver == "2.2")     v221Url = url;
+                    }
+                }
+
+                if (v221Url == null) return null;
+
+                var dResp = await http.GetAsync(v221Url, ct);
+                if (!dResp.IsSuccessStatusCode) return null;
+
+                using var dDoc = JsonDocument.Parse(await dResp.Content.ReadAsStringAsync(ct));
+                if (dDoc.RootElement.TryGetProperty("data", out var dData) &&
+                    dData.TryGetProperty("endpoints", out var eps) &&
+                    eps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var ep in eps.EnumerateArray())
+                    {
+                        var id   = ep.TryGetProperty("identifier", out var idProp)  ? idProp.GetString()  : null;
+                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+
+                        if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        bool roleOk = role == null
+                            || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(role, "EMSP",     StringComparison.OrdinalIgnoreCase);
+
+                        if (roleOk)
+                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "OcpiOrphanSessionService: endpoint discovery failed for partner {PartnerId} module={Module}",
+                    partner.Id, moduleIdentifier);
+                return null;
+            }
         }
 
         // ── Real-time EVSE status push to EMSP partners ──────────────────────────

@@ -644,9 +644,15 @@ namespace OCPI.Core.Roaming.Controllers
 
         /// <summary>
         /// Send a START_SESSION command to a partner CPO for one of our users (eMSP role).
-        /// Discovers the partner's commands endpoint at runtime, POSTs the OCPI command,
-        /// and creates an <see cref="OCPP.Core.Database.OCPIDTO.OcpiPartnerSession"/> record
+        /// Discovers the partner's commands endpoint at runtime, POSTs the OCPI command, and
+        /// creates a PENDING <see cref="OCPP.Core.Database.OCPIDTO.OcpiPartnerSession"/> record
         /// with the user's optional limits so the orphan-session service can enforce them.
+        ///
+        /// Per the OCPI spec the CPO — not us — assigns the session_id, so we don't know it yet.
+        /// We instead send an <c>authorization_reference</c> and key the PENDING row on it
+        /// (SessionId is temporarily set to the same value as a placeholder); once the CPO PUTs
+        /// the real session back to us via the Sessions receiver, <see cref="OcpiSessionService"/>
+        /// resolves the placeholder to the CPO-assigned session_id.
         /// </summary>
         [HttpPost("emsp/start-session")]
         public async Task<IActionResult> EmspStartSession(
@@ -668,14 +674,16 @@ namespace OCPI.Core.Roaming.Controllers
             if (commandsUrl == null)
                 return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
 
-            var sessionId   = Guid.NewGuid().ToString();
+            // We do NOT assign the session_id — the CPO does. We send authorization_reference
+            // so the CPO can echo it back on the Session push and we can correlate it.
+            var authorizationReference = Guid.NewGuid().ToString();
             var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
-            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/START_SESSION/{sessionId}";
+            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/START_SESSION/{authorizationReference}";
 
             var commandBody = new
             {
-                response_url  = responseUrl,
-                token         = new
+                response_url            = responseUrl,
+                token                   = new
                 {
                     country_code       = _configuration["Ocpi:CountryCode"] ?? "IN",
                     party_id           = _configuration["Ocpi:PartyId"]     ?? "CPO",
@@ -687,9 +695,10 @@ namespace OCPI.Core.Roaming.Controllers
                     whitelist          = "NEVER",
                     last_updated       = DateTime.UtcNow.ToString("o")
                 },
-                location_id   = request.LocationId,
-                evse_uid      = request.EvseUid,
-                connector_id  = request.ConnectorId
+                location_id             = request.LocationId,
+                evse_uid                = request.EvseUid,
+                connector_id            = request.ConnectorId,
+                authorization_reference = authorizationReference
             };
 
             var http = _httpClientFactory.CreateClient();
@@ -715,14 +724,17 @@ namespace OCPI.Core.Roaming.Controllers
 
                 bool accepted = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase);
 
-                // Persist the session record so limits can be tracked by the background service
+                // Persist a PENDING placeholder so limits/UserId travel with the session once the
+                // CPO resolves it to a real session_id. SessionId == AuthorizationReference marks
+                // it unresolved; OcpiSessionService promotes it on the CPO's Session push.
                 var session = new OCPP.Core.Database.OCPIDTO.OcpiPartnerSession
                 {
                     CountryCode          = partner.CountryCode,
                     PartyId              = partner.PartyId,
-                    SessionId            = sessionId,
+                    SessionId            = authorizationReference,
+                    AuthorizationReference = authorizationReference,
                     StartDateTime        = DateTime.UtcNow,
-                    Status               = accepted ? "ACTIVE" : "INVALID",
+                    Status               = accepted ? "PENDING" : "INVALID",
                     LocationId           = request.LocationId,
                     EvseUid              = request.EvseUid,
                     ConnectorId          = request.ConnectorId,
@@ -742,16 +754,19 @@ namespace OCPI.Core.Roaming.Controllers
                 await _dbContext.SaveChangesAsync();
 
                 _logger.LogInformation(
-                    "[Admin/eMSP] START_SESSION → partner {PartnerId} ({BusinessName}): result={Result}, sessionId={SessionId}",
-                    request.PartnerId, partner.BusinessName, cmdResult, sessionId);
+                    "[Admin/eMSP] START_SESSION → partner {PartnerId} ({BusinessName}): result={Result}, authRef={AuthRef}",
+                    request.PartnerId, partner.BusinessName, cmdResult, authorizationReference);
 
                 return Ok(new
                 {
-                    success   = accepted,
-                    result    = cmdResult,
-                    sessionId = accepted ? sessionId : (string?)null,
-                    message   = accepted
-                        ? "Session started at partner CPO"
+                    success                 = accepted,
+                    result                  = cmdResult,
+                    sessionId               = (string?)null,
+                    authorizationReference  = accepted ? authorizationReference : null,
+                    status                  = accepted ? "PENDING" : "REJECTED",
+                    message                 = accepted
+                        ? "Command accepted by partner CPO; awaiting session confirmation. " +
+                          "Poll GET admin/partner-sessions/by-reference/{authorizationReference} for the resolved sessionId."
                         : $"Partner rejected the command: {cmdResult}"
                 });
             }
@@ -765,9 +780,40 @@ namespace OCPI.Core.Roaming.Controllers
         }
 
         /// <summary>
+        /// Poll the resolution status of a session started via <see cref="EmspStartSession"/>.
+        /// While the CPO hasn't yet pushed the real session, <c>sessionId</c> is null and
+        /// <c>status</c> is "PENDING". Once resolved, <c>sessionId</c> holds the CPO-assigned id.
+        /// </summary>
+        [HttpGet("partner-sessions/by-reference/{authorizationReference}")]
+        public async Task<IActionResult> GetPartnerSessionByReference([FromRoute] string authorizationReference)
+        {
+            var session = await _dbContext.OcpiPartnerSessions
+                .FirstOrDefaultAsync(s => s.AuthorizationReference == authorizationReference);
+
+            if (session == null)
+                return NotFound(new { success = false, message = "No session found for this authorization reference" });
+
+            bool resolved = session.SessionId != session.AuthorizationReference;
+
+            return Ok(new
+            {
+                success   = true,
+                data      = new
+                {
+                    authorizationReference = session.AuthorizationReference,
+                    sessionId              = resolved ? session.SessionId : null,
+                    status                 = session.Status,
+                    resolved
+                }
+            });
+        }
+
+        /// <summary>
         /// Send a STOP_SESSION command to the partner CPO for an active eMSP session.
-        /// Looks up the session by <paramref name="request"/>.<c>SessionId</c>, discovers the
-        /// partner's commands endpoint, and POSTs the OCPI STOP_SESSION body.
+        /// Looks up the session by <paramref name="request"/>.<c>SessionId</c> — accepting either
+        /// the CPO-assigned session_id or the original authorization_reference, in case the CPO
+        /// hasn't resolved the session yet — discovers the partner's commands endpoint, and POSTs
+        /// the OCPI STOP_SESSION body.
         /// </summary>
         [HttpPost("emsp/stop-session")]
         public async Task<IActionResult> EmspStopSession(
@@ -777,9 +823,18 @@ namespace OCPI.Core.Roaming.Controllers
                 return BadRequest(new { success = false, message = "SessionId is required" });
 
             var session = await _dbContext.OcpiPartnerSessions
-                .FirstOrDefaultAsync(s => s.SessionId == request.SessionId);
+                .FirstOrDefaultAsync(s => s.SessionId == request.SessionId
+                    || s.AuthorizationReference == request.SessionId);
             if (session == null)
                 return NotFound(new { success = false, message = "Partner session not found" });
+
+            // The CPO hasn't yet told us the real session_id — we have nothing to send them.
+            if (session.SessionId == session.AuthorizationReference)
+                return StatusCode(200, new
+                {
+                    success = false,
+                    message = "Partner CPO has not yet confirmed this session — it has no session_id to stop yet. Try again shortly."
+                });
 
             if (!session.PartnerCredentialId.HasValue)
                 return BadRequest(new { success = false, message = "Session has no associated partner credential" });
@@ -797,12 +852,12 @@ namespace OCPI.Core.Roaming.Controllers
                 return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
 
             var ourBaseUrl  = _configuration["Ocpi:OurBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
-            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{request.SessionId}";
+            var responseUrl = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{session.SessionId}";
 
             var commandBody = new
             {
                 response_url = responseUrl,
-                session_id   = request.SessionId
+                session_id   = session.SessionId
             };
 
             var http = _httpClientFactory.CreateClient();
@@ -828,13 +883,13 @@ namespace OCPI.Core.Roaming.Controllers
 
                 _logger.LogInformation(
                     "[Admin/eMSP] STOP_SESSION → partner {PartnerId}: result={Result}, sessionId={SessionId}",
-                    session.PartnerCredentialId, cmdResult, request.SessionId);
+                    session.PartnerCredentialId, cmdResult, session.SessionId);
 
                 return Ok(new
                 {
                     success   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase),
                     result    = cmdResult,
-                    sessionId = request.SessionId,
+                    sessionId = session.SessionId,
                     message   = string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase)
                         ? "Stop command accepted by partner CPO"
                         : $"Partner response: {cmdResult}"
@@ -843,7 +898,7 @@ namespace OCPI.Core.Roaming.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "[Admin/eMSP] Error sending STOP_SESSION for session {SessionId}", request.SessionId);
+                    "[Admin/eMSP] Error sending STOP_SESSION for session {SessionId}", session.SessionId);
                 return StatusCode(200,
                     new { success = false, message = $"Error communicating with partner: {ex.Message}" });
             }

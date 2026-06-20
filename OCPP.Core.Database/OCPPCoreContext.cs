@@ -919,6 +919,7 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.Currency).HasMaxLength(3);
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.AuthorizationReference).HasMaxLength(36);
 
                 entity.HasOne(d => d.PartnerCredential)
                     .WithMany()

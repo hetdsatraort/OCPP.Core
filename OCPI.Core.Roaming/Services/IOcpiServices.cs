@@ -132,6 +132,14 @@ namespace OCPI.Core.Roaming.Services
         Task<CommandResponseType> HandleReserveNowAsync(OcpiReserveNowCommand command);
         Task<CommandResponseType> HandleCancelReservationAsync(OcpiCancelReservationCommand command);
         Task<CommandResponseType> HandleUnlockConnectorAsync(OcpiUnlockConnectorCommand command);
+
+        /// <summary>
+        /// Handles an async CommandResult POSTed back to our response_url by a partner CPO we
+        /// (as eMSP) issued a command to. <paramref name="correlationId"/> is the trailing path
+        /// segment of the response_url we constructed (authorization_reference for START_SESSION,
+        /// the resolved session_id for STOP_SESSION).
+        /// </summary>
+        Task HandleCommandResultAsync(string commandType, string correlationId, OcpiCommandResult result);
     }
 
     public interface IOcpiChargingProfileService
