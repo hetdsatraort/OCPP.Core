@@ -136,13 +136,13 @@ namespace OCPP.Core.Management.Controllers
                     .FirstOrDefaultAsync(l => l.Id == id);
 
                 if (location == null)
-                    return NotFound(new { success = false, message = "Partner hub not found" });
+                    return Ok(new { success = false, message = "Partner hub not found" });
 
                 var partner = await _dbContext.OcpiPartnerCredentials
                     .FirstOrDefaultAsync(p => p.Id == location.PartnerCredentialId && p.IsActive);
 
                 if (partner == null)
-                    return NotFound(new { success = false, message = "Partner not found or inactive" });
+                    return Ok(new { success = false, message = "Partner not found or inactive" });
 
                 var evses = await _dbContext.OcpiPartnerEvses
                     .Where(e => e.PartnerLocationId == id)
@@ -189,7 +189,7 @@ namespace OCPP.Core.Management.Controllers
                     .FirstOrDefaultAsync(e => e.Id == id);
 
                 if (evse == null)
-                    return NotFound(new { success = false, message = "EVSE not found" });
+                    return Ok(new { success = false, message = "EVSE not found" });
 
                 var connectors = await _dbContext.OcpiPartnerConnectors
                     .Where(c => c.PartnerEvseId == id)
@@ -221,7 +221,7 @@ namespace OCPP.Core.Management.Controllers
                     .FirstOrDefaultAsync(c => c.Id == id);
 
                 if (connector == null)
-                    return NotFound(new { success = false, message = "Connector not found" });
+                    return Ok(new { success = false, message = "Connector not found" });
 
                 var evse = await _dbContext.OcpiPartnerEvses
                     .FirstOrDefaultAsync(e => e.Id == connector.PartnerEvseId);
@@ -435,7 +435,7 @@ namespace OCPP.Core.Management.Controllers
                 var evse = await _dbContext.OcpiPartnerEvses
                     .FirstOrDefaultAsync(e => e.Id == request.EvseDbId);
                 if (evse == null)
-                    return NotFound(new { success = false, message = "EVSE not found" });
+                    return Ok(new { success = false, message = "EVSE not found" });
 
                 if (!string.Equals(evse.Status, "AVAILABLE", StringComparison.OrdinalIgnoreCase))
                     return Ok(new { success = false, message = $"EVSE is not available (current status: {evse.Status})" });
@@ -443,7 +443,7 @@ namespace OCPP.Core.Management.Controllers
                 var location = await _dbContext.OcpiPartnerLocations
                     .FirstOrDefaultAsync(l => l.Id == evse.PartnerLocationId);
                 if (location == null)
-                    return NotFound(new { success = false, message = "Partner location not found" });
+                    return Ok(new { success = false, message = "Partner location not found" });
 
                 // Resolve token UID: prefer explicit TokenUid; fall back to ChargeTag lookup
                 string tokenUid = request.TokenUid ?? string.Empty;
@@ -537,7 +537,7 @@ namespace OCPP.Core.Management.Controllers
                 var session = await _dbContext.OcpiPartnerSessions
                     .FirstOrDefaultAsync(s => s.SessionId == request.SessionId);
                 if (session == null)
-                    return NotFound(new { success = false, message = "Session not found" });
+                    return Ok(new { success = false, message = "Session not found" });
 
                 if (!User.IsInRole("Administrator") && session.UserId != userId)
                     return Forbid();
@@ -775,7 +775,7 @@ namespace OCPP.Core.Management.Controllers
                 var session = await _dbContext.OcpiPartnerSessions
                     .FirstOrDefaultAsync(s => s.SessionId == sessionId);
                 if (session == null)
-                    return NotFound(new { success = false, message = "Session not found" });
+                    return Ok(new { success = false, message = "Session not found" });
 
                 if (!User.IsInRole("Administrator") && session.UserId != callerUserId)
                     return Forbid();
