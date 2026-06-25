@@ -45,8 +45,9 @@ namespace OCPP.Core.Server
                 Logger.LogTrace("StartTransaction => Message deserialized");
 
                 string idTag = CleanChargeTagId(startTransactionRequest.IdTag, Logger);
+                connectorId = startTransactionRequest.ConnectorId;
 
-                startTransactionResponse.IdTagInfo = InternalAuthorize(idTag, ocppMiddleware, startTransactionRequest.ConnectorId, AuthAction.StartTransaction, string.Empty, string.Empty, denyConcurrentTx);
+                startTransactionResponse.IdTagInfo = InternalAuthorize(idTag, ocppMiddleware, connectorId, AuthAction.StartTransaction, string.Empty, string.Empty, denyConcurrentTx);
 
                 if (connectorId > 0)
                 {

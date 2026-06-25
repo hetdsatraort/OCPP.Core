@@ -39,7 +39,9 @@ namespace OCPP.Core.Server
             {
                 RemoteStartTransactionResponse remoteStartTransactionResponse = DeserializeMessage<RemoteStartTransactionResponse>(msgIn);
                 Logger.LogInformation("HandleRemoteStartTransaction => Answer status: {0}", remoteStartTransactionResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, remoteStartTransactionResponse?.Status.ToString(), msgIn.ErrorCode);
+                int? remoteStartConnectorId = null;
+                try { remoteStartConnectorId = Newtonsoft.Json.JsonConvert.DeserializeObject<RemoteStartTransactionRequest>(msgOut.JsonPayload)?.ConnectorId; } catch { }
+                WriteMessageLog(ChargePointStatus?.Id, remoteStartConnectorId, msgOut.Action, remoteStartTransactionResponse?.Status.ToString(), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

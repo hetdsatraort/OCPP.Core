@@ -39,7 +39,14 @@ namespace OCPP.Core.Server
             {
                 RemoteStopTransactionResponse remoteStopTransactionResponse = DeserializeMessage<RemoteStopTransactionResponse>(msgIn);
                 Logger.LogInformation("HandleRemoteStopTransaction => Answer status: {0}", remoteStopTransactionResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, remoteStopTransactionResponse?.Status.ToString(), msgIn.ErrorCode);
+                int? remoteStopConnectorId = null;
+                try
+                {
+                    var stopReq = Newtonsoft.Json.JsonConvert.DeserializeObject<RemoteStopTransactionRequest>(msgOut.JsonPayload);
+                    if (stopReq != null)
+                        remoteStopConnectorId = DbContext.Find<Transaction>(stopReq.TransactionId)?.ConnectorId;
+                } catch { }
+                WriteMessageLog(ChargePointStatus?.Id, remoteStopConnectorId, msgOut.Action, remoteStopTransactionResponse?.Status.ToString(), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

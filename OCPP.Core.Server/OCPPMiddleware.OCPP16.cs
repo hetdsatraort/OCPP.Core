@@ -397,6 +397,22 @@ namespace OCPP.Core.Server
                 remoteStartTransactionRequest.ConnectorId = connectorId;
                 remoteStartTransactionRequest.IdTag = idTag;
 
+                remoteStartTransactionRequest.ChargingProfile = new Messages_OCPP16.ChargingProfile
+                {
+                    ChargingProfileId = connectorId > 0 ? connectorId : 1,
+                    StackLevel = 0,
+                    ChargingProfilePurpose = ChargingProfilePurpose.TxProfile,
+                    ChargingProfileKind = ChargingProfileKind.Relative,
+                    ChargingSchedule = new Messages_OCPP16.ChargingSchedule
+                    {
+                        ChargingRateUnit = ChargingScheduleChargingRateUnit.W,
+                        ChargingSchedulePeriod = new List<Messages_OCPP16.ChargingSchedulePeriod>
+                        {
+                            new Messages_OCPP16.ChargingSchedulePeriod { StartPeriod = 0, Limit = 120000 }
+                        }
+                    }
+                };
+
                 logger.LogInformation("OCPPMiddleware.OCPP16 => RemoteStartTransaction16: ChargePoint='{0}' / ConnectorId={1} / idTag='{2}'", chargePointStatus.Id, remoteStartTransactionRequest.ConnectorId, idTag);
 
                 string jsonResetRequest = JsonConvert.SerializeObject(remoteStartTransactionRequest);

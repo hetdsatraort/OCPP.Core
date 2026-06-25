@@ -33,6 +33,7 @@ namespace OCPP.Core.Server
             string errorCode = null;
             StopTransactionResponse stopTransactionResponse = new StopTransactionResponse();
             stopTransactionResponse.IdTagInfo = new IdTagInfo();
+            Transaction transaction = null;
 
             try
             {
@@ -41,8 +42,6 @@ namespace OCPP.Core.Server
                 Logger.LogTrace("StopTransaction => Message deserialized");
 
                 string idTag = CleanChargeTagId(stopTransactionRequest.IdTag, Logger);
-
-                Transaction transaction = null;
                 try
                 {
                     transaction = DbContext.Find<Transaction>(stopTransactionRequest.TransactionId);
@@ -165,7 +164,7 @@ namespace OCPP.Core.Server
                 errorCode = ErrorCodes.FormationViolation;
             }
 
-            WriteMessageLog(ChargePointStatus?.Id, null, msgIn.Action, stopTransactionResponse.IdTagInfo?.Status.ToString(), errorCode);
+            WriteMessageLog(ChargePointStatus?.Id, transaction?.ConnectorId, msgIn.Action, stopTransactionResponse.IdTagInfo?.Status.ToString(), errorCode);
             return errorCode;
         }
     }
