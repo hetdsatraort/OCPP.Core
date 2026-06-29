@@ -42,7 +42,7 @@ namespace OCPI.Core.Roaming.Controllers
 
             var session = new OcpiSession
             {
-                CountryCode            = Enum.TryParse<CountryCode>(stored.CountryCode, true, out var cc) ? cc : (CountryCode?)null,
+                CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(stored.CountryCode), //, true, out var cc) ? cc : (CountryCode?)null,
                 PartyId                = stored.PartyId,
                 Id                     = stored.SessionId,
                 StartDateTime          = stored.StartDateTime,
@@ -52,9 +52,9 @@ namespace OCPI.Core.Roaming.Controllers
                 LocationId             = stored.LocationId,
                 EvseId                 = stored.EvseUid,
                 ConnectorId            = stored.ConnectorId,
-                Currency               = Enum.TryParse<CurrencyCode>(stored.Currency, true, out var cur) ? cur : (CurrencyCode?)null,
+                Currency               = OcpiEnumMemberHelper.ParseMemberValue<CurrencyCode>(stored.Currency), //, true, out var cur) ? cur : (CurrencyCode?)null,
                 TotalCost              = stored.TotalCost.HasValue ? new OcpiPrice { ExclVat = stored.TotalCost.Value } : null,
-                Status                 = Enum.TryParse<SessionStatus>(stored.Status, true, out var st) ? st : (SessionStatus?)null,
+                Status                 = OcpiEnumMemberHelper.ParseMemberValue<SessionStatus>(stored.Status), //, true, out var st) ? st : (SessionStatus?)null,
                 LastUpdated            = stored.LastUpdated,
                 CdrToken               = string.IsNullOrEmpty(stored.TokenUid) ? null : new OcpiCdrToken { Uid = stored.TokenUid }
             };

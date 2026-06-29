@@ -42,17 +42,17 @@ namespace OCPI.Core.Roaming.Controllers
 
             var token = new OcpiToken
             {
-                CountryCode         = Enum.TryParse<CountryCode>(stored.CountryCode, true, out var cc) ? cc : (CountryCode?)null,
+                CountryCode         = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(stored.CountryCode), //, true, out var cc) ? cc : (CountryCode?)null,
                 PartyId             = stored.PartyId,
                 Uid                 = stored.TokenUid,
-                Type                = Enum.TryParse<TokenType>(stored.Type, true, out var tt) ? tt : (TokenType?)null,
+                Type                = OcpiEnumMemberHelper.ParseMemberValue<TokenType>(stored.Type), //, true, out var tt) ? tt : (TokenType?)null,
                 VisualNumber        = stored.VisualNumber,
                 Issuer              = stored.Issuer,
                 GroupId             = stored.GroupId,
                 Valid               = stored.Valid,
-                Whitelist           = Enum.TryParse<WhitelistType>(stored.Whitelist, true, out var wl) ? wl : (WhitelistType?)null,
+                Whitelist           = OcpiEnumMemberHelper.ParseMemberValue<WhitelistType>(stored.Whitelist), //, true, out var wl) ? wl : (WhitelistType?)null,
                 LanguageCode        = stored.Language,
-                DefaultProfileType  = Enum.TryParse<ProfileType>(stored.DefaultProfileType, true, out var pt) ? pt : (ProfileType?)null,
+                DefaultProfileType  = OcpiEnumMemberHelper.ParseMemberValue<ProfileType>(stored.DefaultProfileType), //, true, out var pt) ? pt : (ProfileType?)null,
                 LastUpdated         = stored.LastUpdated
             };
 

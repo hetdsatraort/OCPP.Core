@@ -305,7 +305,7 @@ namespace OCPI.Core.Roaming.Services
                 PostalCode  = loc.PostalCode,
                 Country     = loc.Country,
                 Coordinates = new OcpiGeolocation { Latitude = loc.Latitude, Longitude = loc.Longitude },
-                Type        = Enum.TryParse<LocationType>(loc.LocationType, true, out var lt) ? lt : (LocationType?)null,
+                Type        = OcpiEnumMemberHelper.ParseMemberValue<LocationType>(loc.LocationType), //, true, out var lt) ? lt : (LocationType?)null,
                 Evses       = evses.Select(e => MapStoredEvseToOcpi(e, connectors)).ToList(),
                 LastUpdated = loc.LastUpdated
             };
@@ -352,7 +352,7 @@ namespace OCPI.Core.Roaming.Services
             {
                 Uid               = evse.EvseUid,
                 EvseId            = evse.EvseId,
-                Status            = Enum.TryParse<EvseStatus>(evse.Status, true, out var st) ? st : EvseStatus.Unknown,
+                Status            = OcpiEnumMemberHelper.ParseMemberValue<EvseStatus>(evse.Status), //, true, out var st) ? st : EvseStatus.Unknown,
                 PhysicalReference = evse.PhysicalReference,
                 Connectors        = allConnectors
                     .Where(c => c.PartnerEvseId == evse.Id)
@@ -367,9 +367,9 @@ namespace OCPI.Core.Roaming.Services
             return new OcpiConnector
             {
                 Id              = c.ConnectorId,
-                Standard        = Enum.TryParse<ConnectorType>(c.Standard, true, out var std) ? std : ConnectorType.IEC_62196_T2,
-                Format          = Enum.TryParse<ConnectorFormat>(c.Format, true, out var fmt) ? fmt : ConnectorFormat.Socket,
-                PowerType       = Enum.TryParse<PowerType>(c.PowerType, true, out var pt) ? pt : PowerType.Ac1Phase,
+                Standard        = OcpiEnumMemberHelper.ParseMemberValue<ConnectorType>(c.Standard), //, true, out var std) ? std : ConnectorType.IEC_62196_T2,
+                Format          = OcpiEnumMemberHelper.ParseMemberValue<ConnectorFormat>(c.Format), //, true, out var fmt) ? fmt : ConnectorFormat.Socket,
+                PowerType       = OcpiEnumMemberHelper.ParseMemberValue<PowerType>(c.PowerType), //, true, out var pt) ? pt : PowerType.Ac1Phase,
                 MaxVoltage      = c.MaxVoltage,
                 MaxAmperage     = c.MaxAmperage,
                 MaxElectricPower = c.MaxElectricPower,
