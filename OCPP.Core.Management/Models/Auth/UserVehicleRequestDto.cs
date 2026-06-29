@@ -8,23 +8,28 @@ namespace OCPP.Core.Management.Models.Auth
 
         public string CarModelID { get; set; }
 
-        public string CarModelVariant { get; set; }
-
         [Required]
         public string CarRegistrationNumber { get; set; }
-
-        public int DefaultConfig { get; set; }
-
-        public string BatteryTypeId { get; set; }
-
-        public string BatteryCapacityId { get; set; }
-
-        public string ChargerTypeId { get; set; }
     }
 
-    public class UserVehicleUpdateDto : UserVehicleRequestDto
+    public class UserVehicleUpdateDto
     {
         [Required]
         public string RecId { get; set; }
+
+        public string EVManufacturerID { get; set; }
+
+        public string CarModelID { get; set; }
+
+        public string CarRegistrationNumber { get; set; }
+    }
+
+    public class SessionVehicleLinkDto
+    {
+        [Required]
+        public string SessionId { get; set; }
+
+        [Required]
+        public string VehicleId { get; set; }
     }
 }

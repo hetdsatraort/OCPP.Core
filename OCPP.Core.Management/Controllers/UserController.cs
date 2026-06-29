@@ -757,32 +757,13 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // If this is set as default, unset other defaults
-                if (request.DefaultConfig == 1)
-                {
-                    var userVehicles = await _dbContext.UserVehicles
-                        .Where(v => v.UserId == userId && v.Active == 1)
-                        .ToListAsync();
-
-                    foreach (var v in userVehicles)
-                    {
-                        v.DefaultConfig = 0;
-                        v.UpdatedOn = DateTime.UtcNow;
-                    }
-                }
-
                 var vehicle = new UserVehicle
                 {
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
                     EVManufacturerID = request.EVManufacturerID,
                     CarModelID = request.CarModelID,
-                    CarModelVariant = request.CarModelVariant,
                     CarRegistrationNumber = request.CarRegistrationNumber,
-                    DefaultConfig = request.DefaultConfig,
-                    BatteryTypeId = request.BatteryTypeId,
-                    BatteryCapacityId = request.BatteryCapacityId,
-                    ChargerTypeId = request.ChargerTypeId,
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
                     UpdatedOn = DateTime.UtcNow
@@ -852,36 +833,13 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                // If this is being set as default, unset other defaults
-                if (request.DefaultConfig == 1 && vehicle.DefaultConfig != 1)
-                {
-                    var userVehicles = await _dbContext.UserVehicles
-                        .Where(v => v.UserId == userId && v.RecId != request.RecId && v.Active == 1)
-                        .ToListAsync();
-
-                    foreach (var v in userVehicles)
-                    {
-                        v.DefaultConfig = 0;
-                        v.UpdatedOn = DateTime.UtcNow;
-                    }
-                }
-
                 // Update vehicle properties
                 if (!string.IsNullOrEmpty(request.EVManufacturerID))
                     vehicle.EVManufacturerID = request.EVManufacturerID;
                 if (!string.IsNullOrEmpty(request.CarModelID))
                     vehicle.CarModelID = request.CarModelID;
-                if (!string.IsNullOrEmpty(request.CarModelVariant))
-                    vehicle.CarModelVariant = request.CarModelVariant;
                 if (!string.IsNullOrEmpty(request.CarRegistrationNumber))
                     vehicle.CarRegistrationNumber = request.CarRegistrationNumber;
-                vehicle.DefaultConfig = request.DefaultConfig;
-                if (!string.IsNullOrEmpty(request.BatteryTypeId))
-                    vehicle.BatteryTypeId = request.BatteryTypeId;
-                if (!string.IsNullOrEmpty(request.BatteryCapacityId))
-                    vehicle.BatteryCapacityId = request.BatteryCapacityId;
-                if (!string.IsNullOrEmpty(request.ChargerTypeId))
-                    vehicle.ChargerTypeId = request.ChargerTypeId;
 
                 vehicle.UpdatedOn = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
@@ -1232,6 +1190,145 @@ namespace OCPP.Core.Management.Controllers
                 {
                     Success = false,
                     Message = "An error occurred while retrieving vehicles"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Link a charging session to a user vehicle
+        /// </summary>
+        [HttpPost("link-session-vehicle")]
+        [Authorize]
+        public async Task<IActionResult> LinkSessionVehicle([FromBody] SessionVehicleLinkDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var session = await _dbContext.ChargingSessions
+                    .FirstOrDefaultAsync(s => s.RecId == request.SessionId && s.UserId == userId && s.Active == 1);
+
+                if (session == null)
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Session not found"
+                    });
+                }
+
+                var vehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.RecId == request.VehicleId && v.UserId == userId && v.Active == 1);
+
+                if (vehicle == null)
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Vehicle not found"
+                    });
+                }
+
+                session.VehicleId = vehicle.RecId;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Session {request.SessionId} linked to vehicle {request.VehicleId} for user {userId}");
+
+                return Ok(new SessionVehicleResponseDto
+                {
+                    Success = true,
+                    Message = "Session linked to vehicle successfully",
+                    SessionId = session.RecId,
+                    Vehicle = MapToUserVehicleDto(vehicle)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error linking session to vehicle");
+                return Ok(new SessionVehicleResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while linking session to vehicle"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get the vehicle linked to a charging session
+        /// </summary>
+        [HttpGet("session-vehicle/{sessionId}")]
+        [Authorize]
+        public async Task<IActionResult> GetSessionVehicle(string sessionId)
+        {
+            try
+            {
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var session = await _dbContext.ChargingSessions
+                    .FirstOrDefaultAsync(s => s.RecId == sessionId && s.UserId == userId && s.Active == 1);
+
+                if (session == null)
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Session not found"
+                    });
+                }
+
+                if (string.IsNullOrEmpty(session.VehicleId))
+                {
+                    return Ok(new SessionVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "No vehicle linked to this session",
+                        SessionId = session.RecId
+                    });
+                }
+
+                var vehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.RecId == session.VehicleId && v.Active == 1);
+
+                return Ok(new SessionVehicleResponseDto
+                {
+                    Success = true,
+                    Message = "Vehicle retrieved successfully",
+                    SessionId = session.RecId,
+                    Vehicle = vehicle != null ? MapToUserVehicleDto(vehicle) : null
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving session vehicle");
+                return Ok(new SessionVehicleResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving session vehicle"
                 });
             }
         }
@@ -1735,12 +1832,7 @@ namespace OCPP.Core.Management.Controllers
                 UserId = vehicle.UserId,
                 EVManufacturerID = vehicle.EVManufacturerID,
                 CarModelID = vehicle.CarModelID,
-                CarModelVariant = vehicle.CarModelVariant,
                 CarRegistrationNumber = vehicle.CarRegistrationNumber,
-                DefaultConfig = vehicle.DefaultConfig,
-                BatteryTypeId = vehicle.BatteryTypeId,
-                BatteryCapacityId = vehicle.BatteryCapacityId,
-                ChargerTypeId = vehicle.ChargerTypeId,
                 CreatedOn = vehicle.CreatedOn,
                 UpdatedOn = vehicle.UpdatedOn
             };

@@ -33,5 +33,7 @@ namespace OCPP.Core.Database.EVCDTO
         public double? CostLimit { get; set; }  // Currency units
         public int? TimeLimit { get; set; }  // Minutes
         public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
+
+        public string VehicleId { get; set; }
     }
 }

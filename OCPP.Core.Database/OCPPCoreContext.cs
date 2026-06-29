@@ -308,6 +308,15 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.ChargingTariff).HasMaxLength(50);
 
                 entity.Property(e => e.ChargingTotalFee).HasMaxLength(50);
+
+                entity.Property(e => e.VehicleId).HasMaxLength(50);
+
+                entity.HasOne<EVCDTO.UserVehicle>()
+                    .WithMany()
+                    .HasForeignKey(d => d.VehicleId)
+                    .IsRequired(false)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .HasConstraintName("FK_ChargingSession_UserVehicle");
             });
 
             modelBuilder.Entity<EVCDTO.ChargingStation>(entity =>
