@@ -616,18 +616,18 @@ namespace OCPP.Core.Management.Controllers
 
             var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
             {
-                RecId                 = Guid.NewGuid().ToString(),
-                UserId                = session.UserId,
+                RecId = Guid.NewGuid().ToString(),
+                UserId = session.UserId,
                 PreviousCreditBalance = previousBalance.ToString("F2"),
-                CurrentCreditBalance  = newBalance.ToString("F2"),
-                TransactionType       = "Debit",
-                ChargingSessionId     = session.SessionId,
-                AdditionalInfo1       = $"OCPI partner session stopped — {session.SessionId}",
-                AdditionalInfo2       = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}",
-                AdditionalInfo3       = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
-                Active                = 1,
-                CreatedOn             = DateTime.UtcNow,
-                UpdatedOn             = DateTime.UtcNow
+                CurrentCreditBalance = newBalance.ToString("F2"),
+                TransactionType = "Debit",
+                ChargingSessionId = session.SessionId,
+                AdditionalInfo1 = $"OCPI partner session stopped — {session.SessionId}",
+                AdditionalInfo2 = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}",
+                AdditionalInfo3 = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
+                Active = 1,
+                CreatedOn = DateTime.UtcNow,
+                UpdatedOn = DateTime.UtcNow
             };
 
             _dbContext.WalletTransactionLogs.Add(walletTx);
@@ -702,38 +702,38 @@ namespace OCPP.Core.Management.Controllers
 
                     return new
                     {
-                        sessionId       = s.SessionId,
-                        status          = s.Status,
-                        startDateTime   = s.StartDateTime,
-                        endDateTime     = s.EndDateTime,
-                        totalEnergyKwh  = s.TotalEnergy,
-                        totalCost       = s.TotalCost,
-                        currency        = s.Currency,
+                        sessionId = s.SessionId,
+                        status = s.Status,
+                        startDateTime = s.StartDateTime,
+                        endDateTime = s.EndDateTime,
+                        totalEnergyKwh = s.TotalEnergy,
+                        totalCost = s.TotalCost,
+                        currency = s.Currency,
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
                         // Location
-                        ocpiLocationId  = s.LocationId,
-                        locationName    = loc?.Name ?? "Partner Station",
+                        ocpiLocationId = s.LocationId,
+                        locationName = loc?.Name ?? "Partner Station",
                         locationAddress = loc?.Address,
-                        locationCity    = loc?.City,
-                        partnerName     = partner?.BusinessName,
-                        evseUid         = s.EvseUid,
-                        connectorId     = s.ConnectorId,
+                        locationCity = loc?.City,
+                        partnerName = partner?.BusinessName,
+                        evseUid = s.EvseUid,
+                        connectorId = s.ConnectorId,
                         // Limits
-                        energyLimit           = s.EnergyLimit,
-                        costLimit             = s.CostLimit,
-                        timeLimit             = s.TimeLimit,
-                        batteryIncreaseLimit  = s.BatteryIncreaseLimit,
+                        energyLimit = s.EnergyLimit,
+                        costLimit = s.CostLimit,
+                        timeLimit = s.TimeLimit,
+                        batteryIncreaseLimit = s.BatteryIncreaseLimit,
                         limitViolationHandled = s.LimitViolationHandled,
                         // Live limit progress (for active sessions)
                         limitProgress = s.Status == "ACTIVE" ? (object)new
                         {
-                            energyPct  = s.EnergyLimit.HasValue && s.TotalEnergy.HasValue
+                            energyPct = s.EnergyLimit.HasValue && s.TotalEnergy.HasValue
                                 ? Math.Round((double)s.TotalEnergy.Value / s.EnergyLimit.Value * 100, 1)
                                 : (double?)null,
-                            costPct    = s.CostLimit.HasValue && s.TotalCost.HasValue
-                                ? Math.Round((double)s.TotalCost.Value  / s.CostLimit.Value  * 100, 1)
+                            costPct = s.CostLimit.HasValue && s.TotalCost.HasValue
+                                ? Math.Round((double)s.TotalCost.Value / s.CostLimit.Value * 100, 1)
                                 : (double?)null,
-                            timePct    = s.TimeLimit.HasValue
+                            timePct = s.TimeLimit.HasValue
                                 ? Math.Round(elapsed.TotalMinutes / s.TimeLimit.Value * 100, 1)
                                 : (double?)null,
                         } : null
@@ -799,36 +799,36 @@ namespace OCPP.Core.Management.Controllers
                     success = true,
                     data = new
                     {
-                        sessionId        = session.SessionId,
-                        status           = session.Status,
-                        hasViolations    = violations.Any(),
-                        violatedLimits   = violations,
+                        sessionId = session.SessionId,
+                        status = session.Status,
+                        hasViolations = violations.Any(),
+                        violatedLimits = violations,
                         limitViolationHandled = session.LimitViolationHandled,
                         limitStatus = new
                         {
                             energy = new
                             {
                                 consumed = session.TotalEnergy,
-                                limit    = session.EnergyLimit,
-                                pct      = session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
+                                limit = session.EnergyLimit,
+                                pct = session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
                                     ? Math.Round((double)session.TotalEnergy.Value / session.EnergyLimit.Value * 100, 1)
                                     : (double?)null,
                                 unit = "kWh"
                             },
                             cost = new
                             {
-                                current  = session.TotalCost,
-                                limit    = session.CostLimit,
-                                pct      = session.CostLimit.HasValue && session.TotalCost.HasValue
-                                    ? Math.Round((double)session.TotalCost.Value  / session.CostLimit.Value  * 100, 1)
+                                current = session.TotalCost,
+                                limit = session.CostLimit,
+                                pct = session.CostLimit.HasValue && session.TotalCost.HasValue
+                                    ? Math.Round((double)session.TotalCost.Value / session.CostLimit.Value * 100, 1)
                                     : (double?)null,
                                 currency = session.Currency
                             },
                             time = new
                             {
                                 elapsedMinutes = (int)elapsed.TotalMinutes,
-                                limit          = session.TimeLimit,
-                                pct            = session.TimeLimit.HasValue
+                                limit = session.TimeLimit,
+                                pct = session.TimeLimit.HasValue
                                     ? Math.Round(elapsed.TotalMinutes / session.TimeLimit.Value * 100, 1)
                                     : (double?)null
                             }
@@ -854,29 +854,29 @@ namespace OCPP.Core.Management.Controllers
             return new
             {
                 // Identity — DB id for detailed lookups; recId prefixed to distinguish from native hubs
-                id            = location.Id,
-                recId         = $"ocpi-{location.Id}",
+                id = location.Id,
+                recId = $"ocpi-{location.Id}",
                 // Display
                 chargingHubName = location.Name ?? $"{partner.BusinessName} – {location.City}",
-                addressLine1    = location.Address,
-                city            = location.City,
-                state           = location.Country,
-                pincode         = location.PostalCode,
-                latitude        = location.Latitude,
-                longitude       = location.Longitude,
+                addressLine1 = location.Address,
+                city = location.City,
+                state = location.Country,
+                pincode = location.PostalCode,
+                latitude = location.Latitude,
+                longitude = location.Longitude,
                 // Partner metadata
-                isOcpiPartner      = true,
-                partnerName        = partner.BusinessName,
+                isOcpiPartner = true,
+                partnerName = partner.BusinessName,
                 partnerCountryCode = partner.CountryCode,
-                partnerPartyId     = partner.PartyId,
-                partnerId          = partner.Id,
+                partnerPartyId = partner.PartyId,
+                partnerId = partner.Id,
                 // Counts
-                stationCount          = evseCount,
+                stationCount = evseCount,
                 availableStationCount = availableEvseCount,
                 // Raw OCPI identifiers
                 ocpiLocationId = location.LocationId,
-                locationType   = location.LocationType,
-                lastUpdated    = location.LastUpdated
+                locationType = location.LocationType,
+                lastUpdated = location.LastUpdated
             };
         }
 
@@ -888,17 +888,17 @@ namespace OCPP.Core.Management.Controllers
             var connList = connectors.ToList();
             return new
             {
-                id              = evse.Id,
-                recId           = $"ocpi-evse-{evse.Id}",
+                id = evse.Id,
+                recId = $"ocpi-evse-{evse.Id}",
                 partnerLocationId = locationDbId,
                 // Mirrors ChargingStationDto fields
-                chargingPointId  = evse.EvseId ?? evse.EvseUid,
-                chargePointName  = evse.PhysicalReference ?? evse.EvseId ?? evse.EvseUid,
-                floorLevel       = evse.FloorLevel,
-                status           = evse.Status ?? "UNKNOWN",
-                isOcpiPartner    = true,
+                chargingPointId = evse.EvseId ?? evse.EvseUid,
+                chargePointName = evse.PhysicalReference ?? evse.EvseId ?? evse.EvseUid,
+                floorLevel = evse.FloorLevel,
+                status = evse.Status ?? "UNKNOWN",
+                isOcpiPartner = true,
                 chargingGunCount = connList.Count,
-                lastUpdated      = evse.LastUpdated,
+                lastUpdated = evse.LastUpdated,
                 // Nested guns
                 chargers = connList.Select(c => MapConnectorToGunDto(evse, c))
             };
@@ -912,21 +912,21 @@ namespace OCPP.Core.Management.Controllers
 
             return new
             {
-                id         = connector.Id,
-                recId      = $"ocpi-conn-{connector.Id}",
-                evseDbId   = evse.Id,
+                id = connector.Id,
+                recId = $"ocpi-conn-{connector.Id}",
+                evseDbId = evse.Id,
                 // Mirrors ChargerDto fields
-                connectorId        = connector.ConnectorId,
-                chargerTypeName    = connector.Standard,
-                format             = connector.Format,
-                powerType          = connector.PowerType,
-                powerOutputKw      = powerKw,
-                maxVoltage         = connector.MaxVoltage,
-                maxAmperage        = connector.MaxAmperage,
-                maxElectricPowerW  = connector.MaxElectricPower,
-                chargerStatus      = evse.Status ?? "UNKNOWN",
-                isOcpiPartner      = true,
-                lastUpdated        = connector.LastUpdated
+                connectorId = connector.ConnectorId,
+                chargerTypeName = connector.Standard,
+                format = connector.Format,
+                powerType = connector.PowerType,
+                powerOutputKw = powerKw,
+                maxVoltage = connector.MaxVoltage,
+                maxAmperage = connector.MaxAmperage,
+                maxElectricPowerW = connector.MaxElectricPower,
+                chargerStatus = evse.Status ?? "UNKNOWN",
+                isOcpiPartner = true,
+                lastUpdated = connector.LastUpdated
             };
         }
 
@@ -947,23 +947,23 @@ namespace OCPP.Core.Management.Controllers
 
         public class PartnerHubSearchDto
         {
-            public double Latitude  { get; set; }
+            public double Latitude { get; set; }
             public double Longitude { get; set; }
-            public double RadiusKm  { get; set; } = 50;
-            public int    MaxResults { get; set; } = 50;
+            public double RadiusKm { get; set; } = 50;
+            public int MaxResults { get; set; } = 50;
         }
 
         public class PartnerHubComprehensiveSearchDto
         {
-            public int     Page        { get; set; } = 1;
-            public int     PageSize    { get; set; } = 10;
+            public int Page { get; set; } = 1;
+            public int PageSize { get; set; } = 10;
             public string? PartnerName { get; set; }
-            public string? City        { get; set; }
-            public string? Country     { get; set; }
-            public int?    PartnerId   { get; set; }
+            public string? City { get; set; }
+            public string? Country { get; set; }
+            public int? PartnerId { get; set; }
             // Optional geographic filtering for distance calculations
-            public double? Latitude    { get; set; }
-            public double? Longitude   { get; set; }
+            public double? Latitude { get; set; }
+            public double? Longitude { get; set; }
         }
 
         public class PartnerSessionStartDto
@@ -977,9 +977,9 @@ namespace OCPP.Core.Management.Controllers
             /// <summary>App ChargeTag.TagId to use when TokenUid is not given.</summary>
             public string? ChargeTagId { get; set; }
             // Session limits (all optional)
-            public double? EnergyLimit         { get; set; }
-            public double? CostLimit           { get; set; }
-            public int?    TimeLimit           { get; set; }
+            public double? EnergyLimit { get; set; }
+            public double? CostLimit { get; set; }
+            public int? TimeLimit { get; set; }
             public double? BatteryIncreaseLimit { get; set; }
         }
 
@@ -987,5 +987,6 @@ namespace OCPP.Core.Management.Controllers
         {
             public string SessionId { get; set; } = string.Empty;
         }
+
     }
 }

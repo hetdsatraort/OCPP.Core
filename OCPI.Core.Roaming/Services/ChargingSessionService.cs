@@ -65,17 +65,17 @@ namespace OCPI.Core.Roaming.Services
                 .ToListAsync();
 
             var platformToken = _config.GetValue<string>("OCPI:Token");
-            int successCount  = 0;
+            int successCount = 0;
 
             foreach (var partner in partners)
             {
                 try
                 {
                     var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
-                    var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
+                    var partyId = _config.GetValue<string>("OCPI:PartyId") ?? "CPO";
                     var partnerBaseURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/').Replace("/versions", "") : $"{partner.Url.TrimEnd('/')}";
 
-                    var url         = $"{partnerBaseURL.TrimEnd('/')}/2.2.1/sessions/{countryCode}/{partyId}/{sessionId}";
+                    var url = $"{partnerBaseURL.TrimEnd('/')}/2.2.1/sessions/{countryCode}/{partyId}/{sessionId}";
 
                     using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                     httpClient.DefaultRequestHeaders.Add("Authorization", $"Token {partner.Token}");
@@ -107,31 +107,32 @@ namespace OCPI.Core.Roaming.Services
             try
             {
                 var station = await _dbContext.ChargingStations
-                    .FirstOrDefaultAsync(s => s.RecId == ops.EvseUid); 
+                    .FirstOrDefaultAsync(s => s.RecId == ops.EvseUid);
 
                 var gun = await _dbContext.ChargingGuns
                     .FirstOrDefaultAsync(g => g.RecId == ops.ConnectorId);
 
                 var countryCode = _config.GetValue<string>("OCPI:CountryCode") ?? "IN";
-                var partyId     = _config.GetValue<string>("OCPI:PartyId")     ?? "CPO";
+                var partyId = _config.GetValue<string>("OCPI:PartyId") ?? "CPO";
 
                 var isActive = ops.EndDateTime == DateTime.MinValue || ops.EndDateTime == null;
 
                 return new OcpiSession
                 {
-                    CountryCode           = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode),
-                    PartyId               = partyId,
-                    Id                    = ops.SessionId,
-                    StartDateTime         = ops.StartDateTime,
-                    EndDateTime           = isActive ? null : ops.EndDateTime,
-                    Kwh                   = Convert.ToDecimal(ops.TotalEnergy) > 0 ? Convert.ToDecimal(ops.TotalEnergy) : 0m,
-                    AuthMethod            = AuthMethodType.Command,
-                    LocationId            = station?.ChargingHubId,
-                    EvseId                = station?.RecId,
-                    ConnectorId           = gun?.ConnectorId,
-                    Currency              = CurrencyCode.IndianRupee,
-                    Status                = isActive ? SessionStatus.Active : SessionStatus.Completed,
-                    LastUpdated           = ops.LastUpdated == DateTime.MinValue ? ops.CreatedOn : ops.LastUpdated
+                    CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode),
+                    PartyId = partyId,
+                    Id = ops.SessionId,
+                    StartDateTime = ops.StartDateTime,
+                    EndDateTime = isActive ? null : ops.EndDateTime,
+                    Kwh = Convert.ToDecimal(ops.TotalEnergy) > 0 ? Convert.ToDecimal(ops.TotalEnergy) : 0m,
+                    AuthMethod = AuthMethodType.Command,
+                    LocationId = station?.ChargingHubId,
+                    EvseId = station?.RecId,
+                    ConnectorId = gun?.RecId,
+                    Currency = CurrencyCode.IndianRupee,
+                    TotalCost = new OcpiPrice() { ExclVat = ops.TotalCost, InclVat = ops.TotalCost * 1.18m },
+                    Status = isActive ? SessionStatus.Active : SessionStatus.Completed,
+                    LastUpdated = ops.LastUpdated == DateTime.MinValue ? ops.CreatedOn : ops.LastUpdated
                 };
             }
             catch (Exception ex)

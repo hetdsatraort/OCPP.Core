@@ -30,8 +30,8 @@ namespace OCPI.Core.Roaming.Services
             // Resolve wire-format strings up front so they can be used in both
             // the duplicate check and the INSERT without repeating the conversion.
             var countryCodeStr = ocpiCdr.CountryCode?.ToMemberValue();
-            var authMethodStr  = ocpiCdr.AuthMethod?.ToMemberValue();
-            var currencyStr    = ocpiCdr.Currency?.ToMemberValue();
+            var authMethodStr = ocpiCdr.AuthMethod?.ToMemberValue();
+            var currencyStr = ocpiCdr.Currency?.ToMemberValue();
 
             var existing = await _dbContext.OcpiCdrs
                 .FirstOrDefaultAsync(c => c.CountryCode == countryCodeStr
@@ -50,31 +50,66 @@ namespace OCPI.Core.Roaming.Services
 
             var newCdr = new OCPP.Core.Database.OCPIDTO.OcpiCdr
             {
-                CountryCode            = countryCodeStr,
-                PartyId                = ocpiCdr.PartyId,
-                CdrId                  = ocpiCdr.Id,
-                StartDateTime          = ocpiCdr.StartDateTime ?? DateTime.UtcNow,
-                EndDateTime            = ocpiCdr.EndDateTime ?? DateTime.UtcNow,
-                SessionId              = ocpiCdr.SessionId,
+                CountryCode = countryCodeStr,
+                PartyId = ocpiCdr.PartyId,
+                CdrId = ocpiCdr.Id,
+                StartDateTime = ocpiCdr.StartDateTime ?? DateTime.UtcNow,
+                EndDateTime = ocpiCdr.EndDateTime ?? DateTime.UtcNow,
+                SessionId = ocpiCdr.SessionId,
                 AuthorizationReference = ocpiCdr.AuthorizationReference,
-                AuthMethod             = authMethodStr,
-                LocationId             = ocpiCdr.CdrLocation?.Id,
-                EvseUid                = location?.Evses?.FirstOrDefault(e => e.Uid == ocpiCdr.CdrLocation?.EvseUid)?.Uid,
-                ConnectorId            = location?.Evses?.FirstOrDefault(e => e.Uid == ocpiCdr.CdrLocation?.EvseUid)?.Connectors?.FirstOrDefault(c => c.Id == ocpiCdr.CdrLocation?.ConnectorId)?.Id,
-                MeterId                = ocpiCdr.MeterId,
-                Currency               = currencyStr,
-                TotalEnergy            = ocpiCdr.TotalEnergy ?? 0,
-                TotalTime              = ocpiCdr.TotalTime ?? 0,
-                TotalParkingTime       = ocpiCdr.TotalParkingTime,
-                TotalCostExclVat       = ocpiCdr.TotalCost?.ExclVat ?? 0m,
-                TotalCostInclVat       = ocpiCdr.TotalCost?.InclVat,
-                TokenUid               = ocpiCdr.CdrToken?.Uid,
-                PartnerCredentialId    = partnerCredentialId,
-                LastUpdated            = ocpiCdr.LastUpdated ?? DateTime.UtcNow
+                AuthMethod = authMethodStr,
+                LocationId = ocpiCdr.CdrLocation?.Id,
+                EvseUid = location?.Evses?.FirstOrDefault(e => e.Uid == ocpiCdr.CdrLocation?.EvseUid)?.Uid,
+                ConnectorId = location?.Evses?.FirstOrDefault(e => e.Uid == ocpiCdr.CdrLocation?.EvseUid)?.Connectors?.FirstOrDefault(c => c.Id == ocpiCdr.CdrLocation?.ConnectorId)?.Id,
+                MeterId = ocpiCdr.MeterId,
+                Currency = currencyStr,
+                TotalEnergy = ocpiCdr.TotalEnergy ?? 0,
+                TotalTime = ocpiCdr.TotalTime ?? 0,
+                TotalParkingTime = ocpiCdr.TotalParkingTime,
+                TotalCostExclVat = ocpiCdr.TotalCost?.ExclVat ?? 0m,
+                TotalCostInclVat = ocpiCdr.TotalCost?.InclVat,
+                TokenUid = ocpiCdr.CdrToken?.Uid,
+                PartnerCredentialId = partnerCredentialId,
+                LastUpdated = ocpiCdr.LastUpdated ?? DateTime.UtcNow
             };
 
             await _dbContext.OcpiCdrs.AddAsync(newCdr);
             await _dbContext.SaveChangesAsync();
+
+            // When a partner CDR is received, write the final cost back to the
+            // partner session so the frontend can display it.  The session PUT path
+            // carries TotalCost too (belt-and-suspenders), but CDR receipt is the
+            // authoritative signal that billing is final.
+            //
+            // Two-pass lookup handles both the normal path (placeholder was promoted
+            // to the real session_id before the CDR arrived) and the fallback path
+            // (promotion didn't happen — placeholder still has SessionId == AuthRef):
+            if (ocpiCdr.TotalCost?.ExclVat > 0)
+            {
+                OcpiPartnerSession? partnerSession = null;
+
+                if (!string.IsNullOrEmpty(ocpiCdr.SessionId))
+                    partnerSession = await _dbContext.OcpiPartnerSessions
+                        .FirstOrDefaultAsync(s => s.SessionId == ocpiCdr.SessionId);
+
+                // Fallback: match on AuthorizationReference (un-promoted placeholder).
+                // Promote the SessionId at the same time so future lookups find it.
+                if (partnerSession == null && !string.IsNullOrEmpty(ocpiCdr.AuthorizationReference))
+                {
+                    partnerSession = await _dbContext.OcpiPartnerSessions
+                        .FirstOrDefaultAsync(s => s.AuthorizationReference == ocpiCdr.AuthorizationReference);
+                    if (partnerSession != null && !string.IsNullOrEmpty(ocpiCdr.SessionId)
+                        && partnerSession.SessionId != ocpiCdr.SessionId)
+                        partnerSession.SessionId = ocpiCdr.SessionId;
+                }
+
+                if (partnerSession != null)
+                {
+                    partnerSession.TotalCost = ocpiCdr.TotalCost.ExclVat;
+                    partnerSession.LastUpdated = DateTime.UtcNow;
+                    await _dbContext.SaveChangesAsync();
+                }
+            }
 
             _logger.LogInformation("Created CDR {CdrId}", ocpiCdr.Id);
             return newCdr.CdrId!;
@@ -127,31 +162,31 @@ namespace OCPI.Core.Roaming.Services
         {
             return new OCPI.Contracts.OcpiCdr
             {
-                CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(dbCdr.CountryCode),
-                PartyId                = dbCdr.PartyId,
-                Id                     = dbCdr.CdrId,
-                StartDateTime          = dbCdr.StartDateTime,
-                EndDateTime            = dbCdr.EndDateTime,
-                SessionId              = dbCdr.SessionId,
+                CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(dbCdr.CountryCode),
+                PartyId = dbCdr.PartyId,
+                Id = dbCdr.CdrId,
+                StartDateTime = dbCdr.StartDateTime,
+                EndDateTime = dbCdr.EndDateTime,
+                SessionId = dbCdr.SessionId,
                 AuthorizationReference = dbCdr.AuthorizationReference,
-                AuthMethod             = OcpiEnumMemberHelper.ParseMemberValue<AuthMethodType>(dbCdr.AuthMethod),
-                CdrLocation            = new Contracts.OcpiCdrLocation
+                AuthMethod = OcpiEnumMemberHelper.ParseMemberValue<AuthMethodType>(dbCdr.AuthMethod),
+                CdrLocation = new Contracts.OcpiCdrLocation
                 {
-                    Id          = dbCdr.LocationId,
-                    EvseUid     = dbCdr.EvseUid,
+                    Id = dbCdr.LocationId,
+                    EvseUid = dbCdr.EvseUid,
                     ConnectorId = dbCdr.ConnectorId
                 },
-                MeterId         = dbCdr.MeterId,
-                Currency        = OcpiEnumMemberHelper.ParseMemberValue<CurrencyCode>(dbCdr.Currency),
-                TotalEnergy     = dbCdr.TotalEnergy,
-                TotalTime       = dbCdr.TotalTime,
+                MeterId = dbCdr.MeterId,
+                Currency = OcpiEnumMemberHelper.ParseMemberValue<CurrencyCode>(dbCdr.Currency),
+                TotalEnergy = dbCdr.TotalEnergy,
+                TotalTime = dbCdr.TotalTime,
                 TotalParkingTime = dbCdr.TotalParkingTime,
-                TotalCost       = new OcpiPrice
+                TotalCost = new OcpiPrice
                 {
                     ExclVat = dbCdr.TotalCostExclVat,
                     InclVat = dbCdr.TotalCostInclVat
                 },
-                CdrToken    = new OcpiCdrToken { Uid = dbCdr.TokenUid },
+                CdrToken = new OcpiCdrToken { Uid = dbCdr.TokenUid },
                 LastUpdated = dbCdr.LastUpdated
             };
         }

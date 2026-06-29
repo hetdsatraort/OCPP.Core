@@ -42,8 +42,12 @@ namespace OCPI.Core.Roaming.Services
             if (station == null)
                 return ChargingProfileResponseType.Rejected;
 
-            if (!int.TryParse(session.ConnectorId, out var connectorNumber))
+            var gun = await _dbContext.ChargingGuns.FirstOrDefaultAsync(g => g.ChargingStationId == session.EvseUid && g.RecId == session.ConnectorId && g.Active == 1);
+
+            if (gun == null)
                 return ChargingProfileResponseType.Rejected;
+
+            int.TryParse(gun.ConnectorId, out var connectorNumber);
 
             var firstPeriod = request.ChargingProfile?.ChargingProfilePeriods?.FirstOrDefault();
             if (firstPeriod == null)
@@ -111,8 +115,12 @@ namespace OCPI.Core.Roaming.Services
             if (station == null)
                 return ChargingProfileResponseType.Rejected;
 
-            if (!int.TryParse(session.ConnectorId, out var connectorNumber))
+            var gun = await _dbContext.ChargingGuns.FirstOrDefaultAsync(g => g.ChargingStationId == session.EvseUid && g.RecId == session.ConnectorId && g.Active == 1);
+
+            if (gun == null)
                 return ChargingProfileResponseType.Rejected;
+
+            int.TryParse(gun.ConnectorId, out var connectorNumber);
 
             _ = Task.Run(async () =>
             {

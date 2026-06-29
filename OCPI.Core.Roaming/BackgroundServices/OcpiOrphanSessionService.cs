@@ -37,12 +37,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
             ILogger<OcpiOrphanSessionService> logger,
             IConfiguration configuration)
         {
-            _scopeFactory   = scopeFactory;
-            _logger         = logger;
-            _configuration  = configuration;
+            _scopeFactory = scopeFactory;
+            _logger = logger;
+            _configuration = configuration;
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
-            var timeouSeconds  = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
+            var timeouSeconds = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
 
             _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
             _orphanTimeout = TimeSpan.FromSeconds(timeouSeconds);
@@ -131,7 +131,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .Distinct()
                 .ToList();
 
-            var chargePointIds  = connectorKeys.Select(k => k.ChargePointId).Distinct().ToList();
+            var chargePointIds = connectorKeys.Select(k => k.ChargePointId).Distinct().ToList();
             var allConnStatuses = chargePointIds.Any()
                 ? await db.ConnectorStatuses
                       .Where(cs => chargePointIds.Contains(cs.ChargePointId) && cs.Active == 1)
@@ -140,8 +140,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             // ── Process each session ──────────────────────────────────────────────
 
-            int liveUpdated     = 0;
-            int closedByTx      = 0;
+            int liveUpdated = 0;
+            int closedByTx = 0;
             int closedAsInvalid = 0;
             var completedChargePointIds = new List<string>();
             var completedPartnerSessions = new List<OcpiHostedSession>();
@@ -162,7 +162,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     if (tx.StopTime.HasValue)
                     {
                         // ── Transaction stopped → close the OCPI session ──────────
-                        session.Status      = "COMPLETED";
+                        session.Status = "COMPLETED";
                         session.EndDateTime = tx.StopTime.Value;
 
                         if (tx.MeterStop.HasValue && tx.MeterStop.Value >= tx.MeterStart)
@@ -188,7 +188,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         // OcpiHostedSession stores ChargePointId and ConnectorNumber directly.
                         var connStatus = allConnStatuses
                             .FirstOrDefault(cs => cs.ChargePointId == session.ChargePointId
-                                               && cs.ConnectorId   == session.ConnectorNumber);
+                                               && cs.ConnectorId == session.ConnectorNumber);
 
                         if (connStatus?.LastMeter.HasValue == true &&
                             connStatus.LastMeter.Value >= tx.MeterStart)
@@ -215,7 +215,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 var age = DateTime.UtcNow - session.LastUpdated;
                 if (age >= _orphanTimeout)
                 {
-                    session.Status      = "INVALID";
+                    session.Status = "INVALID";
                     session.EndDateTime = DateTime.UtcNow;
                     session.LastUpdated = DateTime.UtcNow;
                     closedAsInvalid++;
@@ -280,7 +280,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .ToDictionaryAsync(p => p.Id, ct);
 
             var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
-            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+            var ourPartyId = _configuration["OCPI:PartyId"] ?? "CPO";
 
             var connectorIds = sessions.Select(s => s.ConnectorId).Where(x => x != null).Distinct().ToList();
             var guns = connectorIds.Count > 0
@@ -302,34 +302,34 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     var gun = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
                     double.TryParse(gun?.ChargerTariff, out var tariffRate);
 
-                    var kwh         = session.TotalEnergy ?? 0m;
+                    var kwh = session.TotalEnergy ?? 0m;
                     var costExclVat = Math.Round(kwh * (decimal)tariffRate, 2);
                     var costInclVat = Math.Round(costExclVat * 1.18m, 2);
                     var endDateTime = session.EndDateTime ?? DateTime.UtcNow;
 
                     cdr = new OCPP.Core.Database.OCPIDTO.OcpiCdr
                     {
-                        CountryCode            = ourCountryCode,
-                        PartyId                = ourPartyId,
-                        CdrId                  = Guid.NewGuid().ToString(),
-                        StartDateTime          = session.StartDateTime,
-                        EndDateTime            = endDateTime,
-                        SessionId              = session.SessionId,
+                        CountryCode = ourCountryCode,
+                        PartyId = ourPartyId,
+                        CdrId = Guid.NewGuid().ToString(),
+                        StartDateTime = session.StartDateTime,
+                        EndDateTime = endDateTime,
+                        SessionId = session.SessionId,
                         AuthorizationReference = session.AuthorizationReference,
-                        AuthMethod             = "COMMAND",
-                        LocationId             = session.LocationId,
-                        EvseUid                = session.EvseUid,
-                        ConnectorId            = session.ConnectorId,
-                        Currency               = "INR",
-                        TotalEnergy            = kwh,
-                        TotalTime              = (decimal)(endDateTime - session.StartDateTime).TotalHours,
-                        TotalCostExclVat       = costExclVat,
-                        TotalCostInclVat       = costInclVat,
-                        TokenUid               = session.TokenUid,
-                        PartnerCredentialId    = partner.Id,
-                        LocalSessionId         = session.SessionId,
-                        CreatedOn              = DateTime.UtcNow,
-                        LastUpdated            = DateTime.UtcNow
+                        AuthMethod = "COMMAND",
+                        LocationId = session.LocationId,
+                        EvseUid = session.EvseUid,
+                        ConnectorId = session.ConnectorId,
+                        Currency = "INR",
+                        TotalEnergy = kwh,
+                        TotalTime = (decimal)(endDateTime - session.StartDateTime).TotalHours,
+                        TotalCostExclVat = costExclVat,
+                        TotalCostInclVat = costInclVat,
+                        TokenUid = session.TokenUid,
+                        PartnerCredentialId = partner.Id,
+                        LocalSessionId = session.SessionId,
+                        CreatedOn = DateTime.UtcNow,
+                        LastUpdated = DateTime.UtcNow
                     };
 
                     // Persist before pushing: if the service restarts between here and the
@@ -352,7 +352,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             CancellationToken ct)
         {
             var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
-            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+            var ourPartyId = _configuration["OCPI:PartyId"] ?? "CPO";
 
             var http = httpFactory.CreateClient();
             http.DefaultRequestHeaders.TryAddWithoutValidation(
@@ -365,28 +365,31 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var wireSession = new OcpiSession
                 {
-                    CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
-                    PartyId                = ourPartyId,
-                    Id                     = session.SessionId,
-                    StartDateTime          = session.StartDateTime,
-                    EndDateTime            = session.EndDateTime,
-                    Kwh                    = session.TotalEnergy ?? 0m,
-                    AuthMethod             = AuthMethodType.Command,
+                    CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
+                    PartyId = ourPartyId,
+                    Id = session.SessionId,
+                    StartDateTime = session.StartDateTime,
+                    EndDateTime = session.EndDateTime,
+                    Kwh = session.TotalEnergy ?? 0m,
+                    AuthMethod = AuthMethodType.Command,
                     AuthorizationReference = session.AuthorizationReference,
-                    LocationId             = session.LocationId,
-                    EvseId                 = session.EvseUid,
-                    ConnectorId            = session.ConnectorId,
-                    Status                 = SessionStatus.Completed,
-                    Currency               = CurrencyCode.IndianRupee,
-                    LastUpdated            = session.LastUpdated,
-                    CdrToken               = string.IsNullOrEmpty(session.TokenUid)
+                    LocationId = session.LocationId,
+                    EvseId = session.EvseUid,
+                    ConnectorId = session.ConnectorId,
+                    Status = SessionStatus.Completed,
+                    Currency = CurrencyCode.IndianRupee,
+                    TotalCost = cdr.TotalCostExclVat > 0
+                                                 ? new OcpiPrice { ExclVat = cdr.TotalCostExclVat, InclVat = cdr.TotalCostInclVat }
+                                                 : null,
+                    LastUpdated = session.LastUpdated,
+                    CdrToken = string.IsNullOrEmpty(session.TokenUid)
                                                   ? null
                                                   : new OcpiCdrToken { Uid = session.TokenUid, Type = TokenType.Rfid }
                 };
 
                 try
                 {
-                    var url  = $"{sessionsUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{session.SessionId}";
+                    var url = $"{sessionsUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{session.SessionId}";
                     var resp = await http.PutAsJsonAsync(url, wireSession, ct);
                     if (!resp.IsSuccessStatusCode)
                         _logger.LogWarning(
@@ -414,28 +417,28 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 var wireCdr = new OCPI.Contracts.OcpiCdr
                 {
-                    CountryCode            = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
-                    PartyId                = ourPartyId,
-                    Id                     = cdr.CdrId,
-                    StartDateTime          = cdr.StartDateTime,
-                    EndDateTime            = cdr.EndDateTime,
-                    SessionId              = cdr.SessionId,
+                    CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
+                    PartyId = ourPartyId,
+                    Id = cdr.CdrId,
+                    StartDateTime = cdr.StartDateTime,
+                    EndDateTime = cdr.EndDateTime,
+                    SessionId = cdr.SessionId,
                     AuthorizationReference = cdr.AuthorizationReference,
-                    AuthMethod             = AuthMethodType.Command,
-                    CdrLocation            = new OcpiCdrLocation
+                    AuthMethod = AuthMethodType.Command,
+                    CdrLocation = new OcpiCdrLocation
                     {
-                        Id          = cdr.LocationId,
-                        EvseUid     = cdr.EvseUid,
+                        Id = cdr.LocationId,
+                        EvseUid = cdr.EvseUid,
                         ConnectorId = cdr.ConnectorId
                     },
-                    Currency               = CurrencyCode.IndianRupee,
-                    TotalEnergy            = cdr.TotalEnergy,
-                    TotalTime              = cdr.TotalTime,
-                    TotalCost              = new OcpiPrice { ExclVat = cdr.TotalCostExclVat, InclVat = cdr.TotalCostInclVat },
-                    CdrToken               = string.IsNullOrEmpty(cdr.TokenUid)
+                    Currency = CurrencyCode.IndianRupee,
+                    TotalEnergy = cdr.TotalEnergy,
+                    TotalTime = cdr.TotalTime,
+                    TotalCost = new OcpiPrice { ExclVat = cdr.TotalCostExclVat, InclVat = cdr.TotalCostInclVat },
+                    CdrToken = string.IsNullOrEmpty(cdr.TokenUid)
                                                   ? null
                                                   : new OcpiCdrToken { Uid = cdr.TokenUid, Type = TokenType.Rfid },
-                    LastUpdated            = cdr.LastUpdated
+                    LastUpdated = cdr.LastUpdated
                 };
 
                 try
@@ -494,9 +497,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     foreach (var v in vData.EnumerateArray())
                     {
                         var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
                         if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2")     v221Url = url;
+                        if (ver == "2.2") v221Url = url;
                     }
                 }
 
@@ -512,15 +515,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     foreach (var ep in eps.EnumerateArray())
                     {
-                        var id   = ep.TryGetProperty("identifier", out var idProp)  ? idProp.GetString()  : null;
-                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
+                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
 
                         if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase))
                             continue;
 
                         bool roleOk = role == null
                             || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "EMSP",     StringComparison.OrdinalIgnoreCase);
+                            || string.Equals(role, "EMSP", StringComparison.OrdinalIgnoreCase);
 
                         if (roleOk)
                             return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
@@ -559,7 +562,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (partners.Count == 0) return;
 
             var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
-            var ourPartyId     = _configuration["OCPI:PartyId"]     ?? "CPO";
+            var ourPartyId = _configuration["OCPI:PartyId"] ?? "CPO";
 
             var stations = await db.ChargingStations
                 .Where(s => chargePointIds.Contains(s.ChargingPointId) && s.Active == 1)
@@ -568,7 +571,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (stations.Count == 0) return;
 
             var hubIds = stations.Select(s => s.ChargingHubId).Distinct().ToList();
-            var hubs   = await db.ChargingHubs
+            var hubs = await db.ChargingHubs
                 .Where(h => hubIds.Contains(h.RecId) && h.Active == 1)
                 .ToDictionaryAsync(h => h.RecId, ct);
 
@@ -669,9 +672,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     foreach (var v in vData.EnumerateArray())
                     {
                         var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
                         if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2")     v221Url = url;
+                        if (ver == "2.2") v221Url = url;
                     }
                 }
 
@@ -687,8 +690,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     foreach (var ep in eps.EnumerateArray())
                     {
-                        var id   = ep.TryGetProperty("identifier", out var idProp)  ? idProp.GetString()  : null;
-                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
+                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
 
                         if (!string.Equals(id, "locations", StringComparison.OrdinalIgnoreCase))
                             continue;
@@ -696,7 +699,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         // Accept RECEIVER or EMSP role (some implementations omit role)
                         bool roleOk = role == null
                             || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "EMSP",     StringComparison.OrdinalIgnoreCase);
+                            || string.Equals(role, "EMSP", StringComparison.OrdinalIgnoreCase);
 
                         if (roleOk)
                             return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
@@ -728,9 +731,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (string.IsNullOrEmpty(serverApiUrl))
                 return new HashSet<string>(chargePointIds, StringComparer.OrdinalIgnoreCase);
 
-            var apiKey  = _configuration["ApiKey"] ?? string.Empty;
+            var apiKey = _configuration["ApiKey"] ?? string.Empty;
             var baseUrl = serverApiUrl.TrimEnd('/');
-            var online  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var online = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var id in chargePointIds)
             {
@@ -777,9 +780,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                                      or "SUSPENDEDEVSE" or "FINISHING"))
                 return "CHARGING";
             if (statuses.Any(s => s is "UNAVAILABLE" or "FAULTED")) return "BLOCKED";
-            if (statuses.Any(s => s == "RESERVED"))                  return "RESERVED";
-            if (statuses.Any(s => s == "OFFLINE"))                   return "OUTOFORDER";
-            if (statuses.All(s => s == "AVAILABLE"))                 return "AVAILABLE";
+            if (statuses.Any(s => s == "RESERVED")) return "RESERVED";
+            if (statuses.Any(s => s == "OFFLINE")) return "OUTOFORDER";
+            if (statuses.All(s => s == "AVAILABLE")) return "AVAILABLE";
             return "UNKNOWN";
         }
 
@@ -802,7 +805,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private async Task ProcessPartnerSessionsAsync(CancellationToken ct)
         {
             using var scope = _scopeFactory.CreateScope();
-            var db          = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
+            var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
             var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
             var activeSessions = await db.OcpiPartnerSessions
@@ -864,19 +867,19 @@ namespace OCPI.Core.Roaming.BackgroundServices
                       .ToDictionaryAsync(u => u.RecId, ct)
                 : new Dictionary<string, OCPP.Core.Database.EVCDTO.Users>();
 
-            var walletsToAdd   = new List<OCPP.Core.Database.EVCDTO.WalletTransactionLog>();
-            var usersToUpdate  = new List<OCPP.Core.Database.EVCDTO.Users>();
+            var walletsToAdd = new List<OCPP.Core.Database.EVCDTO.WalletTransactionLog>();
+            var usersToUpdate = new List<OCPP.Core.Database.EVCDTO.Users>();
 
-            int completedCount       = 0;
-            int limitStoppedCount    = 0;
-            int orphanInvalidated    = 0;
+            int completedCount = 0;
+            int limitStoppedCount = 0;
+            int orphanInvalidated = 0;
 
             foreach (var session in activeSessions)
             {
                 // ── A) Partner has set EndDateTime → mark COMPLETED and finalise billing ──
                 if (session.EndDateTime.HasValue)
                 {
-                    session.Status      = "COMPLETED";
+                    session.Status = "COMPLETED";
                     session.LastUpdated = DateTime.UtcNow;
                     completedCount++;
 
@@ -904,7 +907,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 var age = DateTime.UtcNow - session.LastUpdated;
                 if (session.UserId == null && age >= _orphanTimeout)
                 {
-                    session.Status      = "INVALID";
+                    session.Status = "INVALID";
                     session.EndDateTime = DateTime.UtcNow;
                     session.LastUpdated = DateTime.UtcNow;
                     orphanInvalidated++;
@@ -918,13 +921,13 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 // ── C) Check user-configured limits ───────────────────────────────────
                 if (session.LimitViolationHandled) continue;
-                if (session.UserId == null)        continue; // no limits to enforce
+                if (session.UserId == null) continue; // no limits to enforce
                 if (!session.EnergyLimit.HasValue && !session.CostLimit.HasValue
                     && !session.TimeLimit.HasValue && !session.BatteryIncreaseLimit.HasValue)
                     continue;
 
                 var violations = new List<string>();
-                var elapsed    = DateTime.UtcNow - session.StartDateTime;
+                var elapsed = DateTime.UtcNow - session.StartDateTime;
 
                 if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
                     && (double)session.TotalEnergy.Value >= session.EnergyLimit.Value)
@@ -992,7 +995,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             }
 
             // ── Batch save ────────────────────────────────────────────────────────
-            if (walletsToAdd.Any())  db.WalletTransactionLogs.AddRange(walletsToAdd);
+            if (walletsToAdd.Any()) db.WalletTransactionLogs.AddRange(walletsToAdd);
             if (usersToUpdate.Any()) db.Users.UpdateRange(usersToUpdate);
 
             await db.SaveChangesAsync(ct);
@@ -1033,11 +1036,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
-                var ourBaseUrl  = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
+                var ourBaseUrl = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
                 var commandBody = new
                 {
                     response_url = $"{ourBaseUrl}/2.2.1/commands/STOP_SESSION/{session.SessionId}",
-                    session_id   = session.SessionId
+                    session_id = session.SessionId
                 };
 
                 var resp = await http.PostAsJsonAsync(
@@ -1095,9 +1098,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     foreach (var v in vData.EnumerateArray())
                     {
                         var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
+                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
                         if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2")     v221Url = url;
+                        if (ver == "2.2") v221Url = url;
                     }
                 }
 
@@ -1115,8 +1118,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     foreach (var ep in eps.EnumerateArray())
                     {
-                        var id   = ep.TryGetProperty("identifier", out var idProp)  ? idProp.GetString()  : null;
-                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
+                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
+                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
 
                         if (!string.Equals(id, "commands", StringComparison.OrdinalIgnoreCase))
                             continue;
@@ -1124,7 +1127,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         // Accept RECEIVER or CPO role (some implementations omit role)
                         bool roleOk = role == null
                             || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "CPO",      StringComparison.OrdinalIgnoreCase);
+                            || string.Equals(role, "CPO", StringComparison.OrdinalIgnoreCase);
 
                         if (roleOk)
                             return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
@@ -1184,18 +1187,18 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
             {
-                RecId                  = Guid.NewGuid().ToString(),
-                UserId                 = session.UserId,
-                PreviousCreditBalance  = previousBalance.ToString("F2"),
-                CurrentCreditBalance   = newBalance.ToString("F2"),
-                TransactionType        = "Debit",
-                ChargingSessionId      = session.SessionId,
-                AdditionalInfo1        = info1,
-                AdditionalInfo2        = info2,
-                AdditionalInfo3        = info3,
-                Active                 = 1,
-                CreatedOn              = DateTime.UtcNow,
-                UpdatedOn              = DateTime.UtcNow
+                RecId = Guid.NewGuid().ToString(),
+                UserId = session.UserId,
+                PreviousCreditBalance = previousBalance.ToString("F2"),
+                CurrentCreditBalance = newBalance.ToString("F2"),
+                TransactionType = "Debit",
+                ChargingSessionId = session.SessionId,
+                AdditionalInfo1 = info1,
+                AdditionalInfo2 = info2,
+                AdditionalInfo3 = info3,
+                Active = 1,
+                CreatedOn = DateTime.UtcNow,
+                UpdatedOn = DateTime.UtcNow
             };
 
             walletsToAdd.Add(walletTx);
@@ -1203,7 +1206,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (usersDict.TryGetValue(session.UserId, out var user))
             {
                 user.CreditBalance = newBalance.ToString("F2");
-                user.UpdatedOn     = DateTime.UtcNow;
+                user.UpdatedOn = DateTime.UtcNow;
                 if (!usersToUpdate.Contains(user))
                     usersToUpdate.Add(user);
             }
