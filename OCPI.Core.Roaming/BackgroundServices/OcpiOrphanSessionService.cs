@@ -287,8 +287,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 ? await db.ChargingGuns.Where(g => connectorIds.Contains(g.RecId)).ToListAsync(ct)
                 : new List<OCPP.Core.Database.EVCDTO.ChargingGuns>();
 
-            var newCdrs = new List<OCPP.Core.Database.OCPIDTO.OcpiCdr>();
-
             foreach (var session in sessions)
             {
                 if (!session.PartnerCredentialId.HasValue) continue;
@@ -296,16 +294,18 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (string.IsNullOrEmpty(partner.OutboundToken)) continue;
 
                 // Idempotent: skip if we already generated a CDR for this hosted session.
-                var cdr = await db.OcpiCdrs.FirstOrDefaultAsync(c => c.LocalSessionId == session.SessionId, ct);
+                var cdr = await db.OcpiCdrs.FirstOrDefaultAsync(
+                    c => c.LocalSessionId == session.SessionId, ct);
+
                 if (cdr == null)
                 {
                     var gun = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
                     double.TryParse(gun?.ChargerTariff, out var tariffRate);
 
-                    var kwh          = session.TotalEnergy ?? 0m;
-                    var costExclVat  = Math.Round(kwh * (decimal)tariffRate, 2);
-                    var costInclVat  = Math.Round(costExclVat * 1.18m, 2);
-                    var endDateTime  = session.EndDateTime ?? DateTime.UtcNow;
+                    var kwh         = session.TotalEnergy ?? 0m;
+                    var costExclVat = Math.Round(kwh * (decimal)tariffRate, 2);
+                    var costInclVat = Math.Round(costExclVat * 1.18m, 2);
+                    var endDateTime = session.EndDateTime ?? DateTime.UtcNow;
 
                     cdr = new OCPP.Core.Database.OCPIDTO.OcpiCdr
                     {
@@ -332,16 +332,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         LastUpdated            = DateTime.UtcNow
                     };
 
-                    newCdrs.Add(cdr);
+                    // Persist before pushing: if the service restarts between here and the
+                    // network call, the next cycle will find this record and retry the push
+                    // without creating a duplicate.
+                    db.OcpiCdrs.Add(cdr);
+                    await db.SaveChangesAsync(ct);
                 }
 
                 await PushSessionAndCdrToPartnerAsync(partner, session, cdr, httpFactory, ct);
-            }
-
-            if (newCdrs.Count > 0)
-            {
-                db.OcpiCdrs.AddRange(newCdrs);
-                await db.SaveChangesAsync(ct);
             }
         }
 
