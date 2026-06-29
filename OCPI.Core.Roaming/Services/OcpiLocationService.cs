@@ -1,3 +1,4 @@
+using BitzArt.EnumToMemberValue;
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
@@ -13,7 +14,7 @@ namespace OCPI.Core.Roaming.Services
         private readonly IConfiguration _configuration;
 
         public OcpiLocationService(
-            OCPPCoreContext dbContext, 
+            OCPPCoreContext dbContext,
             ILogger<OcpiLocationService> logger,
             IConfiguration configuration)
         {
@@ -129,8 +130,8 @@ namespace OCPI.Core.Roaming.Services
                 return new OcpiConnector();
 
             var gun = await _dbContext.ChargingGuns
-                .FirstOrDefaultAsync(g => g.RecId == connectorId 
-                    && g.ChargingStationId == evseUid 
+                .FirstOrDefaultAsync(g => g.RecId == connectorId
+                    && g.ChargingStationId == evseUid
                     && station.ChargingHubId == locationId);
 
             if (gun == null)
@@ -142,21 +143,21 @@ namespace OCPI.Core.Roaming.Services
         public async Task StorePartnerLocationAsync(int partnerCredentialId, OcpiLocation location)
         {
             var existing = await _dbContext.OcpiPartnerLocations
-                .FirstOrDefaultAsync(l => l.CountryCode == location.CountryCode!.ToString()
+                .FirstOrDefaultAsync(l => l.CountryCode == location.CountryCode!
                     && l.PartyId == location.PartyId
                     && l.LocationId == location.Id);
 
             if (existing != null)
             {
-                existing.Name          = Trunc(location.Name, 255);
-                existing.Address       = Trunc(location.Address, 500);
-                existing.City          = Trunc(location.City, 100);
-                existing.PostalCode    = Trunc(location.PostalCode, 20);
-                existing.Country       = Trunc(location.Country?.ToString(), 3);
-                existing.Latitude      = Trunc(location.Coordinates?.Latitude, 20);
-                existing.Longitude     = Trunc(location.Coordinates?.Longitude, 20);
-                existing.LocationType  = Trunc(location.Type?.ToString(), 50);
-                existing.LastUpdated   = location.LastUpdated ?? DateTime.UtcNow;
+                existing.Name = Trunc(location.Name, 255);
+                existing.Address = Trunc(location.Address, 500);
+                existing.City = Trunc(location.City, 100);
+                existing.PostalCode = Trunc(location.PostalCode, 20);
+                existing.Country = Trunc(location.Country, 3);
+                existing.Latitude = Trunc(location.Coordinates?.Latitude, 20);
+                existing.Longitude = Trunc(location.Coordinates?.Longitude, 20);
+                existing.LocationType = Trunc(location.Type?.ToMemberValue(), 50);
+                existing.LastUpdated = location.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerLocations.Update(existing);
             }
@@ -164,19 +165,19 @@ namespace OCPI.Core.Roaming.Services
             {
                 var newLocation = new OcpiPartnerLocation
                 {
-                    CountryCode         = Trunc(location.CountryCode?.ToString(), 2),
-                    PartyId             = Trunc(location.PartyId, 3),
-                    LocationId          = Trunc(location.Id, 36),
-                    Name                = Trunc(location.Name, 255),
-                    Address             = Trunc(location.Address, 500),
-                    City                = Trunc(location.City, 100),
-                    PostalCode          = Trunc(location.PostalCode, 20),
-                    Country             = Trunc(location.Country?.ToString(), 3),
-                    Latitude            = Trunc(location.Coordinates?.Latitude, 20),
-                    Longitude           = Trunc(location.Coordinates?.Longitude, 20),
-                    LocationType        = Trunc(location.Type?.ToString(), 50),
+                    CountryCode = Trunc(location.CountryCode, 2),
+                    PartyId = Trunc(location.PartyId, 3),
+                    LocationId = Trunc(location.Id, 36),
+                    Name = Trunc(location.Name, 255),
+                    Address = Trunc(location.Address, 500),
+                    City = Trunc(location.City, 100),
+                    PostalCode = Trunc(location.PostalCode, 20),
+                    Country = Trunc(location.Country, 3),
+                    Latitude = Trunc(location.Coordinates?.Latitude, 20),
+                    Longitude = Trunc(location.Coordinates?.Longitude, 20),
+                    LocationType = Trunc(location.Type?.ToMemberValue(), 50),
                     PartnerCredentialId = partnerCredentialId,
-                    LastUpdated         = location.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated = location.LastUpdated ?? DateTime.UtcNow
                 };
 
                 await _dbContext.OcpiPartnerLocations.AddAsync(newLocation);
@@ -192,12 +193,12 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                existing.EvseId            = Trunc(evse.EvseId, 48);
-                existing.Status            = Trunc(evse.Status.ToString(), 50);
-                existing.StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow;
-                existing.FloorLevel        = Trunc(evse.FloorLevel, 10);
+                existing.EvseId = Trunc(evse.EvseId, 48);
+                existing.Status = Trunc(evse.Status?.ToMemberValue(), 50);
+                existing.StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow;
+                existing.FloorLevel = Trunc(evse.FloorLevel, 10);
                 existing.PhysicalReference = Trunc(evse.PhysicalReference, 50);
-                existing.LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated = evse.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerEvses.Update(existing);
             }
@@ -205,14 +206,14 @@ namespace OCPI.Core.Roaming.Services
             {
                 var newEvse = new OcpiPartnerEvse
                 {
-                    EvseUid           = Trunc(evse.Uid, 36),
-                    EvseId            = Trunc(evse.EvseId, 48),
-                    Status            = Trunc(evse.Status.ToString(), 50),
-                    StatusDateTime    = evse.LastUpdated ?? DateTime.UtcNow,
-                    FloorLevel        = Trunc(evse.FloorLevel, 10),
+                    EvseUid = Trunc(evse.Uid, 36),
+                    EvseId = Trunc(evse.EvseId, 48),
+                    Status = Trunc(evse.Status?.ToMemberValue(), 50),
+                    StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow,
+                    FloorLevel = Trunc(evse.FloorLevel, 10),
                     PhysicalReference = Trunc(evse.PhysicalReference, 50),
                     PartnerLocationId = partnerLocationId,
-                    LastUpdated       = evse.LastUpdated ?? DateTime.UtcNow
+                    LastUpdated = evse.LastUpdated ?? DateTime.UtcNow
                 };
 
                 await _dbContext.OcpiPartnerEvses.AddAsync(newEvse);
@@ -228,13 +229,13 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                existing.Standard       = Trunc(connector.Standard.ToString(), 50);
-                existing.Format         = Trunc(connector.Format.ToString(), 20);
-                existing.PowerType      = Trunc(connector.PowerType.ToString(), 50);
-                existing.MaxVoltage     = connector.MaxVoltage;
-                existing.MaxAmperage    = connector.MaxAmperage;
+                existing.Standard = Trunc(connector.Standard?.ToMemberValue(), 50);
+                existing.Format = Trunc(connector.Format?.ToMemberValue(), 20);
+                existing.PowerType = Trunc(connector.PowerType?.ToMemberValue(), 50);
+                existing.MaxVoltage = connector.MaxVoltage;
+                existing.MaxAmperage = connector.MaxAmperage;
                 existing.MaxElectricPower = connector.MaxElectricPower;
-                existing.LastUpdated    = connector.LastUpdated ?? DateTime.UtcNow;
+                existing.LastUpdated = connector.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerConnectors.Update(existing);
             }
@@ -242,15 +243,15 @@ namespace OCPI.Core.Roaming.Services
             {
                 var newConnector = new OcpiPartnerConnector
                 {
-                    ConnectorId       = Trunc(connector.Id, 36),
-                    Standard          = Trunc(connector.Standard.ToString(), 50),
-                    Format            = Trunc(connector.Format.ToString(), 20),
-                    PowerType         = Trunc(connector.PowerType.ToString(), 50),
-                    MaxVoltage        = connector.MaxVoltage,
-                    MaxAmperage       = connector.MaxAmperage,
-                    MaxElectricPower  = connector.MaxElectricPower,
-                    PartnerEvseId     = partnerEvseId,
-                    LastUpdated       = connector.LastUpdated ?? DateTime.UtcNow
+                    ConnectorId = Trunc(connector.Id, 36),
+                    Standard = Trunc(connector.Standard?.ToMemberValue(), 50),
+                    Format = Trunc(connector.Format?.ToMemberValue(), 20),
+                    PowerType = Trunc(connector.PowerType?.ToMemberValue(), 50),
+                    MaxVoltage = connector.MaxVoltage,
+                    MaxAmperage = connector.MaxAmperage,
+                    MaxElectricPower = connector.MaxElectricPower,
+                    PartnerEvseId = partnerEvseId,
+                    LastUpdated = connector.LastUpdated ?? DateTime.UtcNow
                 };
 
                 await _dbContext.OcpiPartnerConnectors.AddAsync(newConnector);
@@ -297,16 +298,16 @@ namespace OCPI.Core.Roaming.Services
             return new OcpiLocation
             {
                 CountryCode = loc.CountryCode,
-                PartyId     = loc.PartyId,
-                Id          = loc.LocationId,
-                Name        = loc.Name,
-                Address     = loc.Address,
-                City        = loc.City,
-                PostalCode  = loc.PostalCode,
-                Country     = loc.Country,
+                PartyId = loc.PartyId,
+                Id = loc.LocationId,
+                Name = loc.Name,
+                Address = loc.Address,
+                City = loc.City,
+                PostalCode = loc.PostalCode,
+                Country = loc.Country,
                 Coordinates = new OcpiGeolocation { Latitude = loc.Latitude, Longitude = loc.Longitude },
-                Type        = OcpiEnumMemberHelper.ParseMemberValue<LocationType>(loc.LocationType), //, true, out var lt) ? lt : (LocationType?)null,
-                Evses       = evses.Select(e => MapStoredEvseToOcpi(e, connectors)).ToList(),
+                Type = OcpiEnumMemberHelper.ParseMemberValue<LocationType>(loc.LocationType), //, true, out var lt) ? lt : (LocationType?)null,
+                Evses = evses.Select(e => MapStoredEvseToOcpi(e, connectors)).ToList(),
                 LastUpdated = loc.LastUpdated
             };
         }
@@ -350,11 +351,11 @@ namespace OCPI.Core.Roaming.Services
         {
             return new OcpiEvse
             {
-                Uid               = evse.EvseUid,
-                EvseId            = evse.EvseId,
-                Status            = OcpiEnumMemberHelper.ParseMemberValue<EvseStatus>(evse.Status), //, true, out var st) ? st : EvseStatus.Unknown,
+                Uid = evse.EvseUid,
+                EvseId = evse.EvseId,
+                Status = OcpiEnumMemberHelper.ParseMemberValue<EvseStatus>(evse.Status), //, true, out var st) ? st : EvseStatus.Unknown,
                 PhysicalReference = evse.PhysicalReference,
-                Connectors        = allConnectors
+                Connectors = allConnectors
                     .Where(c => c.PartnerEvseId == evse.Id)
                     .Select(MapStoredConnectorToOcpi)
                     .ToList(),
@@ -366,14 +367,14 @@ namespace OCPI.Core.Roaming.Services
         {
             return new OcpiConnector
             {
-                Id              = c.ConnectorId,
-                Standard        = OcpiEnumMemberHelper.ParseMemberValue<ConnectorType>(c.Standard), //, true, out var std) ? std : ConnectorType.IEC_62196_T2,
-                Format          = OcpiEnumMemberHelper.ParseMemberValue<ConnectorFormat>(c.Format), //, true, out var fmt) ? fmt : ConnectorFormat.Socket,
-                PowerType       = OcpiEnumMemberHelper.ParseMemberValue<PowerType>(c.PowerType), //, true, out var pt) ? pt : PowerType.Ac1Phase,
-                MaxVoltage      = c.MaxVoltage,
-                MaxAmperage     = c.MaxAmperage,
+                Id = c.ConnectorId,
+                Standard = OcpiEnumMemberHelper.ParseMemberValue<ConnectorType>(c.Standard), //, true, out var std) ? std : ConnectorType.IEC_62196_T2,
+                Format = OcpiEnumMemberHelper.ParseMemberValue<ConnectorFormat>(c.Format), //, true, out var fmt) ? fmt : ConnectorFormat.Socket,
+                PowerType = OcpiEnumMemberHelper.ParseMemberValue<PowerType>(c.PowerType), //, true, out var pt) ? pt : PowerType.Ac1Phase,
+                MaxVoltage = c.MaxVoltage,
+                MaxAmperage = c.MaxAmperage,
                 MaxElectricPower = c.MaxElectricPower,
-                LastUpdated     = c.LastUpdated
+                LastUpdated = c.LastUpdated
             };
         }
 
@@ -524,7 +525,7 @@ namespace OCPI.Core.Roaming.Services
             // Calculate amperage based on power
             var power = ParsePower(powerOutput);
             var voltage = ParseVoltage(powerOutput);
-            
+
             if (power.HasValue && voltage.HasValue && voltage.Value > 0)
                 return power.Value / voltage.Value;
 

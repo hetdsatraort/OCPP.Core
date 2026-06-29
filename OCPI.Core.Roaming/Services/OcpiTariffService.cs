@@ -1,3 +1,4 @@
+using BitzArt.EnumToMemberValue;
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPP.Core.Database;
@@ -51,16 +52,22 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<string> CreateOrUpdateTariffAsync(OcpiTariff tariff)
         {
+            // Resolve wire-format strings before any DB access so the same values
+            // are used in both the duplicate check and the INSERT/UPDATE.
+            var countryCodeStr = tariff.CountryCode?.ToMemberValue();
+            var currencyStr = tariff.Currency?.ToMemberValue();
+            var typeStr = tariff.Type?.ToMemberValue();
+
             var existing = await _dbContext.OcpiTariffs
-                .FirstOrDefaultAsync(t => t.CountryCode == tariff.CountryCode.ToString()
+                .FirstOrDefaultAsync(t => t.CountryCode == countryCodeStr
                     && t.PartyId == tariff.PartyId
                     && t.TariffId == tariff.Id);
 
             if (existing != null)
             {
                 // Update existing
-                existing.Currency = tariff.Currency.ToString();
-                existing.Type = tariff.Type?.ToString();
+                existing.Currency = currencyStr;
+                existing.Type = typeStr;
                 existing.ElementsJson = JsonSerializer.Serialize(tariff.Elements);
                 existing.LastUpdated = tariff.LastUpdated ?? DateTime.UtcNow;
 
@@ -68,7 +75,7 @@ namespace OCPI.Core.Roaming.Services
                 if (tariff.Elements?.Any() == true)
                 {
                     var firstElement = tariff.Elements.First();
-                    foreach (var component in firstElement.PriceComponents ?? new List<OcpiPriceComponent>())
+                    foreach (var component in firstElement.PriceComponents ?? [])
                     {
                         switch (component.Type)
                         {
@@ -93,11 +100,11 @@ namespace OCPI.Core.Roaming.Services
                 // Create new
                 var newTariff = new OCPP.Core.Database.OCPIDTO.OcpiTariff
                 {
-                    CountryCode = tariff.CountryCode.ToString(),
+                    CountryCode = countryCodeStr,
                     PartyId = tariff.PartyId,
                     TariffId = tariff.Id,
-                    Currency = tariff.Currency.ToString(),
-                    Type = tariff.Type?.ToString(),
+                    Currency = currencyStr,
+                    Type = typeStr,
                     ElementsJson = JsonSerializer.Serialize(tariff.Elements),
                     IsActive = true,
                     StartDateTime = tariff.TariffAltUrl != null ? DateTime.UtcNow : null,
@@ -108,7 +115,7 @@ namespace OCPI.Core.Roaming.Services
                 if (tariff.Elements?.Any() == true)
                 {
                     var firstElement = tariff.Elements.First();
-                    foreach (var component in firstElement.PriceComponents ?? new List<OcpiPriceComponent>())
+                    foreach (var component in firstElement.PriceComponents ?? [])
                     {
                         switch (component.Type)
                         {
@@ -167,25 +174,20 @@ namespace OCPI.Core.Roaming.Services
                             StepSize = 1
                         });
 
-                    if (dbTariff.TimePrice.HasValue) 
-                    {
+                    if (dbTariff.TimePrice.HasValue)
                         fallbackComponents.Add(new OcpiPriceComponent
                         {
                             Type = TariffDimensionType.Time,
                             Price = dbTariff.TimePrice.Value,
                             StepSize = 60
                         });
-                    }
-                        
 
                     if (dbTariff.SessionFee.HasValue)
-                    {
                         fallbackComponents.Add(new OcpiPriceComponent
                         {
                             Type = TariffDimensionType.Flat,
                             Price = dbTariff.SessionFee.Value
                         });
-                    }                        
 
                     tariff.Elements = new List<OcpiTariffElement>
                     {
