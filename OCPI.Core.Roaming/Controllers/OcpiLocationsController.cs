@@ -157,6 +157,10 @@ namespace OCPI.Core.Roaming.Controllers
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
 
+            // PATCH bodies only carry changed fields — Uid may be absent; use the route value.
+            if (string.IsNullOrEmpty(evse.Uid))
+                evse.Uid = evseUid;
+
             await _locationService.StorePartnerEvseAsync(partnerLocationId.Value, evse);
 
             _logger.LogInformation("Patched EVSE {EvseUid} for partner location {LocationId}", evseUid, locationId);
@@ -188,6 +192,10 @@ namespace OCPI.Core.Roaming.Controllers
             var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
+
+            // Uid is in the route; a PUT body may omit it.
+            if (string.IsNullOrEmpty(evse.Uid))
+                evse.Uid = evseUid;
 
             await _locationService.StorePartnerEvseAsync(partnerLocationId.Value, evse);
 
