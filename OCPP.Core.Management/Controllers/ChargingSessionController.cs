@@ -965,7 +965,7 @@ namespace OCPP.Core.Management.Controllers
 
                 // Get user vehicle details for SOC calculation
                 var userVehicle = await _dbContext.UserVehicles
-                    .Where(v => v.UserId == session.UserId && v.DefaultConfig == 1 && v.Active == 1)
+                    .Where(v => v.UserId == session.UserId && (string.IsNullOrEmpty(session.VehicleId) ? v.RecId == session.VehicleId : v.DefaultConfig == 1) && v.Active == 1)
                     .FirstOrDefaultAsync();
 
                 double? batteryCapacity = null;
