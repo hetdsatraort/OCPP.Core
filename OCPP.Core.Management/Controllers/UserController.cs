@@ -921,6 +921,72 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// Set a vehicle as the user's default
+        /// </summary>
+        [HttpPut("set-default-vehicle/{vehicleId}")]
+        [Authorize]
+        public async Task<IActionResult> SetDefaultVehicle(string vehicleId)
+        {
+            try
+            {
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(userId))
+                {
+                    return Ok(new UserVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid token"
+                    });
+                }
+
+                var vehicle = await _dbContext.UserVehicles
+                    .FirstOrDefaultAsync(v => v.RecId == vehicleId && v.UserId == userId && v.Active == 1);
+
+                if (vehicle == null)
+                {
+                    return Ok(new UserVehicleResponseDto
+                    {
+                        Success = false,
+                        Message = "Vehicle not found"
+                    });
+                }
+
+                // Clear default on all other vehicles for this user
+                var otherVehicles = await _dbContext.UserVehicles
+                    .Where(v => v.UserId == userId && v.RecId != vehicleId && v.Active == 1)
+                    .ToListAsync();
+
+                foreach (var v in otherVehicles)
+                {
+                    v.DefaultConfig = 0;
+                    v.UpdatedOn = DateTime.UtcNow;
+                }
+
+                vehicle.DefaultConfig = 1;
+                vehicle.UpdatedOn = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation($"Default vehicle set to {vehicleId} for user {userId}");
+
+                return Ok(new UserVehicleResponseDto
+                {
+                    Success = true,
+                    Message = "Default vehicle updated successfully",
+                    Vehicle = MapToUserVehicleDto(vehicle)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error setting default vehicle");
+                return Ok(new UserVehicleResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while setting default vehicle"
+                });
+            }
+        }
+
+        /// <summary>
         /// Get list of all users (Admin endpoint)
         /// </summary>
         [HttpGet("user-list")]
@@ -1833,6 +1899,7 @@ namespace OCPP.Core.Management.Controllers
                 EVManufacturerID = vehicle.EVManufacturerID,
                 CarModelID = vehicle.CarModelID,
                 CarRegistrationNumber = vehicle.CarRegistrationNumber,
+                DefaultConfig = vehicle.DefaultConfig,
                 CreatedOn = vehicle.CreatedOn,
                 UpdatedOn = vehicle.UpdatedOn
             };

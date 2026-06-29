@@ -9,6 +9,7 @@ namespace OCPP.Core.Management.Models.Auth
         public string EVManufacturerID { get; set; }
         public string CarModelID { get; set; }
         public string CarRegistrationNumber { get; set; }
+        public int DefaultConfig { get; set; }
         public DateTime CreatedOn { get; set; }
         public DateTime UpdatedOn { get; set; }
     }
