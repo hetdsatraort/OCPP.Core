@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
+using OCPI;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -25,6 +26,39 @@ namespace OCPI.Core.Roaming.Controllers
             _credentialsService = credentialsService;
             _logger = logger;
         }
+        /// <summary>
+        /// Get a stored partner token (eMSP reads back what is stored on CPO side)
+        /// </summary>
+        [HttpGet("{countryCode}/{partyId}/{tokenUid}")]
+        public async Task<IActionResult> GetToken(
+            [FromRoute] string countryCode,
+            [FromRoute] string partyId,
+            [FromRoute] string tokenUid)
+        {
+            var stored = await _tokenService.GetPartnerTokenAsync(tokenUid);
+
+            if (stored == null)
+                throw OcpiException.UnknownLocation($"Token not found: {tokenUid}");
+
+            var token = new OcpiToken
+            {
+                CountryCode         = Enum.TryParse<CountryCode>(stored.CountryCode, true, out var cc) ? cc : (CountryCode?)null,
+                PartyId             = stored.PartyId,
+                Uid                 = stored.TokenUid,
+                Type                = Enum.TryParse<TokenType>(stored.Type, true, out var tt) ? tt : (TokenType?)null,
+                VisualNumber        = stored.VisualNumber,
+                Issuer              = stored.Issuer,
+                GroupId             = stored.GroupId,
+                Valid               = stored.Valid,
+                Whitelist           = Enum.TryParse<WhitelistType>(stored.Whitelist, true, out var wl) ? wl : (WhitelistType?)null,
+                LanguageCode        = stored.Language,
+                DefaultProfileType  = Enum.TryParse<ProfileType>(stored.DefaultProfileType, true, out var pt) ? pt : (ProfileType?)null,
+                LastUpdated         = stored.LastUpdated
+            };
+
+            return OcpiOk(token);
+        }
+
         /// <summary>
         /// Real-time authorization request
         /// </summary>

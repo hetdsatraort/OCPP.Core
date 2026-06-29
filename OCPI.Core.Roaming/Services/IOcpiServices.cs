@@ -82,7 +82,7 @@ namespace OCPI.Core.Roaming.Services
         Task<OcpiLocation> GetOurLocationAsync(string locationId);
         Task<OcpiEvse> GetOurEvseAsync(string locationId, string evseUid);
         Task<OcpiConnector> GetOurConnectorAsync(string locationId, string evseUid, string connectorId);
-        
+
         Task StorePartnerLocationAsync(int partnerCredentialId, OcpiLocation location);
         Task StorePartnerEvseAsync(int partnerLocationId, OcpiEvse evse);
         Task StorePartnerConnectorAsync(int partnerEvseId, OcpiConnector connector);
@@ -91,6 +91,13 @@ namespace OCPI.Core.Roaming.Services
         Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId);
         /// <summary>Returns the database PK of a stored partner EVSE, or null if not found.</summary>
         Task<int?> GetPartnerEvseDbIdAsync(int partnerLocationId, string evseUid);
+
+        /// <summary>Returns a stored partner location as an OCPI object, or null if not found.</summary>
+        Task<OcpiLocation?> GetStoredPartnerLocationAsync(string countryCode, string partyId, string locationId);
+        /// <summary>Returns a stored partner EVSE as an OCPI object, or null if not found.</summary>
+        Task<OcpiEvse?> GetStoredPartnerEvseAsync(string countryCode, string partyId, string locationId, string evseUid);
+        /// <summary>Returns a stored partner connector as an OCPI object, or null if not found.</summary>
+        Task<OcpiConnector?> GetStoredPartnerConnectorAsync(string countryCode, string partyId, string locationId, string evseUid, string connectorId);
     }
 
     public interface IOcpiSessionService

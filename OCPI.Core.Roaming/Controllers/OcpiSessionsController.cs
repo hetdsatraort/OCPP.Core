@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
+using OCPI;
 
 namespace OCPI.Core.Roaming.Controllers
 {
@@ -25,6 +26,42 @@ namespace OCPI.Core.Roaming.Controllers
             _credentialsService = credentialsService;
             _logger = logger;
         }
+        /// <summary>
+        /// Get a stored partner session (CPO reads back what is stored on eMSP side)
+        /// </summary>
+        [HttpGet("{countryCode}/{partyId}/{sessionId}")]
+        public async Task<IActionResult> GetSession(
+            [FromRoute] string countryCode,
+            [FromRoute] string partyId,
+            [FromRoute] string sessionId)
+        {
+            var stored = await _sessionService.GetPartnerSessionAsync(sessionId);
+
+            if (stored == null)
+                throw OcpiException.UnknownLocation($"Session not found: {sessionId}");
+
+            var session = new OcpiSession
+            {
+                CountryCode            = Enum.TryParse<CountryCode>(stored.CountryCode, true, out var cc) ? cc : (CountryCode?)null,
+                PartyId                = stored.PartyId,
+                Id                     = stored.SessionId,
+                StartDateTime          = stored.StartDateTime,
+                EndDateTime            = stored.EndDateTime,
+                Kwh                    = stored.TotalEnergy,
+                AuthorizationReference = stored.AuthorizationReference,
+                LocationId             = stored.LocationId,
+                EvseId                 = stored.EvseUid,
+                ConnectorId            = stored.ConnectorId,
+                Currency               = Enum.TryParse<CurrencyCode>(stored.Currency, true, out var cur) ? cur : (CurrencyCode?)null,
+                TotalCost              = stored.TotalCost.HasValue ? new OcpiPrice { ExclVat = stored.TotalCost.Value } : null,
+                Status                 = Enum.TryParse<SessionStatus>(stored.Status, true, out var st) ? st : (SessionStatus?)null,
+                LastUpdated            = stored.LastUpdated,
+                CdrToken               = string.IsNullOrEmpty(stored.TokenUid) ? null : new OcpiCdrToken { Uid = stored.TokenUid }
+            };
+
+            return OcpiOk(session);
+        }
+
         /// <summary>
         /// Update or create a charging session
         /// </summary>

@@ -277,6 +277,106 @@ namespace OCPI.Core.Roaming.Services
             return evse;
         }
 
+        public async Task<OcpiLocation?> GetStoredPartnerLocationAsync(string countryCode, string partyId, string locationId)
+        {
+            var loc = await _dbContext.OcpiPartnerLocations
+                .FirstOrDefaultAsync(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId);
+
+            if (loc == null) return null;
+
+            var evses = await _dbContext.OcpiPartnerEvses
+                .Where(e => e.PartnerLocationId == loc.Id)
+                .ToListAsync();
+
+            var connectors = evses.Any()
+                ? await _dbContext.OcpiPartnerConnectors
+                    .Where(c => evses.Select(e => e.Id).Contains(c.PartnerEvseId))
+                    .ToListAsync()
+                : new List<OCPP.Core.Database.OCPIDTO.OcpiPartnerConnector>();
+
+            return new OcpiLocation
+            {
+                CountryCode = loc.CountryCode,
+                PartyId     = loc.PartyId,
+                Id          = loc.LocationId,
+                Name        = loc.Name,
+                Address     = loc.Address,
+                City        = loc.City,
+                PostalCode  = loc.PostalCode,
+                Country     = loc.Country,
+                Coordinates = new OcpiGeolocation { Latitude = loc.Latitude, Longitude = loc.Longitude },
+                Type        = Enum.TryParse<LocationType>(loc.LocationType, true, out var lt) ? lt : (LocationType?)null,
+                Evses       = evses.Select(e => MapStoredEvseToOcpi(e, connectors)).ToList(),
+                LastUpdated = loc.LastUpdated
+            };
+        }
+
+        public async Task<OcpiEvse?> GetStoredPartnerEvseAsync(string countryCode, string partyId, string locationId, string evseUid)
+        {
+            var locId = await GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
+            if (locId == null) return null;
+
+            var evse = await _dbContext.OcpiPartnerEvses
+                .FirstOrDefaultAsync(e => e.PartnerLocationId == locId.Value && e.EvseUid == evseUid);
+
+            if (evse == null) return null;
+
+            var connectors = await _dbContext.OcpiPartnerConnectors
+                .Where(c => c.PartnerEvseId == evse.Id)
+                .ToListAsync();
+
+            return MapStoredEvseToOcpi(evse, connectors);
+        }
+
+        public async Task<OcpiConnector?> GetStoredPartnerConnectorAsync(string countryCode, string partyId, string locationId, string evseUid, string connectorId)
+        {
+            var locId = await GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
+            if (locId == null) return null;
+
+            var evseId = await GetPartnerEvseDbIdAsync(locId.Value, evseUid);
+            if (evseId == null) return null;
+
+            var c = await _dbContext.OcpiPartnerConnectors
+                .FirstOrDefaultAsync(c => c.PartnerEvseId == evseId.Value && c.ConnectorId == connectorId);
+
+            if (c == null) return null;
+
+            return MapStoredConnectorToOcpi(c);
+        }
+
+        private static OcpiEvse MapStoredEvseToOcpi(
+            OCPP.Core.Database.OCPIDTO.OcpiPartnerEvse evse,
+            IEnumerable<OCPP.Core.Database.OCPIDTO.OcpiPartnerConnector> allConnectors)
+        {
+            return new OcpiEvse
+            {
+                Uid               = evse.EvseUid,
+                EvseId            = evse.EvseId,
+                Status            = Enum.TryParse<EvseStatus>(evse.Status, true, out var st) ? st : EvseStatus.Unknown,
+                PhysicalReference = evse.PhysicalReference,
+                Connectors        = allConnectors
+                    .Where(c => c.PartnerEvseId == evse.Id)
+                    .Select(MapStoredConnectorToOcpi)
+                    .ToList(),
+                LastUpdated = evse.LastUpdated
+            };
+        }
+
+        private static OcpiConnector MapStoredConnectorToOcpi(OCPP.Core.Database.OCPIDTO.OcpiPartnerConnector c)
+        {
+            return new OcpiConnector
+            {
+                Id              = c.ConnectorId,
+                Standard        = Enum.TryParse<ConnectorType>(c.Standard, true, out var std) ? std : ConnectorType.IEC_62196_T2,
+                Format          = Enum.TryParse<ConnectorFormat>(c.Format, true, out var fmt) ? fmt : ConnectorFormat.Socket,
+                PowerType       = Enum.TryParse<PowerType>(c.PowerType, true, out var pt) ? pt : PowerType.Ac1Phase,
+                MaxVoltage      = c.MaxVoltage,
+                MaxAmperage     = c.MaxAmperage,
+                MaxElectricPower = c.MaxElectricPower,
+                LastUpdated     = c.LastUpdated
+            };
+        }
+
         private static string? Trunc(string? value, int maxLength) =>
             value is null ? null : value.Length <= maxLength ? value : value[..maxLength];
 
