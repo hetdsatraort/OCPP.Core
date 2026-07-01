@@ -39,10 +39,13 @@ namespace OCPI.Core.Roaming.Services
             return await _dbContext.OcpiTariffs.Where(t => t.IsActive).CountAsync();
         }
 
-        public async Task<OcpiTariff> GetTariffAsync(string tariffId)
+        public async Task<OcpiTariff> GetTariffAsync(string countryCode, string partyId, string tariffId)
         {
             var dbTariff = await _dbContext.OcpiTariffs
-                .FirstOrDefaultAsync(t => t.TariffId == tariffId && t.IsActive);
+                .FirstOrDefaultAsync(t => t.CountryCode == countryCode
+                    && t.PartyId == partyId
+                    && t.TariffId == tariffId
+                    && t.IsActive);
 
             if (dbTariff == null)
                 return null!;
@@ -58,14 +61,18 @@ namespace OCPI.Core.Roaming.Services
             var currencyStr = tariff.Currency?.ToMemberValue();
             var typeStr = tariff.Type?.ToMemberValue();
 
+            // Match on the key regardless of IsActive: (CountryCode, PartyId, TariffId) is a unique
+            // index, so a soft-deleted row still occupies that key and must be revived here rather
+            // than hit with a second INSERT (which would violate the unique constraint).
             var existing = await _dbContext.OcpiTariffs
                 .FirstOrDefaultAsync(t => t.CountryCode == countryCodeStr
                     && t.PartyId == tariff.PartyId
-                    && t.TariffId == tariff.Id && t.IsActive == true);
+                    && t.TariffId == tariff.Id);
 
             if (existing != null)
             {
-                // Update existing
+                // Update existing (also revives a previously soft-deleted tariff)
+                existing.IsActive = true;
                 existing.Currency = currencyStr;
                 existing.Type = typeStr;
                 existing.ElementsJson = JsonSerializer.Serialize(tariff.Elements);

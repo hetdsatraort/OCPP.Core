@@ -120,7 +120,7 @@ namespace OCPI.Core.Roaming.Services
     {
         Task<List<OcpiTariff>> GetTariffsAsync(int offset = 0, int limit = 100);
         Task<int> GetTariffCountAsync();
-        Task<OcpiTariff> GetTariffAsync(string tariffId);
+        Task<OcpiTariff> GetTariffAsync(string countryCode, string partyId, string tariffId);
         Task<string> CreateOrUpdateTariffAsync(OcpiTariff tariff);
         /// <summary>Soft-deletes a partner-pushed tariff. Returns false if no matching tariff was found.</summary>
         Task<bool> DeleteTariffAsync(string countryCode, string partyId, string tariffId);

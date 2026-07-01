@@ -51,7 +51,7 @@ namespace OCPI.Core.Roaming.Controllers
             [FromRoute] string partyId,
             [FromRoute] string tariffId)
         {
-            var tariff = await _tariffService.GetTariffAsync(tariffId);
+            var tariff = await _tariffService.GetTariffAsync(countryCode, partyId, tariffId);
 
             if (tariff == null)
                 throw OcpiException.UnknownLocation($"Tariff not found: {tariffId}");
@@ -78,6 +78,14 @@ namespace OCPI.Core.Roaming.Controllers
                 tariff.PartyId = partyId;
             if (tariff.CountryCode == null)
                 tariff.CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode);
+
+            // OcpiTariff.PartyId/TariffId are unbounded strings but the DB columns are fixed at
+            // 3/36 chars — reject oversized values here rather than let SaveChanges throw a raw
+            // SqlException for a bad partner payload.
+            if (tariff.PartyId?.Length > 3)
+                throw OcpiException.InvalidParameters($"party_id must be at most 3 characters: '{tariff.PartyId}'");
+            if (tariff.Id?.Length > 36)
+                throw OcpiException.InvalidParameters($"tariff id must be at most 36 characters: '{tariff.Id}'");
 
             await _tariffService.CreateOrUpdateTariffAsync(tariff);
 
