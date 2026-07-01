@@ -52,11 +52,54 @@ namespace OCPI.Core.Roaming.Controllers
             [FromRoute] string tariffId)
         {
             var tariff = await _tariffService.GetTariffAsync(tariffId);
-            
+
             if (tariff == null)
                 throw OcpiException.UnknownLocation($"Tariff not found: {tariffId}");
 
             return OcpiOk(tariff);
+        }
+
+        /// <summary>
+        /// Receive a tariff pushed from a partner CPO (Receiver interface)
+        /// </summary>
+        [HttpPut("{countryCode}/{partyId}/{tariffId}")]
+        public async Task<IActionResult> PutTariff(
+            [FromRoute] string countryCode,
+            [FromRoute] string partyId,
+            [FromRoute] string tariffId,
+            [FromBody] OcpiTariff tariff)
+        {
+            // OcpiValidate(tariff);
+
+            // Route values are authoritative — a PUT body may omit them.
+            if (string.IsNullOrEmpty(tariff.Id))
+                tariff.Id = tariffId;
+            if (string.IsNullOrEmpty(tariff.PartyId))
+                tariff.PartyId = partyId;
+            if (tariff.CountryCode == null)
+                tariff.CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode);
+
+            await _tariffService.CreateOrUpdateTariffAsync(tariff);
+
+            _logger.LogInformation("Stored pushed tariff {TariffId} from {CountryCode}/{PartyId}", tariffId, countryCode, partyId);
+
+            return OcpiOk(tariff);
+        }
+
+        /// <summary>
+        /// Remove a tariff pushed from a partner CPO (Receiver interface)
+        /// </summary>
+        [HttpDelete("{countryCode}/{partyId}/{tariffId}")]
+        public async Task<IActionResult> DeleteTariff(
+            [FromRoute] string countryCode,
+            [FromRoute] string partyId,
+            [FromRoute] string tariffId)
+        {
+            var removed = await _tariffService.DeleteTariffAsync(countryCode, partyId, tariffId);
+            if (!removed)
+                throw OcpiException.UnknownLocation($"Tariff not found: {tariffId}");
+
+            return OcpiOk(new { });
         }
     }
 }

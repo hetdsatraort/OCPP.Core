@@ -61,7 +61,7 @@ namespace OCPI.Core.Roaming.Services
             var existing = await _dbContext.OcpiTariffs
                 .FirstOrDefaultAsync(t => t.CountryCode == countryCodeStr
                     && t.PartyId == tariff.PartyId
-                    && t.TariffId == tariff.Id);
+                    && t.TariffId == tariff.Id && t.IsActive == true);
 
             if (existing != null)
             {
@@ -138,6 +138,25 @@ namespace OCPI.Core.Roaming.Services
 
             await _dbContext.SaveChangesAsync();
             return tariff.Id!;
+        }
+
+        public async Task<bool> DeleteTariffAsync(string countryCode, string partyId, string tariffId)
+        {
+            var existing = await _dbContext.OcpiTariffs
+                .FirstOrDefaultAsync(t => t.CountryCode == countryCode
+                    && t.PartyId == partyId
+                    && t.TariffId == tariffId
+                    && t.IsActive);
+
+            if (existing == null)
+                return false;
+
+            existing.IsActive = false;
+            existing.LastUpdated = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+            _logger.LogInformation("Deleted tariff {TariffId}", tariffId);
+            return true;
         }
 
         private OcpiTariff MapToOcpiTariff(OCPP.Core.Database.OCPIDTO.OcpiTariff dbTariff)
