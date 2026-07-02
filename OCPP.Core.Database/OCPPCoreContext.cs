@@ -59,6 +59,7 @@ namespace OCPP.Core.Database
         public virtual DbSet<EVCDTO.CarManufacturerMaster> CarManufacturerMasters { get; set; }
         public virtual DbSet<EVCDTO.PaymentValidation> PaymentValidations { get; set; }
         public virtual DbSet<EVCDTO.ServiceTicket> ServiceTickets { get; set; }
+        public virtual DbSet<EVCDTO.SessionInvoice> SessionInvoices { get; set; }
 
         // OCPI Tables
         public virtual DbSet<OCPIDTO.OcpiPartnerCredential> OcpiPartnerCredentials { get; set; }
@@ -1052,6 +1053,65 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.AdminNotes).HasMaxLength(2000);
                 entity.Property(e => e.ResolutionNotes).HasMaxLength(2000);
                 entity.Property(e => e.Active).HasDefaultValue(1);
+            });
+
+            modelBuilder.Entity<EVCDTO.SessionInvoice>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+                entity.ToTable("SessionInvoice");
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+                entity.Property(e => e.InvoiceNumber).IsRequired().HasMaxLength(50);
+                entity.Property(e => e.ChargingSessionId).IsRequired().HasMaxLength(50);
+                entity.Property(e => e.UserId).HasMaxLength(50);
+
+                entity.Property(e => e.BilledToName).HasMaxLength(200);
+                entity.Property(e => e.BilledToPhone).HasMaxLength(30);
+                entity.Property(e => e.BilledToEmail).HasMaxLength(200);
+
+                entity.Property(e => e.ChargingHubName).HasMaxLength(200);
+                entity.Property(e => e.ChargePointId).HasMaxLength(100);
+                entity.Property(e => e.ChargerType).HasMaxLength(100);
+                entity.Property(e => e.City).HasMaxLength(100);
+                entity.Property(e => e.ConnectorId).HasMaxLength(50);
+                entity.Property(e => e.PowerOutput).HasMaxLength(50);
+
+                entity.Property(e => e.Description).HasMaxLength(200);
+                entity.Property(e => e.SacCode).HasMaxLength(20);
+
+                entity.Property(e => e.TaxableValue).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Discount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Cashback).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.CgstRate).HasColumnType("decimal(5,2)");
+                entity.Property(e => e.CgstAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.SgstRate).HasColumnType("decimal(5,2)");
+                entity.Property(e => e.SgstAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.GrandTotal).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.PricePerUnit).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.EnergyConsumedKwh).HasColumnType("decimal(18,4)");
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.InvoiceNumber)
+                    .IsUnique()
+                    .HasDatabaseName("IX_SessionInvoice_InvoiceNumber");
+
+                entity.HasIndex(e => e.ChargingSessionId)
+                    .IsUnique()
+                    .HasDatabaseName("IX_SessionInvoice_ChargingSessionId");
+
+                entity.HasOne<EVCDTO.ChargingSession>()
+                    .WithMany()
+                    .HasForeignKey(d => d.ChargingSessionId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_SessionInvoice_ChargingSession");
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(d => d.UserId)
+                    .IsRequired(false)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_SessionInvoice_Users");
             });
 
             OnModelCreatingPartial(modelBuilder);

@@ -37,6 +37,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using OCPP.Core.Database;
 using OCPP.Core.Management.Services;
+using OCPP.Core.Management.Services.Invoice;
+using QuestPDF.Infrastructure;
 
 namespace OCPP.Core.Management
 {
@@ -53,6 +55,9 @@ namespace OCPP.Core.Management
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            // Requires annual gross revenue under $1M USD — see https://www.questpdf.com/pricing.html
+            QuestPDF.Settings.License = LicenseType.Community;
+
             services.AddOCPPDbContext(Configuration);
 
             services.AddControllersWithViews();
@@ -154,6 +159,7 @@ namespace OCPP.Core.Management
             services.AddScoped<IJwtService, JwtService>();
             services.AddScoped<IUserManager, UserManager>();
             services.AddScoped<IFileStorageService, FileStorageService>();
+            services.AddScoped<IInvoiceService, InvoiceService>();
             services.AddDistributedMemoryCache();
             
             // Add HttpClient for background services
