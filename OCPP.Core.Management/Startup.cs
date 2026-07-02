@@ -70,7 +70,8 @@ namespace OCPP.Core.Management
                     builder.WithOrigins("http://localhost:4200", "https://evc-admin.ortdemo.com", "https://admin.hycharge.in", "https://charge.hycharge.in", "https://app.hycharge.in")
                            .AllowCredentials()
                            .AllowAnyHeader()
-                           .AllowAnyMethod();
+                           .AllowAnyMethod()
+                           .WithExposedHeaders("Content-Disposition");
                 });
             });
 
