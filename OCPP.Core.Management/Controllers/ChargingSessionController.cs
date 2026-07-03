@@ -1257,7 +1257,7 @@ namespace OCPP.Core.Management.Controllers
                 bool isActive = session.EndTime == DateTime.MinValue;
 
                 // Calculate cost breakdown
-                var energyCost = isActive ? calculatedCost : (Convert.ToDouble(session.ChargingTotalFee))/1.18;
+                var energyCost = isActive ? calculatedCost : Convert.ToDouble(session.ChargingTotalFee)/1.18;
                 var serviceFee = 0.0; // Can add service fee logic here
                 var taxes = energyCost * 0.18; // Assuming 18% GST
                 var totalCost = energyCost + serviceFee + taxes;
