@@ -137,6 +137,16 @@ namespace OCPP.Core.Database.OCPIDTO
         /// </summary>
         public bool LimitViolationHandled { get; set; } = false;
 
+        /// <summary>
+        /// Latest EV state of charge (0–100%) reported by the partner CPO, extracted from the
+        /// STATE_OF_CHARGE dimension of the most recent charging_period on the session. Not all
+        /// CPOs report this — typically only DC fast chargers do. Null when never reported.
+        /// </summary>
+        public decimal? CurrentStateOfCharge { get; set; }
+
+        /// <summary>When CurrentStateOfCharge was last updated by the partner.</summary>
+        public DateTime? StateOfChargeLastUpdate { get; set; }
+
         // Navigation property
         public virtual OcpiPartnerCredential PartnerCredential { get; set; }
     }

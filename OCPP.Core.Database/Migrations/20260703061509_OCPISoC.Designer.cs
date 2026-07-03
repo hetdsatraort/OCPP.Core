@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OCPP.Core.Database;
 
@@ -11,9 +12,11 @@ using OCPP.Core.Database;
 namespace OCPP.Core.Database.Migrations
 {
     [DbContext(typeof(OCPPCoreContext))]
-    partial class OCPPCoreContextModelSnapshot : ModelSnapshot
+    [Migration("20260703061509_OCPISoC")]
+    partial class OCPISoC
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1604,9 +1607,6 @@ namespace OCPP.Core.Database.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("nvarchar(3)");
 
-                    b.Property<decimal?>("CurrentStateOfCharge")
-                        .HasColumnType("decimal(5,2)");
-
                     b.Property<DateTime?>("EndDateTime")
                         .HasColumnType("datetime2");
 
@@ -1630,9 +1630,6 @@ namespace OCPP.Core.Database.Migrations
                         .HasColumnType("nvarchar(36)");
 
                     b.Property<DateTime>("StartDateTime")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("StateOfChargeLastUpdate")
                         .HasColumnType("datetime2");
 
                     b.Property<string>("Status")

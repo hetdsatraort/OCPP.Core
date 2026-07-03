@@ -866,6 +866,30 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 ConnectorId   = s.ConnectorId,
                 Status        = isActive ? SessionStatus.Active : SessionStatus.Completed,
                 Currency      = CurrencyCode.IndianRupee,
+                // Previously omitted entirely, so every session an eMSP partner saw via this
+                // periodic bulk sync showed TotalCost as null and never carried SoC — the
+                // ~10s live-push path in OcpiOrphanSessionService now covers most cases, but this
+                // is the fallback for a partner that only pulls/only receives the bulk PUT.
+                TotalCost     = s.TotalCost.HasValue
+                                    ? new OcpiPrice { ExclVat = s.TotalCost.Value, InclVat = Math.Round(s.TotalCost.Value * 1.18m, 2) }
+                                    : null,
+                ChargingPeriods = s.CurrentStateOfCharge.HasValue
+                                    ? new List<OcpiChargingPeriod>
+                                      {
+                                          new OcpiChargingPeriod
+                                          {
+                                              StartDateTime = s.StateOfChargeLastUpdate ?? DateTime.UtcNow,
+                                              Dimensions = new List<OcpiCdrDimension>
+                                              {
+                                                  new OcpiCdrDimension
+                                                  {
+                                                      Type = CdrDimensionType.StateOfCharge,
+                                                      Volume = s.CurrentStateOfCharge.Value
+                                                  }
+                                              }
+                                          }
+                                      }
+                                    : null,
                 LastUpdated   = s.LastUpdated == DateTime.MinValue ? DateTime.UtcNow : s.LastUpdated,
                 CdrToken      = string.IsNullOrEmpty(s.TokenUid)
                                     ? null

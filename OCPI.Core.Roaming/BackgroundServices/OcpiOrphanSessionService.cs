@@ -1,3 +1,4 @@
+using BitzArt.EnumToMemberValue;
 using Microsoft.EntityFrameworkCore;
 using OCPI.Contracts;
 using OCPI.Core.Roaming.Services;
@@ -6,6 +7,7 @@ using OCPP.Core.Database.OCPIDTO;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace OCPI.Core.Roaming.BackgroundServices
 {
@@ -31,6 +33,16 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly IConfiguration _configuration;
         private readonly TimeSpan _checkInterval;
         private readonly TimeSpan _orphanTimeout;
+
+        // Mirrors OcpiSyncBackgroundService._jsonOptions — JsonStringEnumMemberConverterV2 must be
+        // the only enum converter registered so it isn't shadowed for OCPI.Net enums like
+        // SessionStatus/CountryCode whose wire value comes from [EnumMember], not the member name.
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true,
+            DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingNull,
+            Converters                  = { new JsonStringEnumMemberConverterV2() }
+        };
 
         public OcpiOrphanSessionService(
             IServiceScopeFactory scopeFactory,
@@ -138,6 +150,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
                       .ToListAsync(ct)
                 : new List<ConnectorStatus>();
 
+            // Gun tariffs — needed to compute a live running TotalCost for ACTIVE sessions rather
+            // than leaving it null until CDR generation at completion (see PushCompletedSessionsAndCdrsAsync).
+            var connectorIds = activeSessions.Select(s => s.ConnectorId).Where(x => x != null).Distinct().ToList();
+            var guns = connectorIds.Count > 0
+                ? await db.ChargingGuns.Where(g => connectorIds.Contains(g.RecId)).ToListAsync(ct)
+                : new List<OCPP.Core.Database.EVCDTO.ChargingGuns>();
+
+            var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+
             // ── Process each session ──────────────────────────────────────────────
 
             int liveUpdated = 0;
@@ -145,6 +166,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             int closedAsInvalid = 0;
             var completedChargePointIds = new List<string>();
             var completedPartnerSessions = new List<OcpiHostedSession>();
+            var liveUpdatedPartnerSessions = new List<OcpiHostedSession>();
 
             foreach (var session in activeSessions)
             {
@@ -167,6 +189,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                         if (tx.MeterStop.HasValue && tx.MeterStop.Value >= tx.MeterStart)
                             session.TotalEnergy = (decimal)Math.Round(tx.MeterStop.Value - tx.MeterStart, 4);
+
+                        // Final cost (excl. VAT) — PushCompletedSessionsAndCdrsAsync recomputes this
+                        // independently for the CDR, but keeping the session's own TotalCost accurate
+                        // too means anything reading OcpiHostedSession directly (admin views, the
+                        // periodic bulk sync if it races ahead of CDR generation) sees a real number
+                        // instead of null.
+                        var gunForCost = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
+                        if (gunForCost != null && double.TryParse(gunForCost.ChargerTariff, out var finalTariff))
+                            session.TotalCost = Math.Round((session.TotalEnergy ?? 0m) * (decimal)finalTariff, 2);
 
                         session.LastUpdated = DateTime.UtcNow;
                         closedByTx++;
@@ -197,14 +228,38 @@ namespace OCPI.Core.Roaming.BackgroundServices
                                 connStatus.LastMeter.Value - tx.MeterStart, 4);
 
                             session.TotalEnergy = liveEnergy;
+
+                            // Running cost (excl. VAT) — previously never computed for ACTIVE
+                            // sessions, so eMSP partners always saw TotalCost as null until the
+                            // session completed and a CDR was generated.
+                            var gun = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
+                            if (gun != null && double.TryParse(gun.ChargerTariff, out var tariffRate))
+                                session.TotalCost = Math.Round(liveEnergy * (decimal)tariffRate, 2);
+
                             session.LastUpdated = DateTime.UtcNow;
                             liveUpdated++;
 
+                            if (session.PartnerCredentialId.HasValue)
+                                liveUpdatedPartnerSessions.Add(session);
+
                             _logger.LogDebug(
                                 "OcpiOrphanSessionService: live update session {SessionId} — " +
-                                "meter={Meter} start={Start} energy={Energy} kWh",
+                                "meter={Meter} start={Start} energy={Energy} kWh, cost={Cost}",
                                 session.SessionId, connStatus.LastMeter.Value,
-                                tx.MeterStart, liveEnergy);
+                                tx.MeterStart, liveEnergy, session.TotalCost);
+                        }
+
+                        // SoC (0–100%) from the OCPP server's cached MeterValues, when the charger
+                        // reports it (typically DC fast chargers). Not gated on connStatus/meter
+                        // above — the charger may report SoC in a MeterValues sample even between
+                        // energy ticks, and we don't want to skip an SoC-only update.
+                        var soc = await GetLiveSoCAsync(httpFactory, session.ChargePointId, session.ConnectorNumber, ct);
+                        if (soc.HasValue)
+                        {
+                            session.CurrentStateOfCharge = (decimal)soc.Value;
+                            session.StateOfChargeLastUpdate = DateTime.UtcNow;
+                            if (session.PartnerCredentialId.HasValue && !liveUpdatedPartnerSessions.Contains(session))
+                                liveUpdatedPartnerSessions.Add(session);
                         }
                     }
 
@@ -229,8 +284,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             await db.SaveChangesAsync(ct);
 
-            var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
-
             // Immediately notify EMSP/HUB partners of status change for any EVSEs whose
             // sessions just completed (so partners see "AVAILABLE" without waiting for the
             // next full sync round).
@@ -246,6 +299,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
             if (completedPartnerSessions.Count > 0)
             {
                 await PushCompletedSessionsAndCdrsAsync(db, httpFactory, completedPartnerSessions, ct);
+            }
+
+            // Push energy/cost/SoC updates for still-ACTIVE partner-initiated sessions in real time
+            // too — without this, an eMSP partner only sees fresh numbers once per
+            // OCPI:SyncIntervalMinutes bulk sync (5 min default) instead of on this loop's ~10s
+            // cadence, which is what made TotalCost/SoC look permanently stuck/null while charging.
+            if (liveUpdatedPartnerSessions.Count > 0)
+            {
+                await PushActiveSessionUpdatesToEmspAsync(db, httpFactory, liveUpdatedPartnerSessions, ct);
             }
 
             _logger.LogInformation(
@@ -291,9 +353,13 @@ namespace OCPI.Core.Roaming.BackgroundServices
             {
                 if (!session.PartnerCredentialId.HasValue) continue;
                 if (!partners.TryGetValue(session.PartnerCredentialId.Value, out var partner)) continue;
-                if (string.IsNullOrEmpty(partner.OutboundToken)) continue;
 
                 // Idempotent: skip if we already generated a CDR for this hosted session.
+                // Generation must happen regardless of OutboundToken — the CDR is the billing
+                // record of truth and must exist (and be pull-able via /2.2.1/cdrs/sender) even
+                // when we can't push it right now. Gating creation on OutboundToken here used to
+                // mean a partner with an incomplete credentials handshake (no OutboundToken) would
+                // never get a CDR at all for their completed sessions — not even on request.
                 var cdr = await db.OcpiCdrs.FirstOrDefaultAsync(
                     c => c.LocalSessionId == session.SessionId, ct);
 
@@ -337,6 +403,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     // without creating a duplicate.
                     db.OcpiCdrs.Add(cdr);
                     await db.SaveChangesAsync(ct);
+                }
+
+                if (string.IsNullOrEmpty(partner.OutboundToken))
+                {
+                    // Previously a silent `continue` — made this loud because a missing
+                    // OutboundToken (incomplete/never-finished credentials handshake) permanently
+                    // blocks every real-time push to this partner (CDRs, sessions, EVSE status)
+                    // with no other trace in the logs.
+                    _logger.LogWarning(
+                        "OcpiOrphanSessionService: partner {CountryCode}-{PartyId} has no OutboundToken — " +
+                        "CDR {CdrId} for session {SessionId} was generated but NOT pushed. " +
+                        "The partner must pull it via /2.2.1/cdrs/sender until the credentials handshake is completed.",
+                        partner.CountryCode, partner.PartyId, cdr.CdrId, session.SessionId);
+                    continue;
                 }
 
                 await PushSessionAndCdrToPartnerAsync(partner, session, cdr, httpFactory, ct);
@@ -468,6 +548,109 @@ namespace OCPI.Core.Roaming.BackgroundServices
         }
 
         /// <summary>
+        /// Pushes an in-progress (still ACTIVE) hosted session's energy/cost/SoC to its originating
+        /// eMSP partner. Grouped by partner so a partner with several active sessions this cycle
+        /// gets one endpoint discovery instead of one per session.
+        /// </summary>
+        private async Task PushActiveSessionUpdatesToEmspAsync(
+            OCPPCoreContext db,
+            IHttpClientFactory httpFactory,
+            List<OcpiHostedSession> sessions,
+            CancellationToken ct)
+        {
+            var partnerIds = sessions
+                .Where(s => s.PartnerCredentialId.HasValue)
+                .Select(s => s.PartnerCredentialId!.Value)
+                .Distinct()
+                .ToList();
+            if (partnerIds.Count == 0) return;
+
+            var partners = await db.OcpiPartnerCredentials
+                .Where(p => partnerIds.Contains(p.Id) && p.IsActive)
+                .ToDictionaryAsync(p => p.Id, ct);
+
+            var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
+            var ourPartyId = _configuration["OCPI:PartyId"] ?? "CPO";
+
+            foreach (var group in sessions.GroupBy(s => s.PartnerCredentialId!.Value))
+            {
+                if (ct.IsCancellationRequested) break;
+                if (!partners.TryGetValue(group.Key, out var partner)) continue;
+                if (string.IsNullOrEmpty(partner.OutboundToken)) continue; // no log here — same partner already warned in PushCompletedSessionsAndCdrsAsync if genuinely unconfigured
+
+                var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "sessions", httpFactory, ct);
+                if (sessionsUrl == null) continue;
+
+                var http = httpFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                http.Timeout = TimeSpan.FromSeconds(15);
+
+                foreach (var session in group)
+                {
+                    var chargingPeriods = session.CurrentStateOfCharge.HasValue
+                        ? new List<OcpiChargingPeriod>
+                          {
+                              new OcpiChargingPeriod
+                              {
+                                  StartDateTime = session.StateOfChargeLastUpdate ?? DateTime.UtcNow,
+                                  Dimensions = new List<OcpiCdrDimension>
+                                  {
+                                      new OcpiCdrDimension
+                                      {
+                                          Type = CdrDimensionType.StateOfCharge,
+                                          Volume = session.CurrentStateOfCharge.Value
+                                      }
+                                  }
+                              }
+                          }
+                        : null;
+
+                    var wireSession = new OcpiSession
+                    {
+                        CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
+                        PartyId = ourPartyId,
+                        Id = session.SessionId,
+                        StartDateTime = session.StartDateTime,
+                        EndDateTime = null,
+                        Kwh = session.TotalEnergy ?? 0m,
+                        AuthMethod = AuthMethodType.Command,
+                        AuthorizationReference = session.AuthorizationReference,
+                        LocationId = session.LocationId,
+                        EvseId = session.EvseUid,
+                        ConnectorId = session.ConnectorId,
+                        Status = SessionStatus.Active,
+                        Currency = CurrencyCode.IndianRupee,
+                        TotalCost = session.TotalCost.HasValue
+                            ? new OcpiPrice { ExclVat = session.TotalCost.Value, InclVat = Math.Round(session.TotalCost.Value * 1.18m, 2) }
+                            : null,
+                        ChargingPeriods = chargingPeriods,
+                        LastUpdated = session.LastUpdated,
+                        CdrToken = string.IsNullOrEmpty(session.TokenUid)
+                            ? null
+                            : new OcpiCdrToken { Uid = session.TokenUid, Type = TokenType.Rfid }
+                    };
+
+                    try
+                    {
+                        var url = $"{sessionsUrl.TrimEnd('/')}/{ourCountryCode}/{ourPartyId}/{session.SessionId}";
+                        var resp = await http.PutAsJsonAsync(url, wireSession, ct);
+                        if (!resp.IsSuccessStatusCode)
+                            _logger.LogDebug(
+                                "Live session push for {SessionId} to partner {PartnerId} → HTTP {Status}",
+                                session.SessionId, partner.Id, resp.StatusCode);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex,
+                            "Live session push failed for {SessionId} to partner {PartnerId}",
+                            session.SessionId, partner.Id);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Walks the partner's /versions and version-details URLs to find the receiver endpoint
         /// URL for the given OCPI module (e.g. "sessions", "cdrs", "commands"). Returns null if
         /// discovery fails or the partner doesn't expose that module.
@@ -476,8 +659,10 @@ namespace OCPI.Core.Roaming.BackgroundServices
             OcpiPartnerCredential partner,
             string moduleIdentifier,
             IHttpClientFactory httpFactory,
-            CancellationToken ct)
+            CancellationToken ct,
+            string[]? acceptableRoles = null)
         {
+            acceptableRoles ??= new[] { "RECEIVER", "EMSP" };
             try
             {
                 var http = httpFactory.CreateClient();
@@ -522,8 +707,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                             continue;
 
                         bool roleOk = role == null
-                            || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "EMSP", StringComparison.OrdinalIgnoreCase);
+                            || acceptableRoles.Any(r => string.Equals(role, r, StringComparison.OrdinalIgnoreCase));
 
                         if (roleOk)
                             return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
@@ -538,6 +722,66 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "OcpiOrphanSessionService: endpoint discovery failed for partner {PartnerId} module={Module}",
                     partner.Id, moduleIdentifier);
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// GETs a fresh copy of each stale ACTIVE partner session directly from the partner CPO's
+        /// sessions SENDER endpoint and upserts it via <see cref="IOcpiSessionService.StorePartnerSessionAsync"/>,
+        /// so TotalEnergy/TotalCost/Status reflect the partner's latest state rather than waiting
+        /// on their next proactive push or the 5-minute bulk sync.
+        /// </summary>
+        private async Task RefreshStaleSessionsFromPartnerAsync(
+            List<OcpiPartnerSession> staleSessions,
+            Dictionary<int, OcpiPartnerCredential> partners,
+            IOcpiSessionService sessionService,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            foreach (var session in staleSessions)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (!session.PartnerCredentialId.HasValue) continue;
+                if (!partners.TryGetValue(session.PartnerCredentialId.Value, out var partner)) continue;
+                if (string.IsNullOrEmpty(partner.OutboundToken)) continue;
+
+                try
+                {
+                    var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(
+                        partner, "sessions", httpFactory, ct, acceptableRoles: new[] { "SENDER" });
+                    if (sessionsUrl == null) continue;
+
+                    var http = httpFactory.CreateClient();
+                    http.DefaultRequestHeaders.TryAddWithoutValidation(
+                        "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                    http.Timeout = TimeSpan.FromSeconds(10);
+
+                    var url = $"{sessionsUrl.TrimEnd('/')}/{session.CountryCode}/{session.PartyId}/{session.SessionId}";
+                    var resp = await http.GetAsync(url, ct);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        _logger.LogDebug(
+                            "OcpiOrphanSessionService: live session refresh for {SessionId} → HTTP {Status}",
+                            session.SessionId, resp.StatusCode);
+                        continue;
+                    }
+
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    var envelope = JsonSerializer.Deserialize<OcpiApiEnvelope<OcpiSession>>(body, _jsonOptions);
+                    if (envelope?.Data == null) continue;
+
+                    await sessionService.StorePartnerSessionAsync(partner.Id, envelope.Data);
+
+                    _logger.LogDebug(
+                        "OcpiOrphanSessionService: live-refreshed partner session {SessionId} — {Kwh} kWh",
+                        session.SessionId, envelope.Data.Kwh);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex,
+                        "OcpiOrphanSessionService: live refresh failed for partner session {SessionId}",
+                        session.SessionId);
+                }
             }
         }
 
@@ -766,6 +1010,64 @@ namespace OCPI.Core.Roaming.BackgroundServices
         }
 
         /// <summary>
+        /// Reads the OCPP server's cached MeterValues StateOfCharge measurand for one charge
+        /// point/connector — the same <c>SoC/GetSoC</c> endpoint OCPP.Core.Management's
+        /// ChargingSessionController uses for our own app's session details. Not all chargers
+        /// report SoC (typically DC fast chargers only), so a null return is the normal case,
+        /// not an error. Returns null (rather than throwing) on any failure so a slow/unreachable
+        /// SoC lookup never blocks the rest of the session-processing cycle.
+        /// </summary>
+        private async Task<double?> GetLiveSoCAsync(
+            IHttpClientFactory httpFactory,
+            string chargePointId,
+            int connectorNumber,
+            CancellationToken ct,
+            int maxAgeMinutes = 5)
+        {
+            var serverApiUrl = _configuration["ServerApiUrl"];
+            if (string.IsNullOrEmpty(serverApiUrl))
+                return null;
+
+            try
+            {
+                var apiKey = _configuration["ApiKey"] ?? string.Empty;
+                var baseUrl = serverApiUrl.TrimEnd('/');
+
+                var client = httpFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(5);
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                    client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
+
+                var url = $"{baseUrl}/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}" +
+                          $"&connectorId={connectorNumber}&maxAgeMinutes={maxAgeMinutes}";
+
+                var resp = await client.GetAsync(url, ct);
+                if (!resp.IsSuccessStatusCode) return null;
+
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(body);
+
+                if (doc.RootElement.TryGetProperty("success", out var successProp) && successProp.GetBoolean() &&
+                    doc.RootElement.TryGetProperty("data", out var dataProp) &&
+                    dataProp.ValueKind != JsonValueKind.Null &&
+                    dataProp.TryGetProperty("soC", out var socProp) &&
+                    socProp.ValueKind == JsonValueKind.Number)
+                {
+                    return socProp.GetDouble();
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex,
+                    "OcpiOrphanSessionService: SoC lookup failed for {ChargePointId}/{Connector}",
+                    chargePointId, connectorNumber);
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Aggregates OCPP connector statuses for one EVSE into a single OCPI status string.
         /// Covers all OCPP 1.6 connector status values that indicate an active or transitional
         /// charging session (Preparing, SuspendedEV, SuspendedEVSE, Finishing) so they are
@@ -790,8 +1092,10 @@ namespace OCPI.Core.Roaming.BackgroundServices
         //
         // OcpiPartnerSessions are sessions our users do at partner CPO stations.
         // The partner CPO owns the charging hardware; we can only stop the session by
-        // issuing an OCPI STOP_SESSION command.  Energy / cost data comes from the
-        // partner's periodic PUT/PATCH updates (handled by OcpiSyncBackgroundService).
+        // issuing an OCPI STOP_SESSION command.  Energy / cost data comes from whichever
+        // arrives first: the partner's own PUT/PATCH pushes to our sessions receiver, the
+        // live-refresh pull at the top of ProcessPartnerSessionsAsync (RefreshStaleSessionsFromPartnerAsync),
+        // or — as a slow fallback — OcpiSyncBackgroundService's 5-minute bulk sync.
         //
         // This method:
         //   A) Marks sessions as COMPLETED when the partner has set EndDateTime.
@@ -833,6 +1137,23 @@ namespace OCPI.Core.Roaming.BackgroundServices
                       .Where(p => partnerIds.Contains(p.Id) && p.IsActive)
                       .ToDictionaryAsync(p => p.Id, ct)
                 : new Dictionary<int, OcpiPartnerCredential>();
+
+            // ── Live-refresh sessions the partner hasn't pushed an update for recently ──
+            // Some CPOs only PUT/PATCH our sessions receiver at start/stop, not incrementally
+            // while charging — without this, TotalEnergy/TotalCost would only advance on the
+            // 5-minute OcpiSyncBackgroundService bulk pull (OCPI:SyncIntervalMinutes), making the
+            // "Energy Consumed" figure in the app appear frozen for minutes at a time. Pulling
+            // just the stale ACTIVE sessions here piggybacks on this loop's existing cadence
+            // (OCPI:OrphanCheckIntervalSeconds, default 10s) for a much fresher reading.
+            var staleCutoff = DateTime.UtcNow.AddSeconds(-Math.Max(15, _checkInterval.TotalSeconds));
+            var staleSessions = activeSessions
+                .Where(s => s.PartnerCredentialId.HasValue && s.LastUpdated < staleCutoff)
+                .ToList();
+            if (staleSessions.Count > 0)
+            {
+                var sessionService = scope.ServiceProvider.GetRequiredService<IOcpiSessionService>();
+                await RefreshStaleSessionsFromPartnerAsync(staleSessions, partners, sessionService, httpFactory, ct);
+            }
 
             // Only need wallet/user data for app-initiated sessions with limits
             var limitedUserIds = activeSessions

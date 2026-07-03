@@ -710,6 +710,10 @@ namespace OCPP.Core.Management.Controllers
                         totalCost = s.TotalCost,
                         currency = s.Currency,
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
+                        // Battery — only populated when the partner CPO reports a STATE_OF_CHARGE
+                        // charging_period dimension (typically DC fast chargers only).
+                        currentStateOfCharge = s.CurrentStateOfCharge,
+                        stateOfChargeLastUpdate = s.StateOfChargeLastUpdate,
                         // Location
                         ocpiLocationId = s.LocationId,
                         locationName = loc?.Name ?? "Partner Station",

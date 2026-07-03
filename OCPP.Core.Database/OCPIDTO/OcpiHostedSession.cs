@@ -97,6 +97,17 @@ namespace OCPP.Core.Database.OCPIDTO
         /// <summary>Total cost of the session (excl. VAT).</summary>
         public decimal? TotalCost { get; set; }
 
+        /// <summary>
+        /// Latest EV state of charge (0–100%), pulled from the OCPP server's cached MeterValues
+        /// StateOfCharge measurand for this charge point/connector. Only populated for chargers
+        /// that actually report it (typically DC fast chargers). Pushed to eMSP partners via the
+        /// session's STATE_OF_CHARGE charging_period dimension.
+        /// </summary>
+        public decimal? CurrentStateOfCharge { get; set; }
+
+        /// <summary>When CurrentStateOfCharge was last refreshed from the OCPP server.</summary>
+        public DateTime? StateOfChargeLastUpdate { get; set; }
+
         /// <summary>Currency code (ISO 4217).</summary>
         [MaxLength(3)]
         public string Currency { get; set; }

@@ -18,6 +18,8 @@ namespace OCPI.Core.Roaming.Services
         private readonly IConfiguration _config;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly IHttpContextAccessor _httpContextAccessor;
+        private readonly int _transactionPollIntervalMs;
+        private readonly int _transactionPollMaxAttempts;
 
         public OcpiCommandService(
             OCPPCoreContext dbContext,
@@ -31,6 +33,16 @@ namespace OCPI.Core.Roaming.Services
             _config = config;
             _scopeFactory = scopeFactory;
             _httpContextAccessor = httpContextAccessor;
+
+            // How long we're willing to wait for the charger's StartTransaction confirmation to
+            // show up as a Transaction row before giving up and creating the OcpiHostedSession
+            // without a TransactionId (which then only gets the orphan-timeout grace period,
+            // not a proper completion path with a CDR). Slow/flaky chargers can take well over
+            // the previous fixed 24s, so both knobs are configurable.
+            _transactionPollIntervalMs = _config.GetValue<int>("OCPI:TransactionPollIntervalMs", 1500);
+            var correlationTimeoutSeconds = _config.GetValue<int>("OCPI:TransactionCorrelationTimeoutSeconds", 60);
+            _transactionPollMaxAttempts = Math.Max(1,
+                (int)Math.Ceiling(correlationTimeoutSeconds * 1000.0 / _transactionPollIntervalMs));
         }
 
         // ───────────────────────────── START SESSION ─────────────────────────────
@@ -85,10 +97,12 @@ namespace OCPI.Core.Roaming.Services
                         using var scope = _scopeFactory.CreateScope();
                         var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
 
-                        // Poll for the new OCPP transaction row (up to 16 × 1.5 s = 24 s)
+                        // Poll for the new OCPP transaction row — window is configurable via
+                        // OCPI:TransactionCorrelationTimeoutSeconds / OCPI:TransactionPollIntervalMs
+                        // (default 60s / 1.5s = 40 attempts).
                         OCPP.Core.Database.Transaction? ocppTransaction = null;
-                        const int maxPollAttempts = 16;
-                        const int pollIntervalMs  = 1500;
+                        int maxPollAttempts = _transactionPollMaxAttempts;
+                        int pollIntervalMs  = _transactionPollIntervalMs;
 
                         for (int attempt = 1; attempt <= maxPollAttempts; attempt++)
                         {
