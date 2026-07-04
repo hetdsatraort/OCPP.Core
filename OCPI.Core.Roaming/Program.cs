@@ -10,9 +10,9 @@ var builder = WebApplication.CreateBuilder(args);
 // - Exception handling middleware
 // - Validation services
 // - Authorization services
-                using var log = new LoggerConfiguration()
-    .WriteTo.Console()
-    .CreateLogger();
+using var log = new LoggerConfiguration()
+.WriteTo.Console()
+.CreateLogger();
 builder.AddOcpi();
 
 // Add Database Context (for future integration with OCPP.Core.Database)

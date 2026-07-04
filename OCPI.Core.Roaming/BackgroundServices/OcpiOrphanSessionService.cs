@@ -1513,7 +1513,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 PreviousCreditBalance = previousBalance.ToString("F2"),
                 CurrentCreditBalance = newBalance.ToString("F2"),
                 TransactionType = "Debit",
-                ChargingSessionId = session.SessionId,
+                // ChargingSessionId is a FK into EVCDTO.ChargingSession (our own-charger session
+                // table) — OCPI partner sessions live in OcpiPartnerSessions instead and have no
+                // row there, so setting this to session.SessionId violates
+                // FK_WalletTransactionLog_ChargingSession. The OCPI session id is already in info1.
+                ChargingSessionId = null,
                 AdditionalInfo1 = info1,
                 AdditionalInfo2 = info2,
                 AdditionalInfo3 = info3,

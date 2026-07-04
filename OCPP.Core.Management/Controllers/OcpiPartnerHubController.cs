@@ -621,7 +621,11 @@ namespace OCPP.Core.Management.Controllers
                 PreviousCreditBalance = previousBalance.ToString("F2"),
                 CurrentCreditBalance = newBalance.ToString("F2"),
                 TransactionType = "Debit",
-                ChargingSessionId = session.SessionId,
+                // ChargingSessionId is a FK into EVCDTO.ChargingSession (our own-charger session
+                // table) — OCPI partner sessions live in OcpiPartnerSessions instead and have no
+                // row there, so setting this to session.SessionId violates FK_WalletTransactionLog_ChargingSession.
+                // The OCPI session id is already captured in AdditionalInfo1 below.
+                ChargingSessionId = null,
                 AdditionalInfo1 = $"OCPI partner session stopped — {session.SessionId}",
                 AdditionalInfo2 = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}",
                 AdditionalInfo3 = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
