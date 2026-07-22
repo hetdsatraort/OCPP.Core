@@ -9,19 +9,18 @@ using QuestPDF.Fluent;
 namespace OCPP.Core.Management.Services.Invoice
 {
     /// <summary>
-    /// Computes and persists HyCharge's own platform-fee invoice for a completed OCPI partner
-    /// (roaming) session, and renders it as a PDF.
+    /// Computes and persists the tax invoice for a completed OCPI partner (roaming) session, and
+    /// renders it as a PDF.
     ///
-    /// The partner CPO's own reported <see cref="OcpiPartnerSession.TotalCost"/> is never taxed
-    /// here — it is that partner's own sale, already priced (and taxed, if applicable) by them.
-    /// This service only computes and invoices HyCharge's additive per-kWh platform fee plus
-    /// 9% CGST + 9% SGST on that fee.
+    /// The taxable value is the partner CPO's reported <see cref="OcpiPartnerSession.TotalCost"/>
+    /// plus HyCharge's own additive per-kWh platform fee — 9% CGST + 9% SGST is charged on that
+    /// combined amount, not on the platform fee alone, so the invoice covers the full amount
+    /// actually billed to the user's wallet.
     ///
     /// OCPI.Core.Roaming's OcpiOrphanSessionService needs the same computation for sessions it
     /// finalises in the background, but that project doesn't reference OCPP.Core.Management —
-    /// it carries its own local copy of this logic (OCPI.Core.Roaming/Services/PartnerInvoiceService.cs),
-    /// mirroring how the wallet-debit logic itself is already duplicated between the two projects
-    /// rather than shared.
+    /// it calls back into this service over HTTP via IPartnerInvoiceClient rather than duplicating
+    /// the tax math locally.
     /// </summary>
     public class PartnerInvoiceService : IPartnerInvoiceService
     {
@@ -88,11 +87,15 @@ namespace OCPP.Core.Management.Services.Invoice
             }
 
             decimal platformFeeAmount = Math.Round(energy * feePerKwh, 2, MidpointRounding.AwayFromZero);
-            decimal cgstAmount = Math.Round(platformFeeAmount * CgstRate / 100m, 2, MidpointRounding.AwayFromZero);
-            decimal sgstAmount = Math.Round(platformFeeAmount * SgstRate / 100m, 2, MidpointRounding.AwayFromZero);
-            decimal grandTotal = platformFeeAmount + cgstAmount + sgstAmount;
             decimal partnerCost = session.TotalCost.Value;
-            decimal totalPayable = partnerCost + grandTotal;
+            // GST is charged on the partner's own energy cost plus HyCharge's platform fee
+            // combined — not on the platform fee alone — so the invoice covers the full amount
+            // actually billed to the user, not just HyCharge's margin.
+            decimal taxableValue = partnerCost + platformFeeAmount;
+            decimal cgstAmount = Math.Round(taxableValue * CgstRate / 100m, 2, MidpointRounding.AwayFromZero);
+            decimal sgstAmount = Math.Round(taxableValue * SgstRate / 100m, 2, MidpointRounding.AwayFromZero);
+            decimal grandTotal = taxableValue + cgstAmount + sgstAmount;
+            decimal totalPayable = grandTotal;
 
             OcpiPartnerCredential partner = null;
             if (session.PartnerCredentialId.HasValue)
@@ -145,7 +148,7 @@ namespace OCPP.Core.Management.Services.Invoice
                     SacCode = SacCode,
                     PricePerUnit = feePerKwh,
 
-                    TaxableValue = platformFeeAmount,
+                    TaxableValue = taxableValue,
                     CgstRate = CgstRate,
                     CgstAmount = cgstAmount,
                     SgstRate = SgstRate,

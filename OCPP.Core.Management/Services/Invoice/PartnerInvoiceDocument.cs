@@ -7,10 +7,10 @@ using QuestPDF.Infrastructure;
 namespace OCPP.Core.Management.Services.Invoice
 {
     /// <summary>
-    /// Tax invoice PDF for HyCharge's own platform fee on an OCPI roaming session. Adapted from
-    /// <see cref="InvoiceDocument"/> (local sessions), but the totals section deliberately keeps
-    /// the partner CPO's own energy cost separate from — and un-taxed by — HyCharge's platform
-    /// fee, since the partner bills and taxes its own energy sale independently.
+    /// Tax invoice PDF for an OCPI roaming session. Adapted from <see cref="InvoiceDocument"/>
+    /// (local sessions) — CGST/SGST is charged on the combined taxable value (the partner
+    /// network's own energy cost plus HyCharge's platform fee), so the invoice covers the full
+    /// amount actually billed to the user's wallet.
     /// </summary>
     public class PartnerInvoiceDocument : IDocument
     {
@@ -69,7 +69,7 @@ namespace OCPP.Core.Management.Services.Invoice
                     row.RelativeItem().Column(col =>
                     {
                         col.Item().AlignRight().Text("INVOICE").FontSize(22).Bold().FontColor(HeadingColor);
-                        col.Item().AlignRight().Text("Invoice Type: Platform Fee (OCPI Roaming)").FontSize(9).FontColor(MutedColor);
+                        col.Item().AlignRight().Text("Invoice Type: Roaming Session (OCPI)").FontSize(9).FontColor(MutedColor);
                     });
                 });
 
@@ -96,7 +96,7 @@ namespace OCPP.Core.Management.Services.Invoice
                 column.Item().Element(c => ComposeSectionHeading(c, "ROAMING SESSION"));
                 column.Item().Element(ComposeSessionInfo);
 
-                column.Item().Element(c => ComposeSectionHeading(c, "PLATFORM FEE"));
+                column.Item().Element(c => ComposeSectionHeading(c, "CHARGES"));
                 column.Item().Element(ComposeFeeTable);
 
                 column.Item().Row(row =>
@@ -113,9 +113,9 @@ namespace OCPP.Core.Management.Services.Invoice
                     text.DefaultTextStyle(x => x.FontSize(8).FontColor(MutedColor));
                     text.Span("Note: ").Bold();
                     text.Span(
-                        "This invoice covers only HyCharge's platform/facilitation fee for this roaming " +
-                        "session. The partner network's own energy cost shown above is billed and taxed " +
-                        "by that partner separately and is not subject to the CGST/SGST below. Amounts are in INR.");
+                        "This invoice covers the full cost of this roaming session — the partner network's " +
+                        "own energy cost plus HyCharge's platform/facilitation fee — with CGST/SGST applied " +
+                        "on the combined amount. Amounts are in INR.");
                 });
             });
         }
@@ -197,7 +197,7 @@ namespace OCPP.Core.Management.Services.Invoice
 
                     row.RelativeItem().Column(col =>
                     {
-                        col.Item().Element(c => ComposeLabelValueRow(c, "Partner Cost", FormatCurrency(_invoice.PartnerCost, _invoice.Currency)));
+                        col.Item().Element(c => ComposeLabelValueRow(c, "Actual Cost", FormatCurrency(_invoice.PartnerCost, _invoice.Currency)));
                         col.Item().Element(c => ComposeLabelValueRow(c, "Energy", $"{_invoice.EnergyConsumedKwh:F2} kWh"));
                     });
                 });
@@ -251,11 +251,19 @@ namespace OCPP.Core.Management.Services.Invoice
                         .Padding(5).DefaultTextStyle(x => x.FontSize(7.5f).Bold());
                 });
 
+                decimal platformFeeAmount = _invoice.TaxableValue - _invoice.PartnerCost;
+
+                table.Cell().Element(BodyCell).Text("Energy Charges (Partner Network)");
+                table.Cell().Element(BodyCell).Text("-");
+                table.Cell().Element(BodyCell).Text("-");
+                table.Cell().Element(BodyCell).Text($"{_invoice.EnergyConsumedKwh:F2}");
+                table.Cell().Element(BodyCell).AlignRight().Text($"{FormatCurrency(_invoice.PartnerCost, _invoice.Currency)}");
+
                 table.Cell().Element(BodyCell).Text(_invoice.Description);
                 table.Cell().Element(BodyCell).Text(_invoice.SacCode);
                 table.Cell().Element(BodyCell).Text($"{FormatCurrency(_invoice.PricePerUnit)}");
                 table.Cell().Element(BodyCell).Text($"{_invoice.EnergyConsumedKwh:F2}");
-                table.Cell().Element(BodyCell).AlignRight().Text($"{FormatCurrency(_invoice.TaxableValue)}");
+                table.Cell().Element(BodyCell).AlignRight().Text($"{FormatCurrency(platformFeeAmount)}");
 
                 IContainer BodyCell(IContainer c) => c.BorderBottom(1).BorderColor(Colors.Grey.Lighten2)
                     .Padding(5).DefaultTextStyle(x => x.FontSize(8.5f));
@@ -277,25 +285,23 @@ namespace OCPP.Core.Management.Services.Invoice
 
         private void ComposeTotals(IContainer container)
         {
+            decimal platformFeeAmount = _invoice.TaxableValue - _invoice.PartnerCost;
+
             container.Column(column =>
             {
-                column.Item().Element(c => ComposeTotalRow(c, "PLATFORM FEE (TAXABLE VALUE)", _invoice.TaxableValue));
-                column.Item().Element(c => ComposeTotalRow(c, $"CGST ({_invoice.CgstRate:0.##}%)", _invoice.CgstAmount));
-                column.Item().Element(c => ComposeTotalRow(c, $"SGST ({_invoice.SgstRate:0.##}%)", _invoice.SgstAmount));
+                column.Item().Element(c => ComposeTotalRow(c, "ACTUAL COST (ENERGY CHARGES)", _invoice.PartnerCost));
+                column.Item().Element(c => ComposeTotalRow(c, "PLATFORM FEE", platformFeeAmount));
 
                 column.Item().PaddingTop(2).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
 
                 column.Item().PaddingTop(2).Row(row =>
                 {
-                    row.RelativeItem().Text("HYCHARGE INVOICE TOTAL").Bold().FontSize(9);
-                    row.ConstantItem(90).AlignRight().Text(FormatCurrency(_invoice.GrandTotal)).Bold().FontSize(9);
+                    row.RelativeItem().Text("TAXABLE VALUE").Bold().FontSize(9);
+                    row.ConstantItem(90).AlignRight().Text(FormatCurrency(_invoice.TaxableValue)).Bold().FontSize(9);
                 });
 
-                column.Item().PaddingTop(4).Row(row =>
-                {
-                    row.RelativeItem().Text("PARTNER COST (informational, taxed by partner)").FontSize(9);
-                    row.ConstantItem(90).AlignRight().Text(FormatCurrency(_invoice.PartnerCost, _invoice.Currency)).FontSize(9);
-                });
+                column.Item().PaddingTop(4).Element(c => ComposeTotalRow(c, $"CGST ({_invoice.CgstRate:0.##}%)", _invoice.CgstAmount));
+                column.Item().Element(c => ComposeTotalRow(c, $"SGST ({_invoice.SgstRate:0.##}%)", _invoice.SgstAmount));
 
                 column.Item().PaddingTop(2).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
 

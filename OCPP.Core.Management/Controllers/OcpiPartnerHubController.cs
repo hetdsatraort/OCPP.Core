@@ -867,14 +867,17 @@ namespace OCPP.Core.Management.Controllers
         // ── Admin: Partner Session Listing / Detail ──────────────────────────
 
         /// <summary>
-        /// Admin-only listing of ALL partner (OCPI roaming) sessions across every user — unlike
-        /// <see cref="GetPartnerSessions"/> (scoped to the caller unless an explicit userId is
-        /// given), this always spans every user. Powers the admin "Partner Sessions" table,
-        /// enriched with the billed user's identity and whether an invoice has already been
-        /// generated (without forcing generation for still-active sessions).
+        /// Rich, paginated partner (OCPI roaming) session listing — this is the same rich
+        /// projection an admin uses to review sessions across every user, but a non-admin caller
+        /// is always scoped to their own sessions regardless of any userId passed in, so this
+        /// also serves as the end-user-facing session history behind the "Partner Sessions" page
+        /// (analogous to <see cref="ChargingSessionController.GetChargingSessions"/> for local
+        /// sessions). Unlike <see cref="GetPartnerSessions"/> — which returns a lighter shape and
+        /// only lets an admin widen scope via an explicit userId — an admin here may omit userId
+        /// entirely to see every user's sessions at once.
         /// </summary>
         [HttpGet("admin/sessions")]
-        [Authorize(Roles = "Administrator")]
+        [Authorize]
         public async Task<IActionResult> GetAdminPartnerSessions(
             [FromQuery] string? status = null,
             [FromQuery] string? userId = null,
@@ -884,12 +887,16 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
+                var callerUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var isAdmin = User.IsInRole("Administrator");
+                var effectiveUserId = isAdmin ? userId : callerUserId;
+
                 var query = _dbContext.OcpiPartnerSessions.AsQueryable();
 
                 if (!string.IsNullOrEmpty(status))
                     query = query.Where(s => s.Status == status.ToUpperInvariant());
-                if (!string.IsNullOrEmpty(userId))
-                    query = query.Where(s => s.UserId == userId);
+                if (!string.IsNullOrEmpty(effectiveUserId))
+                    query = query.Where(s => s.UserId == effectiveUserId);
                 if (partnerCredentialId.HasValue)
                     query = query.Where(s => s.PartnerCredentialId == partnerCredentialId.Value);
 
