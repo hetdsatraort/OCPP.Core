@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
+using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Models.ChargingHub;
 using OCPP.Core.Management.Models.ChargingSession;
 using OCPP.Core.Management.Models.UnifiedCharging;
@@ -717,6 +718,98 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "Error unlocking unified connector");
                 return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while unlocking the connector" });
+            }
+        }
+
+        /// <summary>
+        /// Link a user vehicle to a Local charging session. Partner (OCPI) sessions are not
+        /// supported — ChargingSessions.VehicleId has no equivalent column on the OCPI session
+        /// tables, so there's nowhere to persist the link for a partner session.
+        /// </summary>
+        [HttpPost("link-session-vehicle")]
+        [Authorize]
+        public async Task<IActionResult> LinkSessionVehicle([FromBody] UnifiedSessionVehicleLinkRequestDto request)
+        {
+            try
+            {
+                if (!UnifiedId.TryParse(request?.SessionId, out var provider, out var nativeId))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid or missing SessionId" });
+
+                if (provider == ProviderType.Partner)
+                {
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = false,
+                        Message = "Linking a vehicle is not supported for partner (OCPI) sessions in this deployment."
+                    });
+                }
+
+                var userCtl = CreateDelegate<UserController>();
+                var result = await userCtl.LinkSessionVehicle(new SessionVehicleLinkDto
+                {
+                    SessionId = nativeId,
+                    VehicleId = request.VehicleId
+                });
+
+                var (_, value) = ExtractResult(result);
+                var dto = value as SessionVehicleResponseDto;
+
+                return Ok(new UnifiedChargingResponseDto
+                {
+                    Success = dto?.Success ?? false,
+                    Message = dto?.Message,
+                    Data = dto?.Success == true
+                        ? new { SessionId = request.SessionId, Vehicle = dto.Vehicle }
+                        : null
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error linking vehicle to unified session");
+                return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while linking the vehicle to the session" });
+            }
+        }
+
+        /// <summary>
+        /// Get the vehicle linked to a Local charging session (Local only — see <see cref="LinkSessionVehicle"/>).
+        /// </summary>
+        [HttpGet("session-vehicle/{id}")]
+        [Authorize]
+        public async Task<IActionResult> GetSessionVehicle(string id)
+        {
+            try
+            {
+                if (!UnifiedId.TryParse(id, out var provider, out var nativeId))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid session id" });
+
+                if (provider == ProviderType.Partner)
+                {
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = false,
+                        Message = "Partner (OCPI) sessions do not support vehicle association in this deployment."
+                    });
+                }
+
+                var userCtl = CreateDelegate<UserController>();
+                var result = await userCtl.GetSessionVehicle(nativeId);
+
+                var (_, value) = ExtractResult(result);
+                var dto = value as SessionVehicleResponseDto;
+
+                return Ok(new UnifiedChargingResponseDto
+                {
+                    Success = dto?.Success ?? false,
+                    Message = dto?.Message,
+                    Data = dto?.Success == true
+                        ? new { SessionId = id, Vehicle = dto.Vehicle }
+                        : null
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving vehicle for unified session {Id}", id);
+                return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while retrieving the linked vehicle" });
             }
         }
 

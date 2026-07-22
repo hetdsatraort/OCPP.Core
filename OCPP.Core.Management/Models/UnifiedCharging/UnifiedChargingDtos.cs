@@ -177,4 +177,11 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         /// <summary>Composite connector id — Local only.</summary>
         public string ConnectorId { get; set; }
     }
+
+    public class UnifiedSessionVehicleLinkRequestDto
+    {
+        /// <summary>Composite session id — Local only ("L:{sessionRecId}").</summary>
+        public string SessionId { get; set; }
+        public string VehicleId { get; set; }
+    }
 }

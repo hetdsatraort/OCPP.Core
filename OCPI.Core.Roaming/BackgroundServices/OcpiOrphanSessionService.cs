@@ -25,6 +25,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
     ///      2. Session has no TransactionId and has been ACTIVE longer than
     ///         OrphanTimeoutSeconds (default 60) without being updated
     ///         → mark INVALID (charger never confirmed the start).
+    ///      3. Session has a TransactionId that never gets a StopTime because the charge point
+    ///         disconnects mid-charge (reboot, WebSocket drop, power loss, etc.) and never sends
+    ///         StopTransaction. Once the OCPP server confirms it's offline via ConnectionStatus
+    ///         and the last live meter update is older than DisconnectedSessionTimeoutSeconds
+    ///         (default 120), force-close it as COMPLETED using the last known energy reading
+    ///         (not INVALID — real energy was very likely delivered). Without this, neither of
+    ///         the above two cases ever fires and the session stays ACTIVE forever. The mirrored
+    ///         eMSP-side OcpiPartnerSession (same SessionId — only possible when the "partner" is
+    ///         actually us, i.e. a self-partner OCPI test setup) is force-closed in the same pass
+    ///         rather than relying on the completion push reaching it, so both sides flip
+    ///         together even if that push fails.
     /// </summary>
     public class OcpiOrphanSessionService : BackgroundService
     {
@@ -33,6 +44,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly IConfiguration _configuration;
         private readonly TimeSpan _checkInterval;
         private readonly TimeSpan _orphanTimeout;
+        private readonly TimeSpan _disconnectedSessionTimeout;
 
         // Mirrors OcpiSyncBackgroundService._jsonOptions — JsonStringEnumMemberConverterV2 must be
         // the only enum converter registered so it isn't shadowed for OCPI.Net enums like
@@ -55,9 +67,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
             var timeouSeconds = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
+            var disconnectedSeconds = configuration.GetValue<int>("OCPI:DisconnectedSessionTimeoutSeconds", 120);
 
             _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
             _orphanTimeout = TimeSpan.FromSeconds(timeouSeconds);
+            _disconnectedSessionTimeout = TimeSpan.FromSeconds(disconnectedSeconds);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -159,10 +173,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
+            // Confirmed via the OCPP server's own ConnectionStatus — used below to force-close a
+            // session whose transaction never gets a StopTime because the charge point dropped
+            // off mid-charge. A stale ConnectorStatuses reading alone isn't a safe enough signal
+            // (a still-connected charger can just be slow to report), so this requires the
+            // stronger, independent "actually offline" confirmation.
+            var onlineChargePoints = chargePointIds.Count > 0
+                ? await GetOnlineChargePointsForNotifyAsync(httpFactory, chargePointIds, ct)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             // ── Process each session ──────────────────────────────────────────────
 
             int liveUpdated = 0;
             int closedByTx = 0;
+            int closedAsDisconnected = 0;
             int closedAsInvalid = 0;
             var completedChargePointIds = new List<string>();
             var completedPartnerSessions = new List<OcpiHostedSession>();
@@ -249,6 +273,47 @@ namespace OCPI.Core.Roaming.BackgroundServices
                                 tx.MeterStart, liveEnergy, session.TotalCost);
                         }
 
+                        // ── Charge point confirmed offline mid-session → force-close ──────────
+                        // The charger dropped off (reboot, WebSocket drop, power loss) without ever
+                        // sending StopTransaction, so tx.StopTime will never arrive on its own and
+                        // this session would otherwise stay ACTIVE forever — neither the "closedByTx"
+                        // branch above (needs tx.StopTime) nor the no-TransactionId orphan check below
+                        // (only applies before a transaction exists) ever catches it. Close it using
+                        // the last known-good energy reading rather than discarding it as INVALID —
+                        // real energy was very likely delivered before the disconnect.
+                        bool chargePointOffline = !onlineChargePoints.Contains(session.ChargePointId);
+                        if (chargePointOffline && DateTime.UtcNow - session.LastUpdated >= _disconnectedSessionTimeout)
+                        {
+                            session.Status = "COMPLETED";
+                            session.EndDateTime = session.LastUpdated;
+
+                            var gunForCost = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
+                            if (gunForCost != null && double.TryParse(gunForCost.ChargerTariff, out var offlineTariff))
+                                session.TotalCost = Math.Round((session.TotalEnergy ?? 0m) * (decimal)offlineTariff, 2);
+
+                            session.LastUpdated = DateTime.UtcNow;
+                            closedAsDisconnected++;
+
+                            tx.StopTime = session.EndDateTime;
+                            tx.MeterStop = tx.MeterStart + (double)(session.TotalEnergy ?? 0m);
+                            tx.StopReason = "ChargePointDisconnected";
+
+                            if (!string.IsNullOrEmpty(session.ChargePointId))
+                                completedChargePointIds.Add(session.ChargePointId);
+
+                            if (session.PartnerCredentialId.HasValue)
+                                completedPartnerSessions.Add(session);
+
+                            _logger.LogWarning(
+                                "OcpiOrphanSessionService: force-closed session {SessionId} (TxId={TxId}) — " +
+                                "charge point {ChargePointId} confirmed offline, no live update since {LastUpdated} " +
+                                "(energy={Energy} kWh)",
+                                session.SessionId, tx.TransactionId, session.ChargePointId,
+                                session.EndDateTime, session.TotalEnergy);
+
+                            continue;
+                        }
+
                         // SoC (0–100%) from the OCPP server's cached MeterValues, when the charger
                         // reports it (typically DC fast chargers). Not gated on connStatus/meter
                         // above — the charger may report SoC in a MeterValues sample even between
@@ -311,8 +376,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
             }
 
             _logger.LogInformation(
-                "OcpiOrphanSessionService: cycle done — live-updated: {Live}, completed: {Tx}, invalidated: {Inv}",
-                liveUpdated, closedByTx, closedAsInvalid);
+                "OcpiOrphanSessionService: cycle done — live-updated: {Live}, completed: {Tx}, " +
+                "force-closed (disconnected): {Disc}, invalidated: {Inv}",
+                liveUpdated, closedByTx, closedAsDisconnected, closedAsInvalid);
         }
 
         // ── Real-time CDR generation + push to EMSP partners (CPO role) ──────────
