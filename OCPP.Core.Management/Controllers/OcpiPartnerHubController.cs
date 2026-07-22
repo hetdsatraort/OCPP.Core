@@ -858,6 +858,258 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        // ── Admin: Partner Session Listing / Detail ──────────────────────────
+
+        /// <summary>
+        /// Admin-only listing of ALL partner (OCPI roaming) sessions across every user — unlike
+        /// <see cref="GetPartnerSessions"/> (scoped to the caller unless an explicit userId is
+        /// given), this always spans every user. Powers the admin "Partner Sessions" table,
+        /// enriched with the billed user's identity and whether an invoice has already been
+        /// generated (without forcing generation for still-active sessions).
+        /// </summary>
+        [HttpGet("admin/sessions")]
+        [Authorize(Roles = "Administrator")]
+        public async Task<IActionResult> GetAdminPartnerSessions(
+            [FromQuery] string? status = null,
+            [FromQuery] string? userId = null,
+            [FromQuery] int? partnerCredentialId = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
+        {
+            try
+            {
+                var query = _dbContext.OcpiPartnerSessions.AsQueryable();
+
+                if (!string.IsNullOrEmpty(status))
+                    query = query.Where(s => s.Status == status.ToUpperInvariant());
+                if (!string.IsNullOrEmpty(userId))
+                    query = query.Where(s => s.UserId == userId);
+                if (partnerCredentialId.HasValue)
+                    query = query.Where(s => s.PartnerCredentialId == partnerCredentialId.Value);
+
+                var totalCount = await query.CountAsync();
+
+                var sessions = await query
+                    .OrderByDescending(s => s.StartDateTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var locationIds = sessions.Select(s => s.LocationId).Where(x => x != null).Distinct().ToList();
+                var locations = await _dbContext.OcpiPartnerLocations
+                    .Where(l => locationIds.Contains(l.LocationId))
+                    .ToListAsync();
+
+                var partnerIds = sessions
+                    .Where(s => s.PartnerCredentialId.HasValue)
+                    .Select(s => s.PartnerCredentialId!.Value)
+                    .Union(locations.Select(l => l.PartnerCredentialId))
+                    .Distinct().ToList();
+                var partners = await _dbContext.OcpiPartnerCredentials
+                    .Where(p => partnerIds.Contains(p.Id))
+                    .ToDictionaryAsync(p => p.Id, p => p);
+
+                var userIds = sessions.Select(s => s.UserId).Where(x => x != null).Distinct().ToList();
+                var users = await _dbContext.Users
+                    .Where(u => userIds.Contains(u.RecId))
+                    .ToDictionaryAsync(u => u.RecId, u => u);
+
+                var sessionDbIds = sessions.Select(s => s.Id).ToList();
+                var invoiceNumbers = await _dbContext.OcpiPartnerSessionInvoices
+                    .Where(i => sessionDbIds.Contains(i.OcpiPartnerSessionId))
+                    .ToDictionaryAsync(i => i.OcpiPartnerSessionId, i => i.InvoiceNumber);
+
+                var result = sessions.Select(s =>
+                {
+                    var loc = locations.FirstOrDefault(l => l.LocationId == s.LocationId);
+                    var partnerCredId = s.PartnerCredentialId ?? loc?.PartnerCredentialId;
+                    var partner = partnerCredId.HasValue && partners.TryGetValue(partnerCredId.Value, out var p) ? p : null;
+                    var user = s.UserId != null && users.TryGetValue(s.UserId, out var u) ? u : null;
+                    var elapsed = (s.EndDateTime ?? DateTime.UtcNow) - s.StartDateTime;
+
+                    return new
+                    {
+                        sessionId = s.SessionId,
+                        status = s.Status,
+                        startDateTime = s.StartDateTime,
+                        endDateTime = s.EndDateTime,
+                        totalEnergyKwh = s.TotalEnergy,
+                        totalCost = s.TotalCost,
+                        currency = s.Currency,
+                        durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
+                        ocpiLocationId = s.LocationId,
+                        locationName = loc?.Name ?? "Partner Station",
+                        locationCity = loc?.City,
+                        partnerCredentialId = partnerCredId,
+                        partnerName = partner?.BusinessName,
+                        evseUid = s.EvseUid,
+                        connectorId = s.ConnectorId,
+                        userId = s.UserId,
+                        userName = user != null ? $"{user.FirstName} {user.LastName}".Trim() : null,
+                        userEmail = user?.EMailID,
+                        userPhone = user?.PhoneNumber,
+                        invoiceNumber = invoiceNumbers.TryGetValue(s.Id, out var inv) ? inv : null,
+                    };
+                });
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        totalCount,
+                        page,
+                        pageSize,
+                        totalPages = (int)Math.Ceiling((double)totalCount / pageSize),
+                        sessions = result
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving admin partner sessions");
+                return Ok(new { success = false, message = "Error retrieving partner sessions" });
+            }
+        }
+
+        /// <summary>
+        /// Rich single-session detail for the admin Partner Sessions view — mirrors the level of
+        /// detail <see cref="ChargingSessionController.GetChargingSessionDetails"/> provides for
+        /// local sessions, adapted for OCPI roaming: the partner CPO's reported cost is
+        /// informational only, and the taxable line item is HyCharge's own platform fee (see
+        /// <see cref="IPartnerInvoiceService"/>). Cost/invoice fields only populate once the
+        /// session is billable (TotalCost present and > 0) — this lazily creates the invoice the
+        /// same way the existing session-scoped invoice endpoints do, so viewing a completed
+        /// session's details for the first time is what actually generates its invoice number.
+        /// </summary>
+        [HttpGet("admin/sessions/{sessionId}")]
+        [Authorize]
+        public async Task<IActionResult> GetAdminPartnerSessionDetails(string sessionId)
+        {
+            try
+            {
+                var session = await _dbContext.OcpiPartnerSessions
+                    .FirstOrDefaultAsync(s => s.SessionId == sessionId);
+                if (session == null)
+                    return Ok(new { success = false, message = "Partner session not found" });
+
+                var callerUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (!User.IsInRole("Administrator") && session.UserId != callerUserId)
+                    return Forbid();
+
+                var location = await _dbContext.OcpiPartnerLocations
+                    .FirstOrDefaultAsync(l => l.LocationId == session.LocationId);
+                var partnerCredId = session.PartnerCredentialId ?? location?.PartnerCredentialId;
+                var partner = partnerCredId.HasValue
+                    ? await _dbContext.OcpiPartnerCredentials.FirstOrDefaultAsync(p => p.Id == partnerCredId.Value)
+                    : null;
+                var user = session.UserId != null
+                    ? await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId)
+                    : null;
+
+                var elapsed = (session.EndDateTime ?? DateTime.UtcNow) - session.StartDateTime;
+                bool isActive = string.Equals(session.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+
+                object costDetails = null;
+                string invoiceNumber = null;
+                if (session.TotalCost.HasValue && session.TotalCost.Value > 0)
+                {
+                    try
+                    {
+                        var invoice = await _partnerInvoiceService.GetOrCreateInvoiceAsync(session);
+                        invoiceNumber = invoice.InvoiceNumber;
+                        costDetails = new
+                        {
+                            partnerCost = invoice.PartnerCost,
+                            platformFeePerKwh = invoice.PricePerUnit,
+                            taxableValue = invoice.TaxableValue,
+                            cgstRate = invoice.CgstRate,
+                            cgstAmount = invoice.CgstAmount,
+                            sgstRate = invoice.SgstRate,
+                            sgstAmount = invoice.SgstAmount,
+                            grandTotal = invoice.GrandTotal,
+                            totalPayable = invoice.TotalPayable,
+                            currency = session.Currency ?? "INR"
+                        };
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        _logger.LogWarning(ex, "Could not compute invoice preview for partner session {SessionId}", sessionId);
+                    }
+                }
+
+                var walletTx = session.UserId != null
+                    ? await _dbContext.WalletTransactionLogs
+                        .Where(w => w.UserId == session.UserId && w.Active == 1
+                            && w.AdditionalInfo1 != null && w.AdditionalInfo1.Contains(session.SessionId))
+                        .OrderByDescending(w => w.CreatedOn)
+                        .FirstOrDefaultAsync()
+                    : null;
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        sessionId = session.SessionId,
+                        status = session.Status,
+                        isActive,
+                        startDateTime = session.StartDateTime,
+                        endDateTime = session.EndDateTime,
+                        durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
+                        totalEnergyKwh = session.TotalEnergy,
+                        currency = session.Currency ?? "INR",
+                        currentStateOfCharge = session.CurrentStateOfCharge,
+                        stateOfChargeLastUpdate = session.StateOfChargeLastUpdate,
+                        location = new
+                        {
+                            ocpiLocationId = session.LocationId,
+                            name = location?.Name ?? "Partner Station",
+                            address = location?.Address,
+                            city = location?.City,
+                            country = location?.Country
+                        },
+                        partner = partner != null ? new
+                        {
+                            partnerCredentialId = partner.Id,
+                            businessName = partner.BusinessName,
+                            countryCode = partner.CountryCode,
+                            partyId = partner.PartyId
+                        } : null,
+                        evseUid = session.EvseUid,
+                        connectorId = session.ConnectorId,
+                        user = user != null ? new
+                        {
+                            userId = user.RecId,
+                            name = $"{user.FirstName} {user.LastName}".Trim(),
+                            email = user.EMailID,
+                            phone = user.PhoneNumber
+                        } : null,
+                        energyLimit = session.EnergyLimit,
+                        costLimit = session.CostLimit,
+                        timeLimit = session.TimeLimit,
+                        batteryIncreaseLimit = session.BatteryIncreaseLimit,
+                        limitViolationHandled = session.LimitViolationHandled,
+                        invoiceNumber,
+                        costDetails,
+                        walletTransaction = walletTx != null ? new
+                        {
+                            recId = walletTx.RecId,
+                            additionalInfo1 = walletTx.AdditionalInfo1,
+                            additionalInfo2 = walletTx.AdditionalInfo2,
+                            additionalInfo3 = walletTx.AdditionalInfo3,
+                            createdOn = walletTx.CreatedOn
+                        } : null
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving admin partner session details for {SessionId}", sessionId);
+                return Ok(new { success = false, message = "Error retrieving session details" });
+            }
+        }
+
         // ── Mapping helpers ───────────────────────────────────────────────────
 
         private static object MapLocationToHubDto(
