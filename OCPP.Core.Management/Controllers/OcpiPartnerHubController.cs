@@ -569,13 +569,19 @@ namespace OCPP.Core.Management.Controllers
 
                 var result = await resp.Content.ReadFromJsonAsync<JsonElement>();
 
-                // The roaming service waits for the partner CPO to confirm completion before
-                // responding (see OcpiAdminController.EmspStopSession), so by the time we get here
-                // the session row may already carry the final TotalCost. Bill it immediately rather
-                // than waiting for OcpiOrphanSessionService's next tick. Re-read from the DB — the
-                // roaming service updated it through its own DbContext/process.
+                // EmspStopSession only fires the OCPI STOP_SESSION command and returns as soon as
+                // it's accepted/rejected by the partner CPO — it does NOT wait for the charge point
+                // to actually stop (that arrives later, asynchronously, via the CPO's Session push
+                // setting EndDateTime). Re-read from the DB in case a fast partner already pushed
+                // the completed state in the meantime, but only bill here if the session has
+                // actually completed — billing based on a merely-present TotalCost (which can
+                // already be populated from live in-progress updates) would mark
+                // LimitViolationHandled on a still-ACTIVE session and permanently block
+                // OcpiOrphanSessionService from ever finishing it once the real completion does
+                // arrive, since nothing would be left to flip LimitViolationHandled correctly.
                 await _dbContext.Entry(session).ReloadAsync();
-                if (!session.LimitViolationHandled && session.TotalCost.HasValue && session.TotalCost.Value > 0)
+                if (!session.LimitViolationHandled && session.EndDateTime.HasValue
+                    && session.TotalCost.HasValue && session.TotalCost.Value > 0)
                 {
                     await ApplyPartnerSessionWalletDeductionAsync(session);
                 }

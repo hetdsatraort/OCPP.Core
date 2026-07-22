@@ -251,6 +251,16 @@ namespace OCPI.Core.Roaming.BackgroundServices
                             var liveEnergy = (decimal)Math.Round(
                                 connStatus.LastMeter.Value - tx.MeterStart, 4);
 
+                            // Only treat this as a genuine live update — and only bump LastUpdated —
+                            // when the meter reading actually advanced since the last tick. Once a
+                            // charge point disconnects, its ConnectorStatuses row just sits there
+                            // forever still satisfying the condition above, so unconditionally
+                            // refreshing LastUpdated on every ~10s tick would keep resetting the
+                            // staleness clock and the disconnected-session force-close check below
+                            // could never accumulate enough age to fire — the session would stay
+                            // ACTIVE forever even though nothing new is actually happening.
+                            bool energyAdvanced = session.TotalEnergy != liveEnergy;
+
                             session.TotalEnergy = liveEnergy;
 
                             // Running cost (excl. VAT) — previously never computed for ACTIVE
@@ -260,17 +270,20 @@ namespace OCPI.Core.Roaming.BackgroundServices
                             if (gun != null && double.TryParse(gun.ChargerTariff, out var tariffRate))
                                 session.TotalCost = Math.Round(liveEnergy * (decimal)tariffRate, 2);
 
-                            session.LastUpdated = DateTime.UtcNow;
-                            liveUpdated++;
+                            if (energyAdvanced)
+                            {
+                                session.LastUpdated = DateTime.UtcNow;
+                                liveUpdated++;
 
-                            if (session.PartnerCredentialId.HasValue)
-                                liveUpdatedPartnerSessions.Add(session);
+                                if (session.PartnerCredentialId.HasValue)
+                                    liveUpdatedPartnerSessions.Add(session);
 
-                            _logger.LogDebug(
-                                "OcpiOrphanSessionService: live update session {SessionId} — " +
-                                "meter={Meter} start={Start} energy={Energy} kWh, cost={Cost}",
-                                session.SessionId, connStatus.LastMeter.Value,
-                                tx.MeterStart, liveEnergy, session.TotalCost);
+                                _logger.LogDebug(
+                                    "OcpiOrphanSessionService: live update session {SessionId} — " +
+                                    "meter={Meter} start={Start} energy={Energy} kWh, cost={Cost}",
+                                    session.SessionId, connStatus.LastMeter.Value,
+                                    tx.MeterStart, liveEnergy, session.TotalCost);
+                            }
                         }
 
                         // ── Charge point confirmed offline mid-session → force-close ──────────
