@@ -11,7 +11,7 @@ namespace OCPI.Core.Roaming.Services
     /// calls the internal endpoint it exposes for that, rather than keeping its own duplicate
     /// copy of the tax math in sync.
     /// </summary>
-    public class PartnerInvoiceClient
+    public class PartnerInvoiceClient : IPartnerInvoiceClient
     {
         private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 

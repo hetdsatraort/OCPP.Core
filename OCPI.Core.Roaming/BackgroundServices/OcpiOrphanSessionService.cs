@@ -1111,7 +1111,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
             var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
-            var invoiceClient = scope.ServiceProvider.GetRequiredService<PartnerInvoiceClient>();
+            var invoiceClient = scope.ServiceProvider.GetRequiredService<IPartnerInvoiceClient>();
 
             var activeSessions = await db.OcpiPartnerSessions
                 .Where(s => s.Status == "ACTIVE")
@@ -1485,7 +1485,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         /// <see cref="OCPP.Core.Database.EVCDTO.WalletTransactionLog"/> entry. The fee/GST math
         /// itself is computed by OCPP.Core.Management (which owns PartnerInvoiceService) — this
         /// service doesn't reference Management, so it calls back into it via
-        /// <see cref="PartnerInvoiceClient"/> rather than duplicating that logic locally.
+        /// <see cref="IPartnerInvoiceClient"/> rather than duplicating that logic locally.
         /// Mutates <paramref name="walletBalancesDict"/> so subsequent sessions in the same cycle
         /// see the updated balance.
         /// Returns false (without billing) if the invoice couldn't be obtained — e.g. the
@@ -1494,7 +1494,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         /// </summary>
         private async Task<bool> ApplyPartnerSessionBillingAsync(
             OCPPCoreContext db,
-            PartnerInvoiceClient invoiceClient,
+            IPartnerInvoiceClient invoiceClient,
             OcpiPartnerSession session,
             Dictionary<string, string> walletBalancesDict,
             Dictionary<string, OCPP.Core.Database.EVCDTO.Users> usersDict,
