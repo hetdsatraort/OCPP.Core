@@ -887,6 +887,7 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.Currency).HasMaxLength(3);
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.TotalPayable).HasColumnType("decimal(18,2)");
 
                 // ── App-side eMSP tracking columns ────────────────────────────
                 entity.Property(e => e.UserId).HasMaxLength(250).IsRequired(false);

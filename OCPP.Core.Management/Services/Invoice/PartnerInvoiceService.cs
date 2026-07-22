@@ -67,6 +67,13 @@ namespace OCPP.Core.Management.Services.Invoice
                 .FirstOrDefaultAsync(i => i.OcpiPartnerSessionId == session.Id && i.Active == 1);
             if (existing != null)
             {
+                // Backfills TotalPayable on sessions whose invoice was generated before this
+                // column existed, and is a harmless no-op (EF skips the UPDATE) otherwise.
+                if (session.TotalPayable != existing.TotalPayable)
+                {
+                    session.TotalPayable = existing.TotalPayable;
+                    await _dbContext.SaveChangesAsync();
+                }
                 return existing;
             }
 
@@ -96,6 +103,10 @@ namespace OCPP.Core.Management.Services.Invoice
             decimal sgstAmount = Math.Round(taxableValue * SgstRate / 100m, 2, MidpointRounding.AwayFromZero);
             decimal grandTotal = taxableValue + cgstAmount + sgstAmount;
             decimal totalPayable = grandTotal;
+
+            // Persisted directly on the session (in addition to the invoice row below) so the
+            // session-listing APIs can surface it without needing to look up the invoice.
+            session.TotalPayable = totalPayable;
 
             OcpiPartnerCredential partner = null;
             if (session.PartnerCredentialId.HasValue)

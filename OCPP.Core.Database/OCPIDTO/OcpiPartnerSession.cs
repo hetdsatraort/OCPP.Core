@@ -95,6 +95,15 @@ namespace OCPP.Core.Database.OCPIDTO
         public decimal? TotalCost { get; set; }
 
         /// <summary>
+        /// Full amount actually payable/debited from the user's wallet for this session — the
+        /// partner's own reported <see cref="TotalCost"/> plus HyCharge's platform fee and 9%
+        /// CGST + 9% SGST on the combined amount. Populated once the session's invoice has been
+        /// computed (see PartnerInvoiceService in OCPP.Core.Management); null until then, e.g.
+        /// while the session is still active or has no reported cost yet.
+        /// </summary>
+        public decimal? TotalPayable { get; set; }
+
+        /// <summary>
         /// Partner credential ID (foreign key) — identifies which CPO partner sent this session data.
         /// </summary>
         public int? PartnerCredentialId { get; set; }

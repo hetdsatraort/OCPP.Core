@@ -725,6 +725,10 @@ namespace OCPP.Core.Management.Controllers
                         endDateTime = s.EndDateTime,
                         totalEnergyKwh = s.TotalEnergy,
                         totalCost = s.TotalCost,
+                        // Full amount actually payable (partner cost + platform fee + GST) —
+                        // null until the session's invoice has been computed (see
+                        // PartnerInvoiceService), e.g. while still ACTIVE.
+                        totalPayable = s.TotalPayable,
                         currency = s.Currency,
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
                         // Battery — only populated when the partner CPO reports a STATE_OF_CHARGE
@@ -948,6 +952,7 @@ namespace OCPP.Core.Management.Controllers
                         endDateTime = s.EndDateTime,
                         totalEnergyKwh = s.TotalEnergy,
                         totalCost = s.TotalCost,
+                        totalPayable = s.TotalPayable,
                         currency = s.Currency,
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
                         ocpiLocationId = s.LocationId,
@@ -1071,6 +1076,8 @@ namespace OCPP.Core.Management.Controllers
                         endDateTime = session.EndDateTime,
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
                         totalEnergyKwh = session.TotalEnergy,
+                        totalCost = session.TotalCost,
+                        totalPayable = session.TotalPayable,
                         currency = session.Currency ?? "INR",
                         currentStateOfCharge = session.CurrentStateOfCharge,
                         stateOfChargeLastUpdate = session.StateOfChargeLastUpdate,
