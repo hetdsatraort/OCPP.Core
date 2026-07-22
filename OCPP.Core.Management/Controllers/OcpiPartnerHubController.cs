@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
+using OCPP.Core.Management.Services.Invoice;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -37,17 +38,20 @@ namespace OCPP.Core.Management.Controllers
         private readonly ILogger<OcpiPartnerHubController> _logger;
         private readonly IConfiguration _config;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IPartnerInvoiceService _partnerInvoiceService;
 
         public OcpiPartnerHubController(
             OCPPCoreContext dbContext,
             ILogger<OcpiPartnerHubController> logger,
             IConfiguration config,
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            IPartnerInvoiceService partnerInvoiceService)
         {
             _dbContext = dbContext;
             _logger = logger;
             _config = config;
             _httpClientFactory = httpClientFactory;
+            _partnerInvoiceService = partnerInvoiceService;
         }
 
         // ── Hub (Partner Location) Listing ────────────────────────────────────
@@ -586,15 +590,18 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
-        /// Debits <c>session.TotalCost</c> (tax-inclusive, as reported by the partner CPO) from the
-        /// user's wallet and marks the session handled, mirroring
-        /// OcpiOrphanSessionService.ApplyPartnerSessionBilling so the session isn't billed twice
-        /// when that background service later sees the same completed/handled session.
+        /// Debits <c>session.TotalCost</c> plus HyCharge's own platform fee (+ 9% CGST + 9% SGST
+        /// on the fee, via <see cref="PartnerInvoiceService"/>) from the user's wallet and marks
+        /// the session handled, mirroring OcpiOrphanSessionService.ApplyPartnerSessionBillingAsync
+        /// so the session isn't billed twice when that background service later sees the same
+        /// completed/handled session.
         /// </summary>
         private async Task ApplyPartnerSessionWalletDeductionAsync(OcpiPartnerSession session)
         {
             if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
                 return;
+
+            var invoice = await _partnerInvoiceService.GetOrCreateInvoiceAsync(session);
 
             var lastWalletTx = await _dbContext.WalletTransactionLogs
                 .Where(w => w.UserId == session.UserId && w.Active == 1)
@@ -605,7 +612,7 @@ namespace OCPP.Core.Management.Controllers
             if (lastWalletTx != null && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out var lastBalance))
                 previousBalance = lastBalance;
 
-            decimal totalFee = session.TotalCost.Value;
+            decimal totalFee = invoice.TotalPayable;
             decimal newBalance = previousBalance - totalFee;
 
             if (newBalance < 0)
@@ -626,8 +633,8 @@ namespace OCPP.Core.Management.Controllers
                 // row there, so setting this to session.SessionId violates FK_WalletTransactionLog_ChargingSession.
                 // The OCPI session id is already captured in AdditionalInfo1 below.
                 ChargingSessionId = null,
-                AdditionalInfo1 = $"OCPI partner session stopped — {session.SessionId}",
-                AdditionalInfo2 = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}",
+                AdditionalInfo1 = $"OCPI partner session stopped — {session.SessionId} | Invoice: {invoice.InvoiceNumber}",
+                AdditionalInfo2 = $"Energy: {session.TotalEnergy:F3} kWh | Partner cost: {invoice.PartnerCost:F2} {session.Currency} | Platform fee+GST: {invoice.GrandTotal:F2}",
                 AdditionalInfo3 = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
                 Active = 1,
                 CreatedOn = DateTime.UtcNow,
@@ -951,6 +958,84 @@ namespace OCPP.Core.Management.Controllers
 
         private static double ToRadians(double degrees) => degrees * Math.PI / 180.0;
 
+        // ── Admin: Platform Fee Configuration ─────────────────────────────────
+
+        /// <summary>
+        /// Gets the current per-kWh platform fee HyCharge charges on top of this partner's own
+        /// session cost for roaming sessions. Returns zero/inactive if never configured.
+        /// </summary>
+        [HttpGet("{partnerCredentialId}/platform-fee")]
+        [Authorize(Roles = "Administrator")]
+        public async Task<IActionResult> GetPlatformFee(int partnerCredentialId)
+        {
+            var partnerExists = await _dbContext.OcpiPartnerCredentials
+                .AnyAsync(p => p.Id == partnerCredentialId);
+            if (!partnerExists)
+                return NotFound(new { success = false, message = "Partner not found" });
+
+            var fee = await _dbContext.OcpiPartnerPlatformFees
+                .AsNoTracking()
+                .FirstOrDefaultAsync(f => f.PartnerCredentialId == partnerCredentialId);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    partnerCredentialId,
+                    feePerKwh = fee?.FeePerKwh ?? 0m,
+                    isActive = fee?.IsActive ?? false
+                }
+            });
+        }
+
+        /// <summary>
+        /// Sets (or updates) the per-kWh platform fee for a partner. A fee of 0 / IsActive=false
+        /// means no platform fee is charged on that partner's roaming sessions.
+        /// </summary>
+        [HttpPut("{partnerCredentialId}/platform-fee")]
+        [Authorize(Roles = "Administrator")]
+        public async Task<IActionResult> SetPlatformFee(int partnerCredentialId, [FromBody] PlatformFeeUpdateDto request)
+        {
+            var partnerExists = await _dbContext.OcpiPartnerCredentials
+                .AnyAsync(p => p.Id == partnerCredentialId);
+            if (!partnerExists)
+                return NotFound(new { success = false, message = "Partner not found" });
+
+            if (request.FeePerKwh < 0)
+                return BadRequest(new { success = false, message = "FeePerKwh cannot be negative" });
+
+            var fee = await _dbContext.OcpiPartnerPlatformFees
+                .FirstOrDefaultAsync(f => f.PartnerCredentialId == partnerCredentialId);
+
+            if (fee == null)
+            {
+                fee = new OCPP.Core.Database.OCPIDTO.OcpiPartnerPlatformFee
+                {
+                    PartnerCredentialId = partnerCredentialId,
+                    FeePerKwh = request.FeePerKwh,
+                    IsActive = request.IsActive,
+                    CreatedOn = DateTime.UtcNow,
+                    LastUpdated = DateTime.UtcNow
+                };
+                _dbContext.OcpiPartnerPlatformFees.Add(fee);
+            }
+            else
+            {
+                fee.FeePerKwh = request.FeePerKwh;
+                fee.IsActive = request.IsActive;
+                fee.LastUpdated = DateTime.UtcNow;
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                data = new { partnerCredentialId, feePerKwh = fee.FeePerKwh, isActive = fee.IsActive }
+            });
+        }
+
         // ── Request DTOs ──────────────────────────────────────────────────────
 
         public class PartnerHubSearchDto
@@ -994,6 +1079,13 @@ namespace OCPP.Core.Management.Controllers
         public class PartnerSessionStopDto
         {
             public string SessionId { get; set; } = string.Empty;
+        }
+
+        public class PlatformFeeUpdateDto
+        {
+            /// <summary>Platform fee in INR per kWh delivered on this partner's roaming sessions.</summary>
+            public decimal FeePerKwh { get; set; }
+            public bool IsActive { get; set; } = true;
         }
 
     }

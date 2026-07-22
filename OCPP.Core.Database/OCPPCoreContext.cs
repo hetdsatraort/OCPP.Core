@@ -73,6 +73,8 @@ namespace OCPP.Core.Database
         public virtual DbSet<OCPIDTO.OcpiCdr> OcpiCdrs { get; set; }
         public virtual DbSet<OCPIDTO.OcpiTariff> OcpiTariffs { get; set; }
         public virtual DbSet<OCPIDTO.OcpiToken> OcpiTokens { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerPlatformFee> OcpiPartnerPlatformFees { get; set; }
+        public virtual DbSet<OCPIDTO.OcpiPartnerSessionInvoice> OcpiPartnerSessionInvoices { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -1116,6 +1118,80 @@ namespace OCPP.Core.Database
                     .IsRequired(false)
                     .OnDelete(DeleteBehavior.Restrict)
                     .HasConstraintName("FK_SessionInvoice_Users");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerPlatformFee>(entity =>
+            {
+                entity.ToTable("OcpiPartnerPlatformFee");
+                entity.HasKey(e => e.Id);
+
+                entity.HasIndex(e => e.PartnerCredentialId)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerPlatformFee_PartnerCredentialId");
+
+                entity.Property(e => e.FeePerKwh).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.IsActive).HasDefaultValue(true);
+
+                entity.HasOne(e => e.PartnerCredential)
+                    .WithMany()
+                    .HasForeignKey(e => e.PartnerCredentialId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName("FK_OcpiPartnerPlatformFee_PartnerCredential");
+            });
+
+            modelBuilder.Entity<OCPIDTO.OcpiPartnerSessionInvoice>(entity =>
+            {
+                entity.HasKey(e => e.RecId);
+                entity.ToTable("OcpiPartnerSessionInvoice");
+
+                entity.Property(e => e.RecId).HasMaxLength(50);
+                entity.Property(e => e.InvoiceNumber).IsRequired().HasMaxLength(50);
+                entity.Property(e => e.SessionId).HasMaxLength(36);
+                entity.Property(e => e.UserId).HasMaxLength(50);
+                entity.Property(e => e.PartnerName).HasMaxLength(200);
+
+                entity.Property(e => e.BilledToName).HasMaxLength(200);
+                entity.Property(e => e.BilledToPhone).HasMaxLength(30);
+                entity.Property(e => e.BilledToEmail).HasMaxLength(200);
+
+                entity.Property(e => e.Currency).HasMaxLength(3);
+
+                entity.Property(e => e.Description).HasMaxLength(200);
+                entity.Property(e => e.SacCode).HasMaxLength(20);
+
+                entity.Property(e => e.EnergyConsumedKwh).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.PartnerCost).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.PricePerUnit).HasColumnType("decimal(18,4)");
+                entity.Property(e => e.TaxableValue).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.CgstRate).HasColumnType("decimal(5,2)");
+                entity.Property(e => e.CgstAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.SgstRate).HasColumnType("decimal(5,2)");
+                entity.Property(e => e.SgstAmount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.GrandTotal).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.TotalPayable).HasColumnType("decimal(18,2)");
+
+                entity.Property(e => e.Active).HasDefaultValue(1);
+
+                entity.HasIndex(e => e.InvoiceNumber)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerSessionInvoice_InvoiceNumber");
+
+                entity.HasIndex(e => e.OcpiPartnerSessionId)
+                    .IsUnique()
+                    .HasDatabaseName("IX_OcpiPartnerSessionInvoice_OcpiPartnerSessionId");
+
+                entity.HasOne<OCPIDTO.OcpiPartnerSession>()
+                    .WithMany()
+                    .HasForeignKey(e => e.OcpiPartnerSessionId)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_OcpiPartnerSessionInvoice_OcpiPartnerSession");
+
+                entity.HasOne<EVCDTO.Users>()
+                    .WithMany()
+                    .HasForeignKey(e => e.UserId)
+                    .IsRequired(false)
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName("FK_OcpiPartnerSessionInvoice_Users");
             });
 
             OnModelCreatingPartial(modelBuilder);

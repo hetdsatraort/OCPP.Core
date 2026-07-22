@@ -1111,6 +1111,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<OCPPCoreContext>();
             var httpFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+            var invoiceClient = scope.ServiceProvider.GetRequiredService<PartnerInvoiceClient>();
 
             var activeSessions = await db.OcpiPartnerSessions
                 .Where(s => s.Status == "ACTIVE")
@@ -1209,11 +1210,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         && session.TotalCost.HasValue
                         && session.TotalCost > 0)
                     {
-                        ApplyPartnerSessionBilling(
-                            session, walletBalancesDict, usersDict,
+                        bool billed = await ApplyPartnerSessionBillingAsync(
+                            db, invoiceClient, session, walletBalancesDict, usersDict,
                             walletsToAdd, usersToUpdate,
-                            violationReason: null);
-                        session.LimitViolationHandled = true;
+                            violationReason: null, ct);
+                        if (billed)
+                        {
+                            session.LimitViolationHandled = true;
+                        }
                     }
 
                     _logger.LogInformation(
@@ -1301,16 +1305,23 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 // set it here) so the "Partner has set EndDateTime" branch above can still bill the
                 // session once the partner reports the final cost on a later sync — otherwise this
                 // session would be marked handled with zero billed and never charged at all.
+                // Likewise, if billing was attempted but the Management API call failed (transient
+                // network issue), leave it unhandled so this cycle's attempt is retried rather than
+                // silently dropping the charge.
+                bool billingAttemptFailed = false;
                 if (session.TotalCost.HasValue && session.TotalCost > 0)
                 {
-                    ApplyPartnerSessionBilling(
-                        session, walletBalancesDict, usersDict,
+                    bool billed = await ApplyPartnerSessionBillingAsync(
+                        db, invoiceClient, session, walletBalancesDict, usersDict,
                         walletsToAdd, usersToUpdate,
-                        violationReason: string.Join("; ", violations));
-                    session.LimitViolationHandled = true;
+                        violationReason: string.Join("; ", violations), ct);
+                    billingAttemptFailed = !billed;
                 }
 
-                session.LimitViolationHandled = true;
+                if (!billingAttemptFailed)
+                {
+                    session.LimitViolationHandled = true;
+                }
                 session.LastUpdated = DateTime.UtcNow;
                 limitStoppedCount++;
             }
@@ -1469,23 +1480,43 @@ namespace OCPI.Core.Roaming.BackgroundServices
         // ── Wallet billing helper ─────────────────────────────────────────────
 
         /// <summary>
-        /// Debits <c>session.TotalCost</c> from the user's wallet and records a
-        /// <see cref="OCPP.Core.Database.EVCDTO.WalletTransactionLog"/> entry.
-        /// Mutates <paramref name="walletBalancesDict"/> so subsequent sessions in the same
-        /// cycle see the updated balance.
+        /// Debits <c>session.TotalCost</c> plus HyCharge's own platform fee (+ 9% CGST + 9% SGST
+        /// on the fee) from the user's wallet and records a
+        /// <see cref="OCPP.Core.Database.EVCDTO.WalletTransactionLog"/> entry. The fee/GST math
+        /// itself is computed by OCPP.Core.Management (which owns PartnerInvoiceService) — this
+        /// service doesn't reference Management, so it calls back into it via
+        /// <see cref="PartnerInvoiceClient"/> rather than duplicating that logic locally.
+        /// Mutates <paramref name="walletBalancesDict"/> so subsequent sessions in the same cycle
+        /// see the updated balance.
+        /// Returns false (without billing) if the invoice couldn't be obtained — e.g. the
+        /// Management API is unreachable — so the caller can leave the session unhandled and
+        /// retry on the next cycle instead of losing the charge.
         /// </summary>
-        private void ApplyPartnerSessionBilling(
+        private async Task<bool> ApplyPartnerSessionBillingAsync(
+            OCPPCoreContext db,
+            PartnerInvoiceClient invoiceClient,
             OcpiPartnerSession session,
             Dictionary<string, string> walletBalancesDict,
             Dictionary<string, OCPP.Core.Database.EVCDTO.Users> usersDict,
             List<OCPP.Core.Database.EVCDTO.WalletTransactionLog> walletsToAdd,
             List<OCPP.Core.Database.EVCDTO.Users> usersToUpdate,
-            string? violationReason)
+            string? violationReason,
+            CancellationToken ct)
         {
             if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
-                return;
+                return false;
 
-            decimal totalFee = session.TotalCost.Value;
+            var invoice = await invoiceClient.GetOrCreateInvoiceAsync(session.SessionId, ct);
+            if (invoice == null)
+            {
+                _logger.LogWarning(
+                    "OcpiOrphanSessionService: could not obtain platform-fee invoice for partner " +
+                    "session {SessionId} from Management API — skipping wallet debit this cycle",
+                    session.SessionId);
+                return false;
+            }
+
+            decimal totalFee = invoice.TotalPayable;
 
             decimal previousBalance = 0;
             if (walletBalancesDict.TryGetValue(session.UserId, out var balStr) &&
@@ -1501,9 +1532,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     session.UserId, session.SessionId, previousBalance, totalFee, session.Currency, newBalance);
 
             var info1 = violationReason != null
-                ? $"OCPI partner session auto-stopped — limit exceeded: {session.SessionId}"
-                : $"OCPI partner session completed — {session.SessionId}";
-            var info2 = $"Energy: {session.TotalEnergy:F3} kWh | Cost: {totalFee:F2} {session.Currency}";
+                ? $"OCPI partner session auto-stopped — limit exceeded: {session.SessionId} | Invoice: {invoice.InvoiceNumber}"
+                : $"OCPI partner session completed — {session.SessionId} | Invoice: {invoice.InvoiceNumber}";
+            var info2 = $"Energy: {session.TotalEnergy:F3} kWh | Partner cost: {invoice.PartnerCost:F2} {session.Currency} | Platform fee+GST: {invoice.GrandTotal:F2}";
             var info3 = violationReason ?? $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}";
 
             var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
@@ -1543,6 +1574,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 "OcpiOrphanSessionService: debited {Fee:F2} {Ccy} from user {UserId} " +
                 "for partner session {SessionId}; new balance: {Balance:F2}",
                 totalFee, session.Currency, session.UserId, session.SessionId, newBalance);
+
+            return true;
         }
     }
 }
