@@ -572,16 +572,19 @@ namespace OCPP.Core.Management.Controllers
                 // EmspStopSession only fires the OCPI STOP_SESSION command and returns as soon as
                 // it's accepted/rejected by the partner CPO — it does NOT wait for the charge point
                 // to actually stop (that arrives later, asynchronously, via the CPO's Session push
-                // setting EndDateTime). Re-read from the DB in case a fast partner already pushed
-                // the completed state in the meantime, but only bill here if the session has
-                // actually completed — billing based on a merely-present TotalCost (which can
-                // already be populated from live in-progress updates) would mark
-                // LimitViolationHandled on a still-ACTIVE session and permanently block
-                // OcpiOrphanSessionService from ever finishing it once the real completion does
-                // arrive, since nothing would be left to flip LimitViolationHandled correctly.
+                // setting EndDateTime, which may be delayed or — in a self-partner test setup —
+                // never arrive promptly). Bill immediately using whatever TotalCost is already
+                // known at the moment the stop is requested, the same way
+                // OcpiOrphanSessionService.ProcessPartnerSessionsAsync bills a limit-violation
+                // auto-stop without waiting for confirmation either — a manual stop is just as
+                // deliberate a "stop charging now" action as a limit violation, so it shouldn't be
+                // billed any less promptly. If the eventual completion push later reports a higher
+                // final cost, OcpiOrphanSessionService's branch A will still flip the session to
+                // COMPLETED (skipping re-billing via LimitViolationHandled below) — the small
+                // window between "stop requested" and "charger actually stops" is an accepted,
+                // pre-existing limitation shared with the auto-stop path.
                 await _dbContext.Entry(session).ReloadAsync();
-                if (!session.LimitViolationHandled && session.EndDateTime.HasValue
-                    && session.TotalCost.HasValue && session.TotalCost.Value > 0)
+                if (!session.LimitViolationHandled && session.TotalCost.HasValue && session.TotalCost.Value > 0)
                 {
                     await ApplyPartnerSessionWalletDeductionAsync(session);
                 }
