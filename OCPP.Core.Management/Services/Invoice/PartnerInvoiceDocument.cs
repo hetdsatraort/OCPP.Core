@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using OCPP.Core.Database.OCPIDTO;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -31,10 +32,12 @@ namespace OCPP.Core.Management.Services.Invoice
         private const string BankBranch = "Mulund West";
 
         private readonly OcpiPartnerSessionInvoice _invoice;
+        private readonly string _logoPath;
 
-        public PartnerInvoiceDocument(OcpiPartnerSessionInvoice invoice)
+        public PartnerInvoiceDocument(OcpiPartnerSessionInvoice invoice, string logoPath = null)
         {
             _invoice = invoice;
+            _logoPath = logoPath;
         }
 
         public DocumentMetadata GetMetadata() => DocumentMetadata.Default;
@@ -61,10 +64,12 @@ namespace OCPP.Core.Management.Services.Invoice
             {
                 column.Item().Row(row =>
                 {
-                    row.ConstantItem(110).Height(45).Border(1)
-                        .BorderColor(Colors.Grey.Lighten1)
-                        .AlignMiddle().AlignCenter()
-                        .Text("ORT LOGO").FontSize(8).FontColor(Colors.Grey.Medium);
+                    //row.ConstantItem(110).Height(45).Border(1)
+                    //    .BorderColor(Colors.Grey.Lighten1)
+                    //    .AlignMiddle().AlignCenter()
+                    //    .Text("ORT LOGO").FontSize(8).FontColor(Colors.Grey.Medium);
+
+                    row.ConstantItem(110).Height(45).Element(ComposeLogo);
 
                     row.RelativeItem().Column(col =>
                     {
@@ -76,6 +81,25 @@ namespace OCPP.Core.Management.Services.Invoice
                 column.Item().PaddingTop(8).Height(3).Background(BrandColor);
             });
         }
+        private void ComposeLogo(IContainer container)
+        {
+            if (!string.IsNullOrEmpty(_logoPath) && File.Exists(_logoPath))
+            {
+                container.Image(_logoPath).FitArea();
+            }
+            else
+            {
+                // Placeholder until the ORT company logo file is provided (see InvoiceService logo path)
+                container.Border(1)
+                    .BorderColor(Colors.Grey.Lighten1)
+                    .AlignMiddle()
+                    .AlignCenter()
+                    .Text("ORT LOGO")
+                    .FontSize(8)
+                    .FontColor(Colors.Grey.Medium);
+            }
+        }
+
 
         private void ComposeContent(IContainer container)
         {

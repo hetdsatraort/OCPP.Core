@@ -1,7 +1,10 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
 using QuestPDF.Fluent;
@@ -30,12 +33,15 @@ namespace OCPP.Core.Management.Services.Invoice
         private const string SacCode = "998717";
         private const string LineItemDescription = "OCPI Roaming Platform Fee";
         private const int MaxAllocationAttempts = 5;
-
+        private readonly ILogger<PartnerInvoiceService> _logger;
         private readonly OCPPCoreContext _dbContext;
+        private readonly string _logoPath;
 
-        public PartnerInvoiceService(OCPPCoreContext dbContext)
+        public PartnerInvoiceService(OCPPCoreContext dbContext, ILogger<PartnerInvoiceService> logger, IWebHostEnvironment env)
         {
             _dbContext = dbContext;
+            _logger = logger;
+            _logoPath = Path.Combine(env.WebRootPath ?? string.Empty, "images", "company-logo.png");
         }
 
         public async Task<OcpiPartnerSessionInvoice> GetOrCreateInvoiceAsync(string ocpiSessionId)
@@ -204,7 +210,8 @@ namespace OCPP.Core.Management.Services.Invoice
 
         public byte[] RenderPdf(OcpiPartnerSessionInvoice invoice)
         {
-            var document = new PartnerInvoiceDocument(invoice);
+            var logoPath = File.Exists(_logoPath) ? _logoPath : null;
+            var document = new PartnerInvoiceDocument(invoice, logoPath);
             return document.GeneratePdf();
         }
 
