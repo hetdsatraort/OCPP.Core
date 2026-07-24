@@ -553,18 +553,29 @@ namespace OCPP.Core.Management.Controllers
 
         /// <summary>
         /// Poll the resolution status of a Partner session started via <see cref="StartSession"/>,
-        /// keyed by the authorization_reference handed back in that response's <c>Data.Raw</c>
-        /// payload (before the partner CPO has pushed back a real session_id). Local sessions have
-        /// no such pending state — their id is known synchronously at start — so this only ever
-        /// resolves against the Partner network. Once resolved, <c>sessionId</c> is a composite
-        /// <c>P:{sessionId}</c> id usable directly with <see cref="StopSession"/> / <see cref="GetSessionDetails"/>.
+        /// keyed by a composite <c>P:{authorizationReference}</c> id built from the authorization_reference
+        /// handed back in that response's <c>Data.Raw</c> payload (before the partner CPO has pushed
+        /// back a real session_id). Local sessions have no such pending state — their id is known
+        /// synchronously at start — so an <c>L:</c> id is rejected. Once resolved, <c>sessionId</c> is
+        /// itself a composite <c>P:{sessionId}</c> id usable directly with <see cref="StopSession"/> /
+        /// <see cref="GetSessionDetails"/>.
         /// </summary>
-        [HttpGet("by-reference/{authorizationReference}")]
+        [HttpGet("by-reference/{id}")]
         [Authorize]
-        public async Task<IActionResult> GetSessionByReference(string authorizationReference)
+        public async Task<IActionResult> GetSessionByReference(string id)
         {
             try
             {
+                if (!UnifiedId.TryParse(id, out var provider, out var authorizationReference))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid or missing authorization reference id" });
+
+                if (provider == ProviderType.Local)
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = false,
+                        Message = "Polling by authorization reference is not applicable to local sessions — their id is known synchronously at start."
+                    });
+
                 var partnerCtl = CreateDelegate<OcpiPartnerHubController>();
                 var result = await partnerCtl.GetPartnerSessionByReference(authorizationReference);
                 var (_, value) = ExtractResult(result);
@@ -588,7 +599,7 @@ namespace OCPP.Core.Management.Controllers
                     Data = new
                     {
                         ProviderType = ProviderType.Partner,
-                        AuthorizationReference = GetString(dataJson, "authorizationReference"),
+                        AuthorizationReference = UnifiedId.Encode(ProviderType.Partner, GetString(dataJson, "authorizationReference")),
                         SessionId = resolved && !string.IsNullOrEmpty(nativeSessionId)
                             ? UnifiedId.Encode(ProviderType.Partner, nativeSessionId)
                             : string.Empty,
@@ -599,7 +610,7 @@ namespace OCPP.Core.Management.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error polling unified session by authorization reference {AuthorizationReference}", authorizationReference);
+                _logger.LogError(ex, "Error polling unified session by authorization reference {Id}", id);
                 return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while polling the session status" });
             }
         }
