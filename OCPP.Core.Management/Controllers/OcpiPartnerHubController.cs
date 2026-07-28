@@ -599,6 +599,51 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// Poll the resolution status of a session started via <see cref="StartPartnerSession"/>,
+        /// keyed by the authorization_reference returned at start time. While the CPO hasn't yet
+        /// pushed the real session, <c>sessionId</c> is null and <c>status</c> is "PENDING".
+        /// Proxies to <c>GET admin/partner-sessions/by-reference/{authorizationReference}</c> on the
+        /// OCPI roaming service (see OcpiAdminController.GetPartnerSessionByReference).
+        /// </summary>
+        [HttpGet("by-reference/{authorizationReference}")]
+        [Authorize]
+        public async Task<IActionResult> GetPartnerSessionByReference(string authorizationReference)
+        {
+            try
+            {
+                var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
+                if (string.IsNullOrEmpty(roamingApiUrl))
+                    return StatusCode(200, new { success = false, message = "OCPI roaming service not configured" });
+
+                var http = _httpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(20);
+
+                var resp = await http.GetAsync(
+                    $"{roamingApiUrl.TrimEnd('/')}/admin/partner-sessions/by-reference/{Uri.EscapeDataString(authorizationReference)}");
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    return Ok(new { success = false, message = "No session found for this authorization reference" });
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var errBody = await resp.Content.ReadAsStringAsync();
+                    _logger.LogWarning(
+                        "Partner by-reference lookup HTTP error: {Status} {Body}",
+                        (int)resp.StatusCode, errBody);
+                    return Ok(new { success = false, message = $"OCPI roaming service returned HTTP {(int)resp.StatusCode}" });
+                }
+
+                var result = await resp.Content.ReadFromJsonAsync<JsonElement>();
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error polling partner session by authorization reference {AuthorizationReference}", authorizationReference);
+                return Ok(new { success = false, message = "Error communicating with OCPI roaming service" });
+            }
+        }
+
+        /// <summary>
         /// Debits <c>session.TotalCost</c> plus HyCharge's own platform fee (+ 9% CGST + 9% SGST
         /// on the fee, via <see cref="PartnerInvoiceService"/>) from the user's wallet and marks
         /// the session handled, mirroring OcpiOrphanSessionService.ApplyPartnerSessionBillingAsync

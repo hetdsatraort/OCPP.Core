@@ -667,6 +667,70 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// Poll the resolution status of a Partner session started via <see cref="StartSession"/>,
+        /// keyed by a composite <c>P:{authorizationReference}</c> id built from the authorization_reference
+        /// handed back in that response's <c>Data.Raw</c> payload (before the partner CPO has pushed
+        /// back a real session_id). Local sessions have no such pending state — their id is known
+        /// synchronously at start — so an <c>L:</c> id is rejected. Once resolved, <c>sessionId</c> is
+        /// itself a composite <c>P:{sessionId}</c> id usable directly with <see cref="StopSession"/> /
+        /// <see cref="GetSessionDetails"/>.
+        /// </summary>
+        [HttpGet("by-reference/{id}")]
+        [Authorize]
+        public async Task<IActionResult> GetSessionByReference(string id)
+        {
+            try
+            {
+                if (!UnifiedId.TryParse(id, out var provider, out var authorizationReference))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid or missing authorization reference id" });
+
+                if (provider == ProviderType.Local)
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = false,
+                        Message = "Polling by authorization reference is not applicable to local sessions — their id is known synchronously at start."
+                    });
+
+                var partnerCtl = CreateDelegate<OcpiPartnerHubController>();
+                var result = await partnerCtl.GetPartnerSessionByReference(authorizationReference);
+                var (_, value) = ExtractResult(result);
+                var json = ToJsonElement(value);
+
+                if (GetBool(json, "success") != true)
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = false,
+                        Message = GetString(json, "message") ?? "No session found for this authorization reference"
+                    });
+
+                var dataJson = GetObj(json, "data");
+                var nativeSessionId = GetString(dataJson, "sessionId");
+                var resolved = GetBool(dataJson, "resolved") ?? false;
+
+                return Ok(new UnifiedChargingResponseDto
+                {
+                    Success = true,
+                    Message = "Partner session reference status retrieved successfully",
+                    Data = new
+                    {
+                        ProviderType = ProviderType.Partner,
+                        AuthorizationReference = UnifiedId.Encode(ProviderType.Partner, GetString(dataJson, "authorizationReference")),
+                        SessionId = resolved && !string.IsNullOrEmpty(nativeSessionId)
+                            ? UnifiedId.Encode(ProviderType.Partner, nativeSessionId)
+                            : string.Empty,
+                        Status = GetString(dataJson, "status"),
+                        Resolved = resolved
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error polling unified session by authorization reference {Id}", id);
+                return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while polling the session status" });
+            }
+        }
+
+        /// <summary>
         /// Unified rich session detail — same shape for both networks, including a LimitProgress
         /// block (computed here for Local sessions, which don't expose it today) and best-effort
         /// BatteryStateOfCharge for Partner sessions (which only report a flat current percentage).
