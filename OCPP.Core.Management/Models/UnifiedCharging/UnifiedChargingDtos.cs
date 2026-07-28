@@ -184,4 +184,44 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string SessionId { get; set; }
         public string VehicleId { get; set; }
     }
+
+    public class UnifiedChargingEstimationRequestDto
+    {
+        /// <summary>Composite connector id — "L:{gunRecId}" or "P:{connectorDbId}".</summary>
+        public string ConnectorId { get; set; }
+        public double? BatteryCapacity { get; set; }
+        public double? DesiredEnergy { get; set; }
+        public int? DesiredDuration { get; set; }
+        public double? CurrentBatteryPercentage { get; set; }
+        public double? DesiredCost { get; set; }
+    }
+
+    public class UnifiedEstimationDto
+    {
+        public ProviderType ProviderType { get; set; }
+        public string ConnectorId { get; set; }
+        public double PowerOutput { get; set; }
+        public double EstimatedEnergy { get; set; }
+        public double EstimatedTimeMinutes { get; set; }
+        public double EstimatedTimeHours { get; set; }
+        public double EstimatedKilometres { get; set; }
+        public double EstimatedBatteryIncrease { get; set; }
+        /// <summary>
+        /// False for Partner connectors — the partner CPO's own energy price is only known via
+        /// CDR after charging, so EstimatedCost/EstimatedCostWithTax are null and only
+        /// EstimatedPlatformFeeWithTax (HyCharge's own known fee) is populated.
+        /// </summary>
+        public bool CostKnown { get; set; }
+        public double? EstimatedCost { get; set; }
+        public double? EstimatedCostWithTax { get; set; }
+        /// <summary>Populated for Partner connectors only.</summary>
+        public double? EstimatedPlatformFeeWithTax { get; set; }
+        public string Currency { get; set; } = "₹";
+
+        /// <summary>
+        /// The untouched response payload from the delegated controller, for consumers that
+        /// need provider-specific fields not yet promoted into the unified shape above.
+        /// </summary>
+        public object Raw { get; set; }
+    }
 }

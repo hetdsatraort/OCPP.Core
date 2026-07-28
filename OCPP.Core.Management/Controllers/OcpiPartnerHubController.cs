@@ -1311,6 +1311,158 @@ namespace OCPP.Core.Management.Controllers
             });
         }
 
+        // ── Estimation ────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Estimate energy, time, range, and battery increase for charging at a partner CPO
+        /// connector — mirrors <see cref="ChargingSessionController.EstimateCharging"/>'s formulas
+        /// (4.5 km/kWh range efficiency, 90%/87% AC/DC charging efficiency, 18% GST) but sourced
+        /// from OcpiPartnerConnector.MaxElectricPower rather than ChargingGun.PowerOutput/ChargerTariff.
+        /// The partner CPO's own per-kWh energy price is never synced into the OCPI
+        /// locations/EVSEs/connectors tables — it's only known once the partner reports the session
+        /// cost via CDR — so only HyCharge's own platform fee (<see cref="OcpiPartnerPlatformFee"/>)
+        /// can be estimated ahead of a session; PartnerCostKnown is always false and
+        /// EstimatedPlatformFee(WithTax) covers just that portion of the eventual bill.
+        /// </summary>
+        [HttpPost("estimate-charging")]
+        [AllowAnonymous]
+        public async Task<IActionResult> EstimatePartnerCharging([FromBody] PartnerChargingEstimationRequestDto request)
+        {
+            try
+            {
+                if (request == null || request.ConnectorDbId <= 0)
+                {
+                    return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Invalid request data" });
+                }
+
+                var connector = await _dbContext.OcpiPartnerConnectors
+                    .FirstOrDefaultAsync(c => c.Id == request.ConnectorDbId);
+                if (connector == null)
+                    return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Partner connector not found" });
+
+                if (!connector.MaxElectricPower.HasValue || connector.MaxElectricPower.Value <= 0)
+                    return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Connector has no known power output" });
+
+                var evse = await _dbContext.OcpiPartnerEvses.FirstOrDefaultAsync(e => e.Id == connector.PartnerEvseId);
+                if (evse == null)
+                    return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Partner EVSE not found" });
+
+                var location = await _dbContext.OcpiPartnerLocations.FirstOrDefaultAsync(l => l.Id == evse.PartnerLocationId);
+                if (location == null)
+                    return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Partner location not found" });
+
+                double powerOutputKw = connector.MaxElectricPower.Value / 1000.0;
+
+                decimal feePerKwh = 0;
+                var feeConfig = await _dbContext.OcpiPartnerPlatformFees
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(f => f.PartnerCredentialId == location.PartnerCredentialId && f.IsActive);
+                if (feeConfig != null)
+                    feePerKwh = feeConfig.FeePerKwh;
+
+                double batteryCapacity = request.BatteryCapacity ?? 40.0;
+                const double efficiencyKmPerKwh = 4.5;
+                double chargingEfficiency = (connector.PowerType ?? string.Empty).Contains("DC", StringComparison.OrdinalIgnoreCase)
+                    ? 0.87
+                    : 0.90;
+
+                double energyKwh;
+                double timeHours;
+
+                // Same priority order as ChargingSessionController.EstimateCharging: explicit
+                // energy, then budget (against the known platform-fee portion only), then
+                // duration, then a 1-hour default.
+                if (request.DesiredEnergy.HasValue && request.DesiredEnergy.Value > 0)
+                {
+                    energyKwh = request.DesiredEnergy.Value;
+                }
+                else if (request.DesiredCost.HasValue && request.DesiredCost.Value > 0 && feePerKwh > 0)
+                {
+                    double costBeforeTax = request.DesiredCost.Value / 1.18;
+                    energyKwh = costBeforeTax / (double)feePerKwh;
+                }
+                else if (request.DesiredDuration.HasValue && request.DesiredDuration.Value > 0)
+                {
+                    timeHours = request.DesiredDuration.Value / 60.0;
+                    energyKwh = powerOutputKw * timeHours * chargingEfficiency;
+                }
+                else
+                {
+                    energyKwh = powerOutputKw * 1.0 * chargingEfficiency;
+                }
+
+                if (request.CurrentBatteryPercentage.HasValue && request.CurrentBatteryPercentage.Value >= 0)
+                {
+                    double currentSoC = request.CurrentBatteryPercentage.Value;
+                    double availableCapacity = batteryCapacity * ((100 - currentSoC) / 100.0);
+                    energyKwh = Math.Min(energyKwh, availableCapacity);
+                }
+                else
+                {
+                    energyKwh = Math.Min(energyKwh, batteryCapacity);
+                }
+
+                timeHours = energyKwh / (powerOutputKw * chargingEfficiency);
+                double timeMinutes = timeHours * 60;
+
+                double platformFee = energyKwh * (double)feePerKwh;
+                double platformFeeTax = platformFee * 0.18;
+                double platformFeeWithTax = platformFee + platformFeeTax;
+
+                double kilometres = energyKwh * efficiencyKmPerKwh;
+                double batteryIncrease = (energyKwh / batteryCapacity) * 100;
+
+                var response = new PartnerChargingEstimationResponseDto
+                {
+                    Success = true,
+                    Message = "Estimation calculated successfully. This covers HyCharge's platform fee only — the partner CPO's own energy charge is added once reported by the partner.",
+                    EstimatedEnergy = Math.Round(energyKwh, 2),
+                    EstimatedTimeMinutes = Math.Round(timeMinutes, 1),
+                    EstimatedTimeHours = Math.Round(timeHours, 2),
+                    EstimatedKilometres = Math.Round(kilometres, 1),
+                    EstimatedBatteryIncrease = Math.Round(batteryIncrease, 1),
+                    PartnerCostKnown = false,
+                    EstimatedPlatformFee = Math.Round(platformFee, 2),
+                    EstimatedPlatformFeeWithTax = Math.Round(platformFeeWithTax, 2),
+                    Connector = new PartnerConnectorEstimationDetails
+                    {
+                        PowerOutput = Math.Round(powerOutputKw, 2),
+                        ConnectorId = connector.ConnectorId,
+                        Standard = connector.Standard,
+                        PowerType = connector.PowerType
+                    },
+                    Car = new PartnerCarAssumptions
+                    {
+                        BatteryCapacity = batteryCapacity,
+                        Efficiency = efficiencyKmPerKwh,
+                        CurrentBatteryPercentage = request.CurrentBatteryPercentage,
+                        ChargingEfficiency = chargingEfficiency
+                    },
+                    CostDetails = new PartnerCostBreakdown
+                    {
+                        PlatformFee = Math.Round(platformFee, 2),
+                        PlatformFeeTax = Math.Round(platformFeeTax, 2),
+                        PlatformFeeWithTax = Math.Round(platformFeeWithTax, 2),
+                        FeePerKwh = feePerKwh,
+                        Currency = "₹",
+                        CGST = Math.Round(platformFeeTax / 2, 2),
+                        SGST = Math.Round(platformFeeTax / 2, 2)
+                    }
+                };
+
+                _logger.LogInformation(
+                    "Partner charging estimation calculated for connector {ConnectorDbId}: {Energy:F2} kWh, platform fee ₹{Fee:F2}, {Time:F1} min, {Km:F1} km, +{Batt:F1}%",
+                    request.ConnectorDbId, energyKwh, platformFeeWithTax, timeMinutes, kilometres, batteryIncrease);
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calculating partner charging estimation for connector {ConnectorDbId}", request?.ConnectorDbId);
+                return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Error calculating estimation" });
+            }
+        }
+
         // ── Request DTOs ──────────────────────────────────────────────────────
 
         public class PartnerHubSearchDto
@@ -1361,6 +1513,72 @@ namespace OCPP.Core.Management.Controllers
             /// <summary>Platform fee in INR per kWh delivered on this partner's roaming sessions.</summary>
             public decimal FeePerKwh { get; set; }
             public bool IsActive { get; set; } = true;
+        }
+
+        public class PartnerChargingEstimationRequestDto
+        {
+            /// <summary>DB id of the OcpiPartnerConnector to estimate for.</summary>
+            public int ConnectorDbId { get; set; }
+            /// <summary>Optional: User's battery capacity in kWh (if known). Defaults to 40 kWh.</summary>
+            public double? BatteryCapacity { get; set; }
+            /// <summary>Optional: Desired energy to charge in kWh.</summary>
+            public double? DesiredEnergy { get; set; }
+            /// <summary>Optional: Desired charging duration in minutes.</summary>
+            public int? DesiredDuration { get; set; }
+            /// <summary>Optional: Current battery percentage (0-100).</summary>
+            public double? CurrentBatteryPercentage { get; set; }
+            /// <summary>Optional: Desired cost/budget to spend against HyCharge's platform fee only.</summary>
+            public double? DesiredCost { get; set; }
+        }
+
+        public class PartnerChargingEstimationResponseDto
+        {
+            public bool Success { get; set; }
+            public string Message { get; set; }
+            public double EstimatedEnergy { get; set; }
+            public double EstimatedTimeMinutes { get; set; }
+            public double EstimatedTimeHours { get; set; }
+            public double EstimatedKilometres { get; set; }
+            public double EstimatedBatteryIncrease { get; set; }
+            /// <summary>
+            /// Always false — the partner CPO's own per-kWh energy price isn't synced by the OCPI
+            /// locations/EVSEs/connectors tables and is only known once the CDR/session cost is
+            /// reported, so EstimatedPlatformFee(WithTax) below is the only cost figure this
+            /// endpoint can responsibly return ahead of a session.
+            /// </summary>
+            public bool PartnerCostKnown { get; set; }
+            public double EstimatedPlatformFee { get; set; }
+            public double EstimatedPlatformFeeWithTax { get; set; }
+            public PartnerConnectorEstimationDetails Connector { get; set; }
+            public PartnerCarAssumptions Car { get; set; }
+            public PartnerCostBreakdown CostDetails { get; set; }
+        }
+
+        public class PartnerConnectorEstimationDetails
+        {
+            public double PowerOutput { get; set; }
+            public string ConnectorId { get; set; }
+            public string Standard { get; set; }
+            public string PowerType { get; set; }
+        }
+
+        public class PartnerCarAssumptions
+        {
+            public double BatteryCapacity { get; set; }
+            public double Efficiency { get; set; }
+            public double? CurrentBatteryPercentage { get; set; }
+            public double ChargingEfficiency { get; set; }
+        }
+
+        public class PartnerCostBreakdown
+        {
+            public double PlatformFee { get; set; }
+            public double PlatformFeeTax { get; set; }
+            public double PlatformFeeWithTax { get; set; }
+            public decimal FeePerKwh { get; set; }
+            public string Currency { get; set; } = "₹";
+            public double CGST { get; set; }
+            public double SGST { get; set; }
         }
 
     }

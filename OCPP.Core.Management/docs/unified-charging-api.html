@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Unified Charging API &mdash; Android Integration Guide</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <span id="markdown-mermaid" aria-hidden="true" data-config="{&quot;darkModeTheme&quot;:&quot;vscode&quot;,&quot;lightModeTheme&quot;:&quot;vscode&quot;,&quot;maxTextSize&quot;:50000,&quot;clickDrag&quot;:&quot;alt&quot;,&quot;showControls&quot;:&quot;onHoverOrFocus&quot;,&quot;resizable&quot;:true,&quot;maxHeight&quot;:&quot;&quot;}"></span>
+				<h1 id="unified-charging-api--android-integration-guide">Unified Charging API — Android Integration Guide</h1>
+<h2 id="1-why-this-api-exists">1. Why this API exists</h2>
+<p>HyCharge actually has <strong>two separate, fully-working charging backends</strong>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Local (OCPP)</th>
+<th>Partner (OCPI roaming)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller</td>
+<td><code>ChargingHubController</code> + <code>ChargingSessionController</code></td>
+<td><code>OcpiPartnerHubController</code></td>
+</tr>
+<tr>
+<td>Covers</td>
+<td>Our own hubs/stations/guns, our own hardware</td>
+<td>Partner CPOs' synced locations, proxied to the <code>OCPI.Core.Roaming</code> microservice</td>
+</tr>
+<tr>
+<td>Id scheme</td>
+<td>GUID <code>RecId</code></td>
+<td>numeric DB id (locations/EVSEs/connectors) or OCPI session id string</td>
+</tr>
+</tbody>
+</table>
+<p>These were never merged — different tables, different id types, two API surfaces to branch between.</p>
+<p><strong><code>UnifiedChargingController</code></strong> sits on top of both as a facade. It's one set of endpoints, one JSON shape, so the app never needs to know or care which network a given charger belongs to. It doesn't reimplement wallet billing, session limits, SoC polling, etc. — it calls the two existing controllers in-process and reshapes their responses.</p>
+<p>Base route for everything below: <strong><code>api/UnifiedCharging</code></strong></p>
+<h2 id="2-the-one-concept-you-need-composite-ids">2. The one concept you need: composite IDs</h2>
+<p>Every hub, station, connector, and session is addressed by a <strong>string id with a prefix</strong>:</p>
+<ul>
+<li><code>L:{recId}</code> — Local entity, e.g. <code>L:3f2a1c9e-4b7d-4e21-9a3f-7c1d2e5f8a90</code></li>
+<li><code>P:{numericId}</code> — Partner location/EVSE/connector, e.g. <code>P:42</code></li>
+<li><code>P:{sessionId}</code> — Partner session (the OCPI session id string), e.g. <code>P:OCPI-SESSION-998877</code></li>
+</ul>
+<p>The Android app should treat this as an <strong>opaque string</strong> — store it, echo it back on subsequent calls — never parse or construct it. Every response you get back already has the correct prefix baked in.</p>
+<p><code>providerType</code> in the JSON is <code>0</code> for Local, <code>1</code> for Partner (plain int, no string enum — mirror <code>ChargingProviderType</code> from the web frontend's <code>services/http.ts</code>).</p>
+<h2 id="3-typical-flow">3. Typical flow</h2>
+<pre><code>search-locations  or  comprehensive-list
+        │
+        ▼
+location-details/{id}          (optional drill-down)
+        │
+        ▼
+connector-status/{id}          (optional live check right before starting)
+        │
+        ▼
+start-session      ──────────────►  POST body has ConnectorId
+        │
+        ▼
+session-details/{id}  (poll)   or   sessions  (list all active)
+        │
+        ▼
+stop-session
+</code></pre>
+<p>Endpoints under <strong>Locations</strong> are <code>[AllowAnonymous]</code>. Endpoints under <strong>Sessions</strong> (start/stop/details/list/unlock/vehicle-link) require <code>[Authorize]</code> — send the JWT bearer token, same as every other authenticated call in the app.</p>
+<hr>
+<h2 id="4-endpoints-with-sample-json-for-both-flows">4. Endpoints, with sample JSON for both flows</h2>
+<h3 id="41-post-search-locations--anonymous">4.1 <code>POST search-locations</code> — anonymous</h3>
+<p>Merged geo-radius search, sorted by distance. Flat list only — no nested stations here (use <code>comprehensive-list</code> for that).</p>
+<p><strong>Request</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;latitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">12.9716</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;longitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">77.5946</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;radiusKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Response</strong> (one Local hub + one Partner hub, merged and distance-sorted)</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Found 2 location(s) within 25km&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;locations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:3f2a1c9e-4b7d-4e21-9a3f-7c1d2e5f8a90&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;MG Road Hub&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;addressLine1&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;12 MG Road&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;city&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Bengaluru&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;state&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Karnataka&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;pincode&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;560001&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;latitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;12.9750&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;longitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;77.6050&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;distanceKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1.2</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;averageRating&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">4.5</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">4</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">4</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;stations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span><span class="hljs-punctuation">]</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:42&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Indiranagar Fast Charge&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;addressLine1&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;100 Ft Road&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;city&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Bengaluru&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;state&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Karnataka&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;pincode&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;560038&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;latitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;12.9784&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;longitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;77.6408&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;distanceKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3.8</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;averageRating&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">6</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">4</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ChargeNet India&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;stations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span><span class="hljs-punctuation">]</span>
+    <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">]</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;totalCount&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;page&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;pageSize&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<blockquote>
+<p>Note <code>totalConnectors</code> / <code>availableConnectors</code> / <code>stations</code> are left empty on this endpoint by design — it's a pin-drop map search, not a detail view.</p>
+</blockquote>
+<hr>
+<h3 id="42-post-comprehensive-list--anonymous">4.2 <code>POST comprehensive-list</code> — anonymous</h3>
+<p>Merged, paginated, <strong>nested</strong> hub → station → connector listing. This is what powers a &quot;browse chargers&quot; screen.</p>
+<p><strong>Request</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;page&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;pageSize&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">10</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;latitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">12.9716</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;longitude&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">77.5946</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;radiusKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;searchTerm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;city&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;state&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Response</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Found 2 location(s) matching criteria&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;locations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:3f2a1c9e-4b7d-4e21-9a3f-7c1d2e5f8a90&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;MG Road Hub&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;addressLine1&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;12 MG Road&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;city&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Bengaluru&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;distanceKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1.2</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;stations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+        <span class="hljs-punctuation">{</span>
+          <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9c7e2b41-1234-4a11-8b2c-1234567890ab&quot;</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Station A&quot;</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;connectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+            <span class="hljs-punctuation">{</span>
+              <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:1a2b3c4d-5678-4e21-9a3f-abcdef123456&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;1&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;chargerTypeName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;CCS2&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;powerOutput&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;60&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;tariff&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;18.50&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Available&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;lastUpdated&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:40:00Z&quot;</span>
+            <span class="hljs-punctuation">}</span>
+          <span class="hljs-punctuation">]</span>
+        <span class="hljs-punctuation">}</span>
+      <span class="hljs-punctuation">]</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:42&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Indiranagar Fast Charge&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ChargeNet India&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;distanceKm&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3.8</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableStations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;stations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+        <span class="hljs-punctuation">{</span>
+          <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:501&quot;</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;EVSE-501&quot;</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;totalConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;availableConnectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+          <span class="hljs-attr">&quot;connectors&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+            <span class="hljs-punctuation">{</span>
+              <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:9001&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;1&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;chargerTypeName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;CCS2&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;powerOutput&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;50.00&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;tariff&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;AVAILABLE&quot;</span><span class="hljs-punctuation">,</span>
+              <span class="hljs-attr">&quot;lastUpdated&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:35:00Z&quot;</span>
+            <span class="hljs-punctuation">}</span>
+          <span class="hljs-punctuation">]</span>
+        <span class="hljs-punctuation">}</span>
+      <span class="hljs-punctuation">]</span>
+    <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">]</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;totalCount&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;page&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;pageSize&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">10</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;totalPages&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<blockquote>
+<p><code>tariff</code> is always <code>null</code> for Partner connectors — the partner CPO sets pricing and it's only known after the fact via the CDR. Don't show a per-kWh rate for Partner chargers up front.</p>
+<p>Local <code>status</code> values come from OCPP (<code>Available</code>, <code>Occupied</code>, <code>Faulted</code>, <code>Offline</code>, ...); Partner <code>status</code> values are OCPI's own vocabulary (<code>AVAILABLE</code>, <code>CHARGING</code>, ...). The casing differs by design — match case-insensitively if you're branching UI on status text.</p>
+</blockquote>
+<hr>
+<h3 id="43-get-location-detailsid--anonymous">4.3 <code>GET location-details/{id}</code> — anonymous</h3>
+<p>Single location, same nested shape as one entry above, plus full station/connector detail.</p>
+<pre><code>GET /api/UnifiedCharging/location-details/L:3f2a1c9e-4b7d-4e21-9a3f-7c1d2e5f8a90
+GET /api/UnifiedCharging/location-details/P:42
+</code></pre>
+<p><strong>Response</strong> (either flow — identical envelope, <code>data</code> is a single <code>UnifiedLocationDto</code> as shown in 4.2)</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Charging hub details retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:3f2a1c9e-4b7d-4e21-9a3f-7c1d2e5f8a90&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;name&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;MG Road Hub&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;stations&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span> <span class="hljs-string">&quot;... same shape as 4.2 ...&quot;</span> <span class="hljs-punctuation">]</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<hr>
+<h3 id="44-get-connector-statusid--anonymous">4.4 <code>GET connector-status/{id}</code> — anonymous</h3>
+<p>Live poll for Local; last-synced snapshot for Partner (there is no live-poll endpoint on the OCPI side today — don't build a &quot;refresh&quot; spinner expecting Partner status to change on demand).</p>
+<p><strong>Local</strong></p>
+<pre><code>GET /api/UnifiedCharging/connector-status/L:1a2b3c4d-5678-4e21-9a3f-abcdef123456
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Gun status retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;live&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;raw live status payload from the OCPP server&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner</strong></p>
+<pre><code>GET /api/UnifiedCharging/connector-status/P:9001
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Partner connector status is a last-synced snapshot, not a live poll&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;live&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;AVAILABLE&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;lastUpdated&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:35:00Z&quot;</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<blockquote>
+<p>Check <code>data.live</code> before you trust the status as real-time.</p>
+</blockquote>
+<hr>
+<h3 id="45-post-start-session--requires-authorize">4.5 <code>POST start-session</code> — requires <code>Authorize</code></h3>
+<p><strong>Local request</strong> (<code>connectorId</code> resolves to a <code>ChargingGuns</code> row)</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:1a2b3c4d-5678-4e21-9a3f-abcdef123456&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;chargeTagId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;AAA63CDF&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;energyLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;costLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;timeLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">120</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;batteryIncreaseLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">80</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Local response</strong> — a fully-populated <code>UnifiedSessionDto</code>, ready to render:</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Charging session started successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Active&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:45:00Z&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;endTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;meterStart&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;currency&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;INR&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;stationId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9c7e2b41-1234-4a11-8b2c-1234567890ab&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:1a2b3c4d-5678-4e21-9a3f-abcdef123456&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;costLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;timeLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">120</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;batteryIncreaseLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">80</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;batteryStateOfCharge&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;startSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">42.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;currentSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">42.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;lastUpdate&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:45:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;unit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;%&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isRealtime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;dataSource&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;OCPP Server Cache (Live)&quot;</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;walletTransaction&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;untouched response from ChargingSessionController&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner request</strong> — <code>tokenUid</code> is used instead of/alongside <code>chargeTagId</code>:</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:9001&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;chargeTagId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;AAA63CDF&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;tokenUid&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;AAA63CDF&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;energyLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;costLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;timeLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">120</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;batteryIncreaseLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">80</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner response</strong> — ⚠️ <strong>this is the one place the two flows genuinely diverge.</strong> OCPI assigns the real session id <em>asynchronously</em>, so this response is <strong>not</strong> a <code>UnifiedSessionDto** — it's a thin envelope with the raw roaming-service reply under </code>data.raw`:</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Session start request accepted&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:9001&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;untouched OCPI roaming service response — no usable session id yet&quot;</span>
+    <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Android implication:</strong> after a Partner start, don't try to read a session id out of this response. Instead, poll <code>GET /sessions?status=Active</code> (4.8) a few seconds later and pick up the newly-appeared <code>P:{sessionId}</code> entry — same pattern the web frontend (<code>chargev3</code>) uses.</p>
+<hr>
+<h3 id="46-post-stop-session--requires-authorize">4.6 <code>POST stop-session</code> — requires <code>Authorize</code></h3>
+<p><strong>Local</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;endMeterReading&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;6300&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Charging session ended successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Completed&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:45:00Z&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;endTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T06:15:00Z&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;meterStart&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;meterCurrent&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">6300</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">6.3</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">94.5</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;currency&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;INR&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;batteryStateOfCharge&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;startSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">42.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;endSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">47.5</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;soCGain&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">5.5</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;lastUpdate&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T06:15:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;unit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;%&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isRealtime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;dataSource&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;OCPP Server Cache (Live)&quot;</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;walletTransaction&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;transactionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;TXN123456&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;previousBalance&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;amountDebited&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">94.5</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;newBalance&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">405.5</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner</strong> — <code>endMeterReading</code> is ignored (OCPI has no equivalent field):</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:OCPI-SESSION-998877&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Stop request sent to partner&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:OCPI-SESSION-998877&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;untouched OCPI stop response&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<hr>
+<h3 id="47-get-session-detailsid--requires-authorize">4.7 <code>GET session-details/{id}</code> — requires <code>Authorize</code></h3>
+<p>Rich detail, same shape for both networks — this is the endpoint to poll for a live &quot;charging in progress&quot; screen.</p>
+<p><strong>Local</strong></p>
+<pre><code>GET /api/UnifiedCharging/session-details/L:9f8e7d6c-2222-4a11-8b2c-abcdef654321
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Session details retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Active&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:45:00Z&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;meterStart&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;meterCurrent&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3150</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3.15</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">47.25</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;currency&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;INR&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;locationName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;MG Road Hub&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;stationId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9c7e2b41-1234-4a11-8b2c-1234567890ab&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:1a2b3c4d-5678-4e21-9a3f-abcdef123456&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;costLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;timeLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">120</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;limitProgress&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;energyPct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">12.6</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;costPct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">9.5</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;timePct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">15.0</span> <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;batteryStateOfCharge&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;startSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">42.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;currentSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">44.7</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;soCGain&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2.7</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;lastUpdate&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T06:03:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;unit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;%&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isRealtime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;dataSource&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;OCPP Server Cache (Live)&quot;</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;walletTransaction&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">null</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner</strong></p>
+<pre><code>GET /api/UnifiedCharging/session-details/P:OCPI-SESSION-998877
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Partner session details retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:OCPI-SESSION-998877&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ACTIVE&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:50:00Z&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2.1</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">33.6</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;currency&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;INR&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;locationName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Indiranagar Fast Charge&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ChargeNet India&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;connectorId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;9001&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;energyLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">25</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;costLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">500</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;timeLimit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">120</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;limitProgress&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;energyPct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">8.4</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;costPct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">6.7</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;timePct&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">10.0</span> <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;batteryStateOfCharge&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;currentSoC&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">55.0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;lastUpdate&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T06:00:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;unit&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;%&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isRealtime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;dataSource&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Partner CPO Report&quot;</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;raw&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<blockquote>
+<p>⚠️ Field quirk: on a Partner session, <code>connectorId</code> is the <em>raw</em> OCPI EVSE uid (<code>&quot;9001&quot;</code>), <strong>not</strong> a composite <code>P:9001</code> id — unlike everywhere else in this API. Don't feed it straight back into <code>connector-status/{id}</code> without adding the <code>P:</code> prefix yourself.</p>
+<p><code>batteryStateOfCharge.isRealtime</code> is always <code>false</code> for Partner — it's a snapshot from the partner's CDR/report, not a live cache. Show it as &quot;last reported&quot; rather than &quot;live&quot; in the UI.</p>
+</blockquote>
+<hr>
+<h3 id="48-get-sessionsstatuspagepagesize--requires-authorize">4.8 <code>GET sessions?status=&amp;page=&amp;pageSize=</code> — requires <code>Authorize</code></h3>
+<p>Merged, paginated list of the caller's own sessions, across both networks, newest-first. This is also how you discover the session id assigned to a just-started Partner session (see 4.5).</p>
+<pre><code>GET /api/UnifiedCharging/sessions?status=Active&amp;page=1&amp;pageSize=20
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Sessions retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;sessions&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">[</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">0</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Active&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:45:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">3.15</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">47.25</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;locationName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;MG Road Hub&quot;</span>
+    <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;P:OCPI-SESSION-998877&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;providerType&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ACTIVE&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;isActive&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;startTime&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;2026-07-23T05:50:00Z&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;energyDelivered&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2.1</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;cost&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">33.6</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;locationName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Indiranagar Fast Charge&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;partnerName&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ChargeNet India&quot;</span>
+    <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">]</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;totalCount&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">2</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;page&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;pageSize&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">20</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;totalPages&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-number">1</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><code>status</code> filter values differ by convention (<code>Active</code>/<code>Completed</code> for Local vs. OCPI's own <code>ACTIVE</code>/<code>COMPLETED</code>) — the controller upper-cases whatever you pass before forwarding it to the Partner side, so just send the human-readable value and both sides get handled correctly.</p>
+<hr>
+<h3 id="49-post-unlock-connector--requires-authorize-local-only">4.9 <code>POST unlock-connector</code> — requires <code>Authorize</code>, <strong>Local only</strong></h3>
+<pre><code>{ &quot;connectorId&quot;: &quot;L:1a2b3c4d-5678-4e21-9a3f-abcdef123456&quot; }
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Connector unlocked successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;...&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span> <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p>Partner connectors return a clean rejection rather than silently no-op-ing — <strong>check <code>success</code> and show the message, don't assume it worked:</strong></p>
+<pre><code>{ &quot;connectorId&quot;: &quot;P:9001&quot; }
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Unlock is not supported for partner (OCPI) connectors in this deployment.&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<hr>
+<h3 id="410-post-link-session-vehicle--get-session-vehicleid--requires-authorize-local-only">4.10 <code>POST link-session-vehicle</code> / <code>GET session-vehicle/{id}</code> — requires <code>Authorize</code>, <strong>Local only</strong></h3>
+<p>Same pattern — Partner sessions have nowhere to persist a vehicle link, so they get a clear rejection instead of a silent failure.</p>
+<p><strong>Local — link</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;vehicleId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;VEH-001&quot;</span> <span class="hljs-punctuation">}</span>
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Vehicle linked to session successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;vehicle&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+      <span class="hljs-attr">&quot;recId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;VEH-001&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;make&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Tata&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;model&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Nexon EV&quot;</span><span class="hljs-punctuation">,</span>
+      <span class="hljs-attr">&quot;registrationNumber&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;KA-01-AB-1234&quot;</span>
+    <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Local — read</strong></p>
+<pre><code>GET /api/UnifiedCharging/session-vehicle/L:9f8e7d6c-2222-4a11-8b2c-abcdef654321
+</code></pre>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Vehicle retrieved successfully&quot;</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;sessionId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;L:9f8e7d6c-2222-4a11-8b2c-abcdef654321&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;vehicle&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;recId&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;VEH-001&quot;</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;make&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Tata&quot;</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;model&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Nexon EV&quot;</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;registrationNumber&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;KA-01-AB-1234&quot;</span> <span class="hljs-punctuation">}</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p><strong>Partner — either call</strong></p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;Linking a vehicle is not supported for partner (OCPI) sessions in this deployment.&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<hr>
+<h2 id="5-things-that-will-bite-an-android-dev-if-missed">5. Things that will bite an Android dev if missed</h2>
+<ol>
+<li><strong><code>providerType</code> is <code>0</code>/<code>1</code>, not a string.</strong> No JSON string-enum converter is configured server-side. Map it to an enum client-side; don't switch on a string.</li>
+<li><strong>Composite ids are opaque.</strong> Never split on <code>:</code> or interpret the part after it — just round-trip the whole string.</li>
+<li><strong>Partner <code>start-session</code> does not return a session id.</strong> You must poll <code>GET /sessions</code> to discover it (4.5 / 4.8). Don't block a &quot;session started&quot; screen on a session id being present in the start response for Partner flows.</li>
+<li><strong>Partner <code>session-details.connectorId</code> is a bare id, not a composite one</strong> (4.7) — the one shape inconsistency in the whole API. Prefix it with <code>P:</code> yourself if you need to call <code>connector-status</code> with it.</li>
+<li><strong><code>unlock-connector</code>, <code>link-session-vehicle</code>, and <code>session-vehicle</code> all reject Partner ids with <code>success: false</code> and a descriptive message.</strong> Don't hide or grey out these buttons for Partner chargers — showing them and surfacing the rejection message is the intended UX; the backend won't silently no-op.</li>
+<li><strong>Partner <code>connector-status</code> is a snapshot, not live</strong> — don't wire a manual &quot;refresh status&quot; action to it expecting new data on every tap.</li>
+<li><strong>Every failure path still returns HTTP 200</strong> with <code>success: false</code> and a <code>message</code> — the controller deliberately avoids non-200s so callers don't need special-case error handling per status code. Always check <code>success</code>, never rely on HTTP status alone.</li>
+</ol>
+<h2 id="6-where-this-lives-in-the-codebase-for-reference-not-needed-to-consume-the-api">6. Where this lives in the codebase (for reference, not needed to consume the API)</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OCPP.Core.Management/Controllers/UnifiedChargingController.cs</code></td>
+<td>The facade controller — all endpoints.</td>
+</tr>
+<tr>
+<td><code>OCPP.Core.Management/Models/UnifiedCharging/UnifiedChargingDtos.cs</code></td>
+<td>The unified DTO family.</td>
+</tr>
+<tr>
+<td><code>OCPP.Core.Management/Models/UnifiedCharging/UnifiedId.cs</code></td>
+<td>Composite id encode/decode.</td>
+</tr>
+<tr>
+<td><code>OCPP.Core.Management/docs/UNIFIED_CHARGING_API_README.md</code></td>
+<td>Full internal design writeup (this doc is the condensed, Android-focused version of it).</td>
+</tr>
+<tr>
+<td><code>ev-charging-front/src/app/admin/chargev3/</code></td>
+<td>The reference web consumer — same endpoints, single-flow UI.</td>
+</tr>
+<tr>
+<td><code>ev-charging-front/src/app/services/http.ts</code></td>
+<td>TypeScript interfaces/methods for this API (<code>UNIFIED CHARGING</code> section) — useful as a second reference alongside this doc.</td>
+</tr>
+</tbody>
+</table>
+
+            
+            
+        </body>
+        </html>

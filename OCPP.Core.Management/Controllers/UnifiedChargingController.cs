@@ -406,6 +406,121 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        // ── Estimation ────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Estimate energy, time, range, and battery increase for either network, resolved from
+        /// the composite connector id. Local estimates include a fully-known cost (charger's own
+        /// tariff, via <see cref="ChargingSessionController.EstimateCharging"/>); Partner
+        /// estimates only know HyCharge's own platform fee ahead of a session (via
+        /// <see cref="OcpiPartnerHubController.EstimatePartnerCharging"/>) — see
+        /// <see cref="UnifiedEstimationDto.CostKnown"/>.
+        /// </summary>
+        [HttpPost("estimate-charging")]
+        [AllowAnonymous]
+        public async Task<IActionResult> EstimateCharging([FromBody] UnifiedChargingEstimationRequestDto request)
+        {
+            try
+            {
+                if (!UnifiedId.TryParse(request?.ConnectorId, out var provider, out var nativeId))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid or missing ConnectorId" });
+
+                if (provider == ProviderType.Local)
+                {
+                    var gun = await _dbContext.ChargingGuns.FirstOrDefaultAsync(g => g.RecId == nativeId && g.Active == 1);
+                    if (gun == null)
+                        return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Local connector not found" });
+
+                    var sessionCtl = CreateDelegate<ChargingSessionController>();
+                    var result = await sessionCtl.EstimateCharging(new ChargingEstimationRequestDto
+                    {
+                        ChargingGunId = gun.RecId,
+                        ChargingStationId = gun.ChargingStationId,
+                        ConnectorId = gun.ConnectorId,
+                        BatteryCapacity = request.BatteryCapacity,
+                        DesiredEnergy = request.DesiredEnergy,
+                        DesiredDuration = request.DesiredDuration,
+                        CurrentBatteryPercentage = request.CurrentBatteryPercentage,
+                        DesiredCost = request.DesiredCost
+                    });
+
+                    var (_, value) = ExtractResult(result);
+                    var dto = value as ChargingEstimationResponseDto;
+
+                    if (dto?.Success != true)
+                        return Ok(new UnifiedChargingResponseDto { Success = false, Message = dto?.Message ?? "Unable to calculate estimation" });
+
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = true,
+                        Message = dto.Message,
+                        Data = new UnifiedEstimationDto
+                        {
+                            ProviderType = ProviderType.Local,
+                            ConnectorId = request.ConnectorId,
+                            PowerOutput = dto.Charger?.PowerOutput ?? 0,
+                            EstimatedEnergy = dto.EstimatedEnergy,
+                            EstimatedTimeMinutes = dto.EstimatedTimeMinutes,
+                            EstimatedTimeHours = dto.EstimatedTimeHours,
+                            EstimatedKilometres = dto.EstimatedKilometres,
+                            EstimatedBatteryIncrease = dto.EstimatedBatteryIncrease,
+                            CostKnown = true,
+                            EstimatedCost = dto.EstimatedCost,
+                            EstimatedCostWithTax = dto.EstimatedCostWithTax,
+                            Raw = dto
+                        }
+                    });
+                }
+                else
+                {
+                    if (!int.TryParse(nativeId, out int connectorDbId))
+                        return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid partner connector id" });
+
+                    var partnerCtl = CreateDelegate<OcpiPartnerHubController>();
+                    var result = await partnerCtl.EstimatePartnerCharging(new OcpiPartnerHubController.PartnerChargingEstimationRequestDto
+                    {
+                        ConnectorDbId = connectorDbId,
+                        BatteryCapacity = request.BatteryCapacity,
+                        DesiredEnergy = request.DesiredEnergy,
+                        DesiredDuration = request.DesiredDuration,
+                        CurrentBatteryPercentage = request.CurrentBatteryPercentage,
+                        DesiredCost = request.DesiredCost
+                    });
+
+                    var (_, value) = ExtractResult(result);
+                    var dto = value as OcpiPartnerHubController.PartnerChargingEstimationResponseDto;
+
+                    if (dto?.Success != true)
+                        return Ok(new UnifiedChargingResponseDto { Success = false, Message = dto?.Message ?? "Unable to calculate estimation" });
+
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = true,
+                        Message = dto.Message,
+                        Data = new UnifiedEstimationDto
+                        {
+                            ProviderType = ProviderType.Partner,
+                            ConnectorId = request.ConnectorId,
+                            PowerOutput = dto.Connector?.PowerOutput ?? 0,
+                            EstimatedEnergy = dto.EstimatedEnergy,
+                            EstimatedTimeMinutes = dto.EstimatedTimeMinutes,
+                            EstimatedTimeHours = dto.EstimatedTimeHours,
+                            EstimatedKilometres = dto.EstimatedKilometres,
+                            EstimatedBatteryIncrease = dto.EstimatedBatteryIncrease,
+                            CostKnown = false,
+                            EstimatedPlatformFeeWithTax = dto.EstimatedPlatformFeeWithTax,
+                            Raw = dto
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calculating unified charging estimation");
+                return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while calculating the charging estimation" });
+            }
+        }
+
         // ── Sessions ──────────────────────────────────────────────────────────
 
         /// <summary>
