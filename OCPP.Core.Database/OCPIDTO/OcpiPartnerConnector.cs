@@ -52,6 +52,16 @@ namespace OCPP.Core.Database.OCPIDTO
         public int? MaxElectricPower { get; set; }
 
         /// <summary>
+        /// Comma-separated OCPI tariff_ids applicable to this connector, as reported by the
+        /// partner (via periodic pull from their Tariffs module or a direct push) — resolves to a
+        /// row in <see cref="OcpiTariff"/> keyed by (this connector's partner's CountryCode,
+        /// PartyId, one of these ids). Null when the partner hasn't reported any tariff for this
+        /// connector yet.
+        /// </summary>
+        [MaxLength(400)]
+        public string TariffIds { get; set; }
+
+        /// <summary>
         /// Foreign key to the EVSE
         /// </summary>
         public int PartnerEvseId { get; set; }

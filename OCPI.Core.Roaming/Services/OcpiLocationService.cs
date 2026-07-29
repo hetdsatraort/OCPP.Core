@@ -227,6 +227,12 @@ namespace OCPI.Core.Roaming.Services
             var existing = await _dbContext.OcpiPartnerConnectors
                 .FirstOrDefaultAsync(c => c.ConnectorId == connector.Id && c.PartnerEvseId == partnerEvseId);
 
+            // Comma-joined so a connector with multiple applicable tariffs (e.g. member vs
+            // non-member pricing) still resolves via the first id — see OcpiTariffService callers.
+            string? tariffIds = connector.TariffIds != null && connector.TariffIds.Any()
+                ? Trunc(string.Join(",", connector.TariffIds), 400)
+                : null;
+
             if (existing != null)
             {
                 existing.Standard = Trunc(connector.Standard?.ToMemberValue(), 50);
@@ -235,6 +241,7 @@ namespace OCPI.Core.Roaming.Services
                 existing.MaxVoltage = connector.MaxVoltage;
                 existing.MaxAmperage = connector.MaxAmperage;
                 existing.MaxElectricPower = connector.MaxElectricPower;
+                existing.TariffIds = tariffIds;
                 existing.LastUpdated = connector.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerConnectors.Update(existing);
@@ -250,6 +257,7 @@ namespace OCPI.Core.Roaming.Services
                     MaxVoltage = connector.MaxVoltage,
                     MaxAmperage = connector.MaxAmperage,
                     MaxElectricPower = connector.MaxElectricPower,
+                    TariffIds = tariffIds,
                     PartnerEvseId = partnerEvseId,
                     LastUpdated = connector.LastUpdated ?? DateTime.UtcNow
                 };
@@ -463,9 +471,21 @@ namespace OCPI.Core.Roaming.Services
                 MaxVoltage = ParseVoltage(gun.PowerOutput),
                 MaxAmperage = ParseAmperage(gun.PowerOutput),
                 MaxElectricPower = ParsePower(gun.PowerOutput),
+                // Referenced by GunTariffIdPrefix + gun.RecId so an eMSP partner pulling this
+                // connector (or our own eMSP-role code, in a self-partner test setup) can resolve
+                // it via the Tariffs module — see OcpiTariffService.GetTariffAsync, which
+                // synthesizes a tariff on demand from this same gun's ChargerTariff since that
+                // per-kWh value was never separately synced into the OcpiTariffs table.
+                TariffIds = !string.IsNullOrEmpty(gun.ChargerTariff) ? new[] { $"{GunTariffIdPrefix}{gun.RecId}" } : null,
                 LastUpdated = gun.UpdatedOn
             };
         }
+
+        /// <summary>
+        /// Prefix used to derive a tariff_id for our own ChargingGuns — see MapToOcpiConnector and
+        /// OcpiTariffService.GetTariffAsync's on-demand synthesis fallback.
+        /// </summary>
+        public const string GunTariffIdPrefix = "GUN-";
 
         private EvseStatus MapStatus(string ocppStatus)
         {

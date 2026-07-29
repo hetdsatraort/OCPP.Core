@@ -1410,9 +1410,13 @@ namespace OCPP.Core.Management.Controllers
                 if (feeConfig != null)
                     feePerKwh = feeConfig.FeePerKwh;
 
-                decimal? partnerRatePerKwh = await ResolvePartnerRatePerKwhAsync(
+                var (partnerRatePerKwh, tariffResolutionDetail) = await ResolvePartnerRatePerKwhAsync(
                     location.PartnerCredentialId, location.LocationId, evse.EvseUid, connector.ConnectorId);
                 string costBasis = partnerRatePerKwh.HasValue ? "PartnerTariff" : "PlatformFeeOnly";
+
+                _logger.LogInformation(
+                    "Partner tariff resolution for connector {ConnectorDbId} (partner {PartnerCredentialId}): {Basis} — {Detail}",
+                    request.ConnectorDbId, location.PartnerCredentialId, costBasis, tariffResolutionDetail ?? "(no detail)");
 
                 decimal effectiveRatePerKwh = (partnerRatePerKwh ?? 0) + feePerKwh;
 
@@ -1471,8 +1475,8 @@ namespace OCPP.Core.Management.Controllers
                 double batteryIncrease = (energyKwh / batteryCapacity) * 100;
 
                 string message = costBasis == "PartnerTariff"
-                    ? $"Estimation calculated successfully. The partner CPO's own energy price (₹{partnerRatePerKwh:F2}/kWh) was resolved from their published tariff."
-                    : "Estimation calculated successfully. This partner CPO's tariff could not be resolved, so the estimate reflects HyCharge's platform fee only — the partner CPO's own energy charge will be added once reported.";
+                    ? $"Estimation calculated successfully. The partner CPO's own energy price (₹{partnerRatePerKwh:F2}/kWh) was resolved from their published tariff ({tariffResolutionDetail})."
+                    : $"Estimation calculated successfully. This partner CPO's tariff could not be resolved ({tariffResolutionDetail}), so the estimate reflects HyCharge's platform fee only — the partner CPO's own energy charge will be added once reported.";
 
                 var response = new PartnerChargingEstimationResponseDto
                 {
@@ -1534,16 +1538,19 @@ namespace OCPP.Core.Management.Controllers
         /// <summary>
         /// Asks OCPI.Core.Roaming to resolve a partner CPO's own per-kWh energy price for a
         /// connector (their tariff_ids, cached or pulled live from the partner) — all direct OCPI
-        /// protocol communication stays in that project. Returns null if the roaming service isn't
+        /// protocol communication stays in that project. Rate is null if the roaming service isn't
         /// configured, unreachable, or couldn't resolve a price (e.g. the connector has no
         /// tariff_ids) — the caller falls back to a platform-fee-only estimate in that case.
+        /// Detail carries the roaming service's own explanation (its "message"/"source" fields,
+        /// or an exception message) so a null rate is diagnosable from the caller's logs/response
+        /// instead of collapsing into a single opaque "PlatformFeeOnly".
         /// </summary>
-        private async Task<decimal?> ResolvePartnerRatePerKwhAsync(
+        private async Task<(decimal? RatePerKwh, string? Detail)> ResolvePartnerRatePerKwhAsync(
             int partnerCredentialId, string locationId, string evseUid, string connectorId)
         {
             var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
             if (string.IsNullOrEmpty(roamingApiUrl))
-                return null;
+                return (null, "OcpiRoamingApiUrl is not configured in appsettings");
 
             try
             {
@@ -1557,22 +1564,27 @@ namespace OCPP.Core.Management.Controllers
 
                 var resp = await http.GetAsync($"{roamingApiUrl.TrimEnd('/')}/admin/emsp/partner-connector-tariff?{query}");
                 if (!resp.IsSuccessStatusCode)
-                    return null;
+                    return (null, $"Roaming service returned HTTP {(int)resp.StatusCode}");
 
                 var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
-                if (!json.TryGetProperty("success", out var successEl) || successEl.ValueKind != JsonValueKind.True)
-                    return null;
-                if (!json.TryGetProperty("data", out var data))
-                    return null;
+                string? message = json.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : null;
 
-                return data.TryGetProperty("energyPricePerKwh", out var rateEl) && rateEl.ValueKind == JsonValueKind.Number
+                if (!json.TryGetProperty("success", out var successEl) || successEl.ValueKind != JsonValueKind.True)
+                    return (null, message ?? "Roaming service reported failure");
+                if (!json.TryGetProperty("data", out var data))
+                    return (null, message ?? "Roaming service response had no data");
+
+                string? source = data.TryGetProperty("source", out var sourceEl) ? sourceEl.GetString() : null;
+                decimal? rate = data.TryGetProperty("energyPricePerKwh", out var rateEl) && rateEl.ValueKind == JsonValueKind.Number
                     ? rateEl.GetDecimal()
                     : (decimal?)null;
+
+                return (rate, $"{message} (source={source ?? "unknown"})");
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to resolve partner tariff rate for connector {ConnectorId}", connectorId);
-                return null;
+                return (null, $"Exception calling roaming service: {ex.Message}");
             }
         }
 

@@ -908,18 +908,21 @@ namespace OCPI.Core.Roaming.Controllers
             }
         }
 
+        /// <summary>Role names accepted when discovering a module URL that a partner CPO publishes for us to pull from (as opposed to one they push to).</summary>
+        private static readonly string[] PullSourceRoles = { "SENDER", "CPO" };
+
         /// <summary>
         /// Resolve a partner CPO's own per-kWh energy price for a specific connector (eMSP role) —
         /// used by OCPP.Core.Management's charging-estimate endpoint to quote a real total cost
         /// (partner price + HyCharge's platform fee + tax) instead of the platform fee alone.
         ///
-        /// tariff_ids aren't captured by our push-based location sync today (the partner pushes
-        /// locations/EVSEs/connectors to us, but we've never persisted the connector's
-        /// <c>tariff_ids</c> field), so this pulls the connector live from the partner's
-        /// Locations module to read it fresh, then resolves the referenced tariff: first from our
-        /// local OCPI Tariffs cache (populated whenever this partner has pushed it to us, or we've
-        /// resolved it before), otherwise by pulling it live from the partner's Tariffs module —
-        /// caching the result locally either way so the next lookup for this tariff is free.
+        /// <see cref="OcpiSyncBackgroundService"/> already periodically pulls every CPO partner's
+        /// locations/EVSEs/connectors AND their full Tariffs module into our local
+        /// <see cref="OcpiPartnerConnector.TariffIds"/> / <see cref="OcpiTariff"/> tables, so the
+        /// fast path here is a pure local-DB read — no network call. Live pulls (both for a
+        /// connector's tariff_ids and for a specific tariff) are only a fallback for a connector
+        /// the periodic sync hasn't reached yet, or a partner that only pushes and omitted
+        /// tariff_ids on that push.
         /// </summary>
         [HttpGet("emsp/partner-connector-tariff")]
         public async Task<IActionResult> GetPartnerConnectorTariff(
@@ -937,61 +940,41 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 return NotFound(new { success = false, message = "Partner not found or inactive" });
 
-            if (string.IsNullOrEmpty(partner.OutboundToken))
-                return Ok(UnavailableTariffResult(null, "Partner has no outbound token configured"));
+            // 1) Fast path — tariff_ids already captured for this connector by the periodic sync
+            //    (or a partner push), no network call.
+            var storedTariffIds = await _dbContext.OcpiPartnerLocations
+                .Where(l => l.PartnerCredentialId == partnerId && l.LocationId == locationId)
+                .Join(_dbContext.OcpiPartnerEvses, l => l.Id, e => e.PartnerLocationId, (l, e) => e)
+                .Where(e => e.EvseUid == evseUid)
+                .Join(_dbContext.OcpiPartnerConnectors, e => e.Id, c => c.PartnerEvseId, (e, c) => c)
+                .Where(c => c.ConnectorId == connectorId)
+                .Select(c => c.TariffIds)
+                .FirstOrDefaultAsync();
 
-            var sourceRoles = new[] { "SENDER", "CPO" };
+            var tariffIds = ParseTariffIds(storedTariffIds);
+            var tariffIdSource = "locally synced connector";
 
-            var locationsUrl = await DiscoverPartnerEndpointAsync(partner, "locations", sourceRoles);
-            if (locationsUrl == null)
-                return Ok(UnavailableTariffResult(null, "Could not discover partner's locations endpoint"));
-
-            var http = _httpClientFactory.CreateClient();
-            http.DefaultRequestHeaders.TryAddWithoutValidation(
-                "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
-            http.Timeout = TimeSpan.FromSeconds(15);
-
-            List<string> tariffIds = new();
-            try
-            {
-                var connectorUrl = $"{locationsUrl.TrimEnd('/')}/{partner.CountryCode}/{partner.PartyId}/" +
-                    $"{Uri.EscapeDataString(locationId)}/{Uri.EscapeDataString(evseUid)}/{Uri.EscapeDataString(connectorId)}";
-                var connResp = await http.GetAsync(connectorUrl);
-                if (connResp.IsSuccessStatusCode)
-                {
-                    using var connDoc = JsonDocument.Parse(await connResp.Content.ReadAsStringAsync());
-                    if (connDoc.RootElement.TryGetProperty("data", out var connData) &&
-                        connData.TryGetProperty("tariff_ids", out var tidsEl) &&
-                        tidsEl.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var t in tidsEl.EnumerateArray())
-                        {
-                            var s = t.GetString();
-                            if (!string.IsNullOrEmpty(s)) tariffIds.Add(s);
-                        }
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "[Admin/eMSP] Partner connector pull returned HTTP {Status} for {Url}",
-                        connResp.StatusCode, connectorUrl);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "[Admin/eMSP] Failed to pull connector {ConnectorId} from partner {PartnerId} for tariff resolution",
-                    connectorId, partnerId);
-            }
-
+            // 2) Fall back to a live pull from the partner's Locations module — covers a connector
+            //    the periodic sync hasn't reached yet, or a partner that never included tariff_ids
+            //    on push.
             if (tariffIds.Count == 0)
-                return Ok(UnavailableTariffResult(null, "Partner connector has no tariff_ids"));
+            {
+                if (string.IsNullOrEmpty(partner.OutboundToken))
+                    return Ok(UnavailableTariffResult(null,
+                        "No locally synced tariff_ids for this connector, and partner has no outbound token configured for a live lookup"));
+
+                tariffIds = await PullConnectorTariffIdsLiveAsync(partner, locationId, evseUid, connectorId);
+                tariffIdSource = "live pull from partner";
+
+                if (tariffIds.Count == 0)
+                    return Ok(UnavailableTariffResult(null, "Partner connector has no tariff_ids (checked local sync and a live pull)"));
+            }
 
             var tariffId = tariffIds[0];
 
-            // 1) Local cache — populated whenever the partner has pushed this tariff to us
-            //    (OcpiTariffsController.PutTariff), or we resolved it live before (see below).
+            // 3) Resolve the tariff itself — local cache first (already populated by
+            //    OcpiSyncBackgroundService.PullTariffsFromCpoAsync, or a partner push to
+            //    OcpiTariffsController.PutTariff, or a previous live resolution below).
             var cached = await _tariffService.GetTariffAsync(partner.CountryCode, partner.PartyId, tariffId);
             var cachedEnergyPrice = cached?.Elements?
                 .SelectMany(e => e.PriceComponents ?? Enumerable.Empty<OcpiPriceComponent>())
@@ -1009,17 +992,25 @@ namespace OCPI.Core.Roaming.Controllers
                         tariffId,
                         source = "Cached"
                     },
-                    message = "Resolved from locally cached partner tariff"
+                    message = $"Resolved from locally cached partner tariff (tariff_ids from {tariffIdSource})"
                 });
             }
 
-            // 2) Live fetch from the partner's own Tariffs module.
-            var tariffsUrl = await DiscoverPartnerEndpointAsync(partner, "tariffs", sourceRoles);
+            // 4) Live fetch from the partner's own Tariffs module.
+            if (string.IsNullOrEmpty(partner.OutboundToken))
+                return Ok(UnavailableTariffResult(tariffId, "Tariff not cached locally, and partner has no outbound token configured for a live lookup"));
+
+            var tariffsUrl = await DiscoverPartnerEndpointAsync(partner, "tariffs", PullSourceRoles);
             if (tariffsUrl == null)
                 return Ok(UnavailableTariffResult(tariffId, "Could not discover partner's tariffs endpoint"));
 
             try
             {
+                var http = _httpClientFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                http.Timeout = TimeSpan.FromSeconds(15);
+
                 var tariffUrl = $"{tariffsUrl.TrimEnd('/')}/{partner.CountryCode}/{partner.PartyId}/{Uri.EscapeDataString(tariffId)}";
                 var tariffResp = await http.GetAsync(tariffUrl);
                 if (!tariffResp.IsSuccessStatusCode)
@@ -1090,7 +1081,7 @@ namespace OCPI.Core.Roaming.Controllers
                 {
                     success = true,
                     data = new { energyPricePerKwh = energyPrice.Value, currency, tariffId, source = "Live" },
-                    message = "Resolved live from partner's tariffs endpoint"
+                    message = $"Resolved live from partner's tariffs endpoint (tariff_ids from {tariffIdSource})"
                 });
             }
             catch (Exception ex)
@@ -1100,6 +1091,62 @@ namespace OCPI.Core.Roaming.Controllers
                 return Ok(UnavailableTariffResult(tariffId, $"Error fetching partner tariff: {ex.Message}"));
             }
         }
+
+        /// <summary>Live fallback for GetPartnerConnectorTariff step 2 — see its doc comment.</summary>
+        private async Task<List<string>> PullConnectorTariffIdsLiveAsync(
+            OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential partner, string locationId, string evseUid, string connectorId)
+        {
+            var tariffIds = new List<string>();
+
+            var locationsUrl = await DiscoverPartnerEndpointAsync(partner, "locations", PullSourceRoles);
+            if (locationsUrl == null)
+                return tariffIds;
+
+            try
+            {
+                var http = _httpClientFactory.CreateClient();
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                http.Timeout = TimeSpan.FromSeconds(15);
+
+                var connectorUrl = $"{locationsUrl.TrimEnd('/')}/{partner.CountryCode}/{partner.PartyId}/" +
+                    $"{Uri.EscapeDataString(locationId)}/{Uri.EscapeDataString(evseUid)}/{Uri.EscapeDataString(connectorId)}";
+                var connResp = await http.GetAsync(connectorUrl);
+                if (connResp.IsSuccessStatusCode)
+                {
+                    using var connDoc = JsonDocument.Parse(await connResp.Content.ReadAsStringAsync());
+                    if (connDoc.RootElement.TryGetProperty("data", out var connData) &&
+                        connData.TryGetProperty("tariff_ids", out var tidsEl) &&
+                        tidsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var t in tidsEl.EnumerateArray())
+                        {
+                            var s = t.GetString();
+                            if (!string.IsNullOrEmpty(s)) tariffIds.Add(s);
+                        }
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "[Admin/eMSP] Partner connector pull returned HTTP {Status} for {Url}",
+                        connResp.StatusCode, connectorUrl);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[Admin/eMSP] Failed to pull connector {ConnectorId} from partner {PartnerId} for tariff resolution",
+                    connectorId, partner.Id);
+            }
+
+            return tariffIds;
+        }
+
+        private static List<string> ParseTariffIds(string? stored) =>
+            string.IsNullOrWhiteSpace(stored)
+                ? new List<string>()
+                : stored.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
         private static object UnavailableTariffResult(string? tariffId, string message) => new
         {

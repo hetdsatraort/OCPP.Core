@@ -47,10 +47,57 @@ namespace OCPI.Core.Roaming.Services
                     && t.TariffId == tariffId
                     && t.IsActive);
 
-            if (dbTariff == null)
-                return null!;
+            if (dbTariff != null)
+                return MapToOcpiTariff(dbTariff);
 
-            return MapToOcpiTariff(dbTariff);
+            return await SynthesizeOwnGunTariffAsync(countryCode, partyId, tariffId) ?? null!;
+        }
+
+        /// <summary>
+        /// Our own ChargingGuns carry a per-kWh <c>ChargerTariff</c> value that was never synced
+        /// into the OcpiTariffs table (that table is populated only by partners pushing tariffs to
+        /// us) — so a tariff_id we ourselves generated (see
+        /// OcpiLocationService.MapToOcpiConnector / GunTariffIdPrefix) has no cached row above.
+        /// Synthesize it on the fly instead, so both real eMSP partners pulling our Tariffs module
+        /// and our own eMSP-role code (in a self-partner test setup) resolve a real price rather
+        /// than silently falling back to "no tariff available".
+        /// </summary>
+        private async Task<OcpiTariff?> SynthesizeOwnGunTariffAsync(string countryCode, string partyId, string tariffId)
+        {
+            var ourCountryCode = _configuration.GetValue<string>("OCPI:CountryCode") ?? "IN";
+            var ourPartyId = _configuration.GetValue<string>("OCPI:PartyId") ?? "HYC";
+
+            if (!string.Equals(countryCode, ourCountryCode, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(partyId, ourPartyId, StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrEmpty(tariffId) ||
+                !tariffId.StartsWith(OcpiLocationService.GunTariffIdPrefix, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var gunRecId = tariffId.Substring(OcpiLocationService.GunTariffIdPrefix.Length);
+            var gun = await _dbContext.ChargingGuns
+                .FirstOrDefaultAsync(g => g.RecId == gunRecId && g.Active == 1);
+
+            if (gun == null || !double.TryParse(gun.ChargerTariff, out var tariffValue) || tariffValue <= 0)
+                return null;
+
+            return new OcpiTariff
+            {
+                CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
+                PartyId = ourPartyId,
+                Id = tariffId,
+                Currency = CurrencyCode.IndianRupee,
+                Elements = new List<OcpiTariffElement>
+                {
+                    new OcpiTariffElement
+                    {
+                        PriceComponents = new List<OcpiPriceComponent>
+                        {
+                            new OcpiPriceComponent { Type = TariffDimensionType.Energy, Price = (decimal)tariffValue, StepSize = 1 }
+                        }
+                    }
+                },
+                LastUpdated = gun.UpdatedOn
+            };
         }
 
         public async Task<string> CreateOrUpdateTariffAsync(OcpiTariff tariff)
