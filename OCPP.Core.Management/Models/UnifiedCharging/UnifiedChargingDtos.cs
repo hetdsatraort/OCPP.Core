@@ -206,16 +206,16 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public double EstimatedTimeHours { get; set; }
         public double EstimatedKilometres { get; set; }
         public double EstimatedBatteryIncrease { get; set; }
+        public double EstimatedCost { get; set; }
+        public double EstimatedCostWithTax { get; set; }
         /// <summary>
-        /// False for Partner connectors — the partner CPO's own energy price is only known via
-        /// CDR after charging, so EstimatedCost/EstimatedCostWithTax are null and only
-        /// EstimatedPlatformFeeWithTax (HyCharge's own known fee) is populated.
+        /// "ChargerTariff" for Local connectors — deterministic, from the charger's configured
+        /// tariff. For Partner connectors: "PartnerTariff" when the partner CPO's own price was
+        /// resolved from their published tariff (via OCPI.Core.Roaming), or "PlatformFeeOnly"
+        /// when it couldn't be resolved (EstimatedCost then reflects only HyCharge's own
+        /// platform fee).
         /// </summary>
-        public bool CostKnown { get; set; }
-        public double? EstimatedCost { get; set; }
-        public double? EstimatedCostWithTax { get; set; }
-        /// <summary>Populated for Partner connectors only.</summary>
-        public double? EstimatedPlatformFeeWithTax { get; set; }
+        public string CostBasis { get; set; }
         public string Currency { get; set; } = "₹";
 
         /// <summary>

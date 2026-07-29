@@ -25,7 +25,7 @@ namespace OCPP.Core.Management.Services
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory)
         {
-            _logger = logger;
+            _logger = new PausableLogger<SessionLimitMonitorService>(logger, configuration, "SessionLimits:PauseLogging");
             _configuration = configuration;
             _httpClientFactory = httpClientFactory;
 

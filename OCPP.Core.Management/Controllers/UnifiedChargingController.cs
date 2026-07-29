@@ -409,12 +409,13 @@ namespace OCPP.Core.Management.Controllers
         // ── Estimation ────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Estimate energy, time, range, and battery increase for either network, resolved from
-        /// the composite connector id. Local estimates include a fully-known cost (charger's own
-        /// tariff, via <see cref="ChargingSessionController.EstimateCharging"/>); Partner
-        /// estimates only know HyCharge's own platform fee ahead of a session (via
+        /// Estimate energy, time, range, cost, and battery increase for either network, resolved
+        /// from the composite connector id. Local estimates use the charger's own configured
+        /// tariff (via <see cref="ChargingSessionController.EstimateCharging"/>); Partner
+        /// estimates resolve the partner CPO's own price from their published tariff, combined
+        /// with HyCharge's own platform fee (via
         /// <see cref="OcpiPartnerHubController.EstimatePartnerCharging"/>) — see
-        /// <see cref="UnifiedEstimationDto.CostKnown"/>.
+        /// <see cref="UnifiedEstimationDto.CostBasis"/>.
         /// </summary>
         [HttpPost("estimate-charging")]
         [AllowAnonymous]
@@ -464,9 +465,9 @@ namespace OCPP.Core.Management.Controllers
                             EstimatedTimeHours = dto.EstimatedTimeHours,
                             EstimatedKilometres = dto.EstimatedKilometres,
                             EstimatedBatteryIncrease = dto.EstimatedBatteryIncrease,
-                            CostKnown = true,
                             EstimatedCost = dto.EstimatedCost,
                             EstimatedCostWithTax = dto.EstimatedCostWithTax,
+                            CostBasis = "ChargerTariff",
                             Raw = dto
                         }
                     });
@@ -507,8 +508,9 @@ namespace OCPP.Core.Management.Controllers
                             EstimatedTimeHours = dto.EstimatedTimeHours,
                             EstimatedKilometres = dto.EstimatedKilometres,
                             EstimatedBatteryIncrease = dto.EstimatedBatteryIncrease,
-                            CostKnown = false,
-                            EstimatedPlatformFeeWithTax = dto.EstimatedPlatformFeeWithTax,
+                            EstimatedCost = dto.EstimatedCost,
+                            EstimatedCostWithTax = dto.EstimatedCostWithTax,
+                            CostBasis = dto.CostBasis,
                             Raw = dto
                         }
                     });

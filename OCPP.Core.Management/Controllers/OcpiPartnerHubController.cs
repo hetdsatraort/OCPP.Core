@@ -1359,15 +1359,20 @@ namespace OCPP.Core.Management.Controllers
         // ── Estimation ────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Estimate energy, time, range, and battery increase for charging at a partner CPO
+        /// Estimate energy, time, range, cost, and battery increase for charging at a partner CPO
         /// connector — mirrors <see cref="ChargingSessionController.EstimateCharging"/>'s formulas
         /// (4.5 km/kWh range efficiency, 90%/87% AC/DC charging efficiency, 18% GST) but sourced
         /// from OcpiPartnerConnector.MaxElectricPower rather than ChargingGun.PowerOutput/ChargerTariff.
-        /// The partner CPO's own per-kWh energy price is never synced into the OCPI
-        /// locations/EVSEs/connectors tables — it's only known once the partner reports the session
-        /// cost via CDR — so only HyCharge's own platform fee (<see cref="OcpiPartnerPlatformFee"/>)
-        /// can be estimated ahead of a session; PartnerCostKnown is always false and
-        /// EstimatedPlatformFee(WithTax) covers just that portion of the eventual bill.
+        ///
+        /// The partner CPO's own per-kWh energy price is resolved via
+        /// OCPI.Core.Roaming's <c>admin/emsp/partner-connector-tariff</c> endpoint — the roaming
+        /// service owns all direct OCPI protocol communication with partners, pulling the
+        /// connector's tariff_ids and the referenced tariff live from the partner CPO when not
+        /// already cached locally. EstimatedCost/EstimatedCostWithTax combine that resolved
+        /// partner price with HyCharge's own platform fee (<see cref="OcpiPartnerPlatformFee"/>)
+        /// so the user sees the total they'll actually pay. If the partner's tariff can't be
+        /// resolved (no tariff_ids, unreachable, etc.), CostBasis falls back to "PlatformFeeOnly"
+        /// and the estimate reflects only the known platform-fee portion.
         /// </summary>
         [HttpPost("estimate-charging")]
         [AllowAnonymous]
@@ -1405,6 +1410,12 @@ namespace OCPP.Core.Management.Controllers
                 if (feeConfig != null)
                     feePerKwh = feeConfig.FeePerKwh;
 
+                decimal? partnerRatePerKwh = await ResolvePartnerRatePerKwhAsync(
+                    location.PartnerCredentialId, location.LocationId, evse.EvseUid, connector.ConnectorId);
+                string costBasis = partnerRatePerKwh.HasValue ? "PartnerTariff" : "PlatformFeeOnly";
+
+                decimal effectiveRatePerKwh = (partnerRatePerKwh ?? 0) + feePerKwh;
+
                 double batteryCapacity = request.BatteryCapacity ?? 40.0;
                 const double efficiencyKmPerKwh = 4.5;
                 double chargingEfficiency = (connector.PowerType ?? string.Empty).Contains("DC", StringComparison.OrdinalIgnoreCase)
@@ -1415,16 +1426,16 @@ namespace OCPP.Core.Management.Controllers
                 double timeHours;
 
                 // Same priority order as ChargingSessionController.EstimateCharging: explicit
-                // energy, then budget (against the known platform-fee portion only), then
-                // duration, then a 1-hour default.
+                // energy, then budget (against the resolved effective rate — partner tariff plus
+                // platform fee), then duration, then a 1-hour default.
                 if (request.DesiredEnergy.HasValue && request.DesiredEnergy.Value > 0)
                 {
                     energyKwh = request.DesiredEnergy.Value;
                 }
-                else if (request.DesiredCost.HasValue && request.DesiredCost.Value > 0 && feePerKwh > 0)
+                else if (request.DesiredCost.HasValue && request.DesiredCost.Value > 0 && effectiveRatePerKwh > 0)
                 {
                     double costBeforeTax = request.DesiredCost.Value / 1.18;
-                    energyKwh = costBeforeTax / (double)feePerKwh;
+                    energyKwh = costBeforeTax / (double)effectiveRatePerKwh;
                 }
                 else if (request.DesiredDuration.HasValue && request.DesiredDuration.Value > 0)
                 {
@@ -1450,25 +1461,34 @@ namespace OCPP.Core.Management.Controllers
                 timeHours = energyKwh / (powerOutputKw * chargingEfficiency);
                 double timeMinutes = timeHours * 60;
 
+                double partnerCost = energyKwh * (double)(partnerRatePerKwh ?? 0);
                 double platformFee = energyKwh * (double)feePerKwh;
-                double platformFeeTax = platformFee * 0.18;
-                double platformFeeWithTax = platformFee + platformFeeTax;
+                double costBeforeTaxTotal = partnerCost + platformFee;
+                double taxAmount = costBeforeTaxTotal * 0.18;
+                double costWithTax = costBeforeTaxTotal + taxAmount;
 
                 double kilometres = energyKwh * efficiencyKmPerKwh;
                 double batteryIncrease = (energyKwh / batteryCapacity) * 100;
 
+                string message = costBasis == "PartnerTariff"
+                    ? $"Estimation calculated successfully. The partner CPO's own energy price (₹{partnerRatePerKwh:F2}/kWh) was resolved from their published tariff."
+                    : "Estimation calculated successfully. This partner CPO's tariff could not be resolved, so the estimate reflects HyCharge's platform fee only — the partner CPO's own energy charge will be added once reported.";
+
                 var response = new PartnerChargingEstimationResponseDto
                 {
                     Success = true,
-                    Message = "Estimation calculated successfully. This covers HyCharge's platform fee only — the partner CPO's own energy charge is added once reported by the partner.",
+                    Message = message,
                     EstimatedEnergy = Math.Round(energyKwh, 2),
                     EstimatedTimeMinutes = Math.Round(timeMinutes, 1),
                     EstimatedTimeHours = Math.Round(timeHours, 2),
                     EstimatedKilometres = Math.Round(kilometres, 1),
                     EstimatedBatteryIncrease = Math.Round(batteryIncrease, 1),
-                    PartnerCostKnown = false,
+                    CostBasis = costBasis,
+                    EstimatedPartnerRatePerKwh = partnerRatePerKwh.HasValue ? (double?)Math.Round(partnerRatePerKwh.Value, 2) : null,
+                    EstimatedPartnerCost = Math.Round(partnerCost, 2),
                     EstimatedPlatformFee = Math.Round(platformFee, 2),
-                    EstimatedPlatformFeeWithTax = Math.Round(platformFeeWithTax, 2),
+                    EstimatedCost = Math.Round(costBeforeTaxTotal, 2),
+                    EstimatedCostWithTax = Math.Round(costWithTax, 2),
                     Connector = new PartnerConnectorEstimationDetails
                     {
                         PowerOutput = Math.Round(powerOutputKw, 2),
@@ -1485,19 +1505,22 @@ namespace OCPP.Core.Management.Controllers
                     },
                     CostDetails = new PartnerCostBreakdown
                     {
+                        PartnerCost = Math.Round(partnerCost, 2),
                         PlatformFee = Math.Round(platformFee, 2),
-                        PlatformFeeTax = Math.Round(platformFeeTax, 2),
-                        PlatformFeeWithTax = Math.Round(platformFeeWithTax, 2),
-                        FeePerKwh = feePerKwh,
+                        TaxAmount = Math.Round(taxAmount, 2),
+                        TotalCost = Math.Round(costWithTax, 2),
+                        PartnerRatePerKwh = partnerRatePerKwh.HasValue ? (double?)Math.Round(partnerRatePerKwh.Value, 2) : null,
+                        PlatformFeePerKwh = feePerKwh,
                         Currency = "₹",
-                        CGST = Math.Round(platformFeeTax / 2, 2),
-                        SGST = Math.Round(platformFeeTax / 2, 2)
+                        CGST = Math.Round(taxAmount / 2, 2),
+                        SGST = Math.Round(taxAmount / 2, 2),
+                        CostBasis = costBasis
                     }
                 };
 
                 _logger.LogInformation(
-                    "Partner charging estimation calculated for connector {ConnectorDbId}: {Energy:F2} kWh, platform fee ₹{Fee:F2}, {Time:F1} min, {Km:F1} km, +{Batt:F1}%",
-                    request.ConnectorDbId, energyKwh, platformFeeWithTax, timeMinutes, kilometres, batteryIncrease);
+                    "Partner charging estimation calculated for connector {ConnectorDbId}: {Energy:F2} kWh, cost ₹{Cost:F2} ({Basis}), {Time:F1} min, {Km:F1} km, +{Batt:F1}%",
+                    request.ConnectorDbId, energyKwh, costWithTax, costBasis, timeMinutes, kilometres, batteryIncrease);
 
                 return Ok(response);
             }
@@ -1505,6 +1528,51 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "Error calculating partner charging estimation for connector {ConnectorDbId}", request?.ConnectorDbId);
                 return Ok(new PartnerChargingEstimationResponseDto { Success = false, Message = "Error calculating estimation" });
+            }
+        }
+
+        /// <summary>
+        /// Asks OCPI.Core.Roaming to resolve a partner CPO's own per-kWh energy price for a
+        /// connector (their tariff_ids, cached or pulled live from the partner) — all direct OCPI
+        /// protocol communication stays in that project. Returns null if the roaming service isn't
+        /// configured, unreachable, or couldn't resolve a price (e.g. the connector has no
+        /// tariff_ids) — the caller falls back to a platform-fee-only estimate in that case.
+        /// </summary>
+        private async Task<decimal?> ResolvePartnerRatePerKwhAsync(
+            int partnerCredentialId, string locationId, string evseUid, string connectorId)
+        {
+            var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
+            if (string.IsNullOrEmpty(roamingApiUrl))
+                return null;
+
+            try
+            {
+                var http = _httpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(20);
+
+                var query = $"partnerId={partnerCredentialId}" +
+                    $"&locationId={Uri.EscapeDataString(locationId ?? string.Empty)}" +
+                    $"&evseUid={Uri.EscapeDataString(evseUid ?? string.Empty)}" +
+                    $"&connectorId={Uri.EscapeDataString(connectorId ?? string.Empty)}";
+
+                var resp = await http.GetAsync($"{roamingApiUrl.TrimEnd('/')}/admin/emsp/partner-connector-tariff?{query}");
+                if (!resp.IsSuccessStatusCode)
+                    return null;
+
+                var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
+                if (!json.TryGetProperty("success", out var successEl) || successEl.ValueKind != JsonValueKind.True)
+                    return null;
+                if (!json.TryGetProperty("data", out var data))
+                    return null;
+
+                return data.TryGetProperty("energyPricePerKwh", out var rateEl) && rateEl.ValueKind == JsonValueKind.Number
+                    ? rateEl.GetDecimal()
+                    : (decimal?)null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to resolve partner tariff rate for connector {ConnectorId}", connectorId);
+                return null;
             }
         }
 
@@ -1572,7 +1640,7 @@ namespace OCPP.Core.Management.Controllers
             public int? DesiredDuration { get; set; }
             /// <summary>Optional: Current battery percentage (0-100).</summary>
             public double? CurrentBatteryPercentage { get; set; }
-            /// <summary>Optional: Desired cost/budget to spend against HyCharge's platform fee only.</summary>
+            /// <summary>Optional: Desired cost/budget to spend, against the resolved effective rate (see PartnerChargingEstimationResponseDto.CostBasis).</summary>
             public double? DesiredCost { get; set; }
         }
 
@@ -1586,14 +1654,21 @@ namespace OCPP.Core.Management.Controllers
             public double EstimatedKilometres { get; set; }
             public double EstimatedBatteryIncrease { get; set; }
             /// <summary>
-            /// Always false — the partner CPO's own per-kWh energy price isn't synced by the OCPI
-            /// locations/EVSEs/connectors tables and is only known once the CDR/session cost is
-            /// reported, so EstimatedPlatformFee(WithTax) below is the only cost figure this
-            /// endpoint can responsibly return ahead of a session.
+            /// "PartnerTariff" when EstimatedPartnerCost/EstimatedPartnerRatePerKwh were resolved
+            /// from the partner CPO's own published tariff (via OCPI.Core.Roaming, cached or
+            /// fetched live); "PlatformFeeOnly" when that tariff couldn't be resolved (no
+            /// tariff_ids on the connector, partner unreachable, etc.), in which case
+            /// EstimatedPartnerCost is 0 and EstimatedCost(WithTax) reflect HyCharge's platform
+            /// fee alone.
             /// </summary>
-            public bool PartnerCostKnown { get; set; }
+            public string CostBasis { get; set; }
+            public double? EstimatedPartnerRatePerKwh { get; set; }
+            public double EstimatedPartnerCost { get; set; }
             public double EstimatedPlatformFee { get; set; }
-            public double EstimatedPlatformFeeWithTax { get; set; }
+            /// <summary>Partner cost + platform fee, before tax.</summary>
+            public double EstimatedCost { get; set; }
+            /// <summary>Partner cost + platform fee + 18% GST.</summary>
+            public double EstimatedCostWithTax { get; set; }
             public PartnerConnectorEstimationDetails Connector { get; set; }
             public PartnerCarAssumptions Car { get; set; }
             public PartnerCostBreakdown CostDetails { get; set; }
@@ -1617,13 +1692,17 @@ namespace OCPP.Core.Management.Controllers
 
         public class PartnerCostBreakdown
         {
+            /// <summary>Resolved from the partner's own tariff — see PartnerChargingEstimationResponseDto.CostBasis.</summary>
+            public double PartnerCost { get; set; }
             public double PlatformFee { get; set; }
-            public double PlatformFeeTax { get; set; }
-            public double PlatformFeeWithTax { get; set; }
-            public decimal FeePerKwh { get; set; }
+            public double TaxAmount { get; set; }
+            public double TotalCost { get; set; }
+            public double? PartnerRatePerKwh { get; set; }
+            public decimal PlatformFeePerKwh { get; set; }
             public string Currency { get; set; } = "₹";
             public double CGST { get; set; }
             public double SGST { get; set; }
+            public string CostBasis { get; set; }
         }
 
     }

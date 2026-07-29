@@ -19,7 +19,7 @@ namespace OCPP.Core.Management.Services
             IConfiguration configuration,
             IServiceScopeFactory scopeFactory)
         {
-            _logger = logger;
+            _logger = new PausableLogger<GunStatusService>(logger, configuration, "GunStatus:PauseLogging");
             _scopeFactory = scopeFactory;
 
             var intervalMinutes = configuration.GetValue<int>("GunStatus:CheckIntervalMinutes", 1);

@@ -56,7 +56,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             IConfiguration configuration)
         {
             _services      = services;
-            _logger        = logger;
+            _logger        = new PausableLogger<OcpiSyncBackgroundService>(logger, configuration, "OCPI:PauseSyncLogging");
             _configuration = configuration;
 
             var intervalMinutes = configuration.GetValue<int>("OCPI:SyncIntervalMinutes", 5);

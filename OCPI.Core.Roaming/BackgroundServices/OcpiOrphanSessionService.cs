@@ -62,7 +62,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             IConfiguration configuration)
         {
             _scopeFactory = scopeFactory;
-            _logger = logger;
+            _logger = new PausableLogger<OcpiOrphanSessionService>(logger, configuration, "OCPI:PauseOrphanSessionLogging");
             _configuration = configuration;
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
