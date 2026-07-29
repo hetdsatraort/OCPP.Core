@@ -812,7 +812,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var http = factory.CreateClient();
             http.DefaultRequestHeaders.Clear();
             var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
-            http.DefaultRequestHeaders.Add("Authorization", $"Token  {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
+            http.DefaultRequestHeaders.Add("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
             http.Timeout = TimeSpan.FromSeconds(30);
             return http;
         }
