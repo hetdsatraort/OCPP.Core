@@ -15,6 +15,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -592,6 +593,13 @@ namespace OCPP.Core.Management.Controllers
                     var (_, value) = ExtractResult(result);
                     var json = ToJsonElement(value);
 
+                    if(!string.IsNullOrEmpty(GetString(json, "authorizationRefernce")))
+                    {
+                        var valueNode = JsonNode.Parse(json.GetRawText());
+                        valueNode["authorizationReference"] = UnifiedId.Encode(ProviderType.Partner, GetString(json, "authorizationReference")); //$"P:{valueNode["authorizationReference"]}";
+                        json = JsonSerializer.Deserialize<JsonElement>(valueNode);
+                    }
+
                     return Ok(new UnifiedChargingResponseDto
                     {
                         Success = GetBool(json, "success") ?? false,
@@ -603,7 +611,7 @@ namespace OCPP.Core.Management.Controllers
                             // The OCPI roaming service assigns the real session id asynchronously
                             // (see OcpiAdminController.EmspStartSession) — its exact response schema
                             // isn't owned by this facade, so it's passed through untouched here.
-                            Raw = value
+                            Raw = json
                         }
                     });
                 }
