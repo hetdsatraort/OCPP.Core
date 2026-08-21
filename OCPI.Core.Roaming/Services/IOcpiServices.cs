@@ -87,8 +87,13 @@ namespace OCPI.Core.Roaming.Services
         Task StorePartnerEvseAsync(int partnerLocationId, OcpiEvse evse);
         Task StorePartnerConnectorAsync(int partnerEvseId, OcpiConnector connector);
 
-        /// <summary>Returns the database PK of a stored partner location, or null if not found.</summary>
-        Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId);
+        /// <summary>
+        /// Returns the database PK of a stored partner location, or null if not found.
+        /// Pass <paramref name="partnerCredentialId"/> when it's already resolved (from the
+        /// Authorization token) to match that exact partner generation; omit it to fall back to
+        /// whichever generation belongs to the currently active partner row.
+        /// </summary>
+        Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId, int? partnerCredentialId = null);
         /// <summary>Returns the database PK of a stored partner EVSE, or null if not found.</summary>
         Task<int?> GetPartnerEvseDbIdAsync(int partnerLocationId, string evseUid);
 

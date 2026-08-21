@@ -142,10 +142,16 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task StorePartnerLocationAsync(int partnerCredentialId, OcpiLocation location)
         {
+            // Scoped to this partner credential row (not just CountryCode+PartyId+LocationId) so
+            // that a removed-and-re-added partner — which gets a new OcpiPartnerCredential.Id —
+            // starts a fresh location row instead of stealing/mutating the previous generation's
+            // row. The old generation's rows stay put as history, same as the soft-deleted
+            // partner row itself.
             var existing = await _dbContext.OcpiPartnerLocations
                 .FirstOrDefaultAsync(l => l.CountryCode == location.CountryCode!
                     && l.PartyId == location.PartyId
-                    && l.LocationId == location.Id);
+                    && l.LocationId == location.Id
+                    && l.PartnerCredentialId == partnerCredentialId);
 
             if (existing != null)
             {
@@ -157,11 +163,6 @@ namespace OCPI.Core.Roaming.Services
                 existing.Latitude = Trunc(location.Coordinates?.Latitude, 20);
                 existing.Longitude = Trunc(location.Coordinates?.Longitude, 20);
                 existing.LocationType = Trunc(location.Type?.ToMemberValue(), 50);
-                // Re-point to the current partner credential row — a partner that was removed
-                // and re-added gets a new OcpiPartnerCredential.Id, but this location is matched
-                // by CountryCode+PartyId+LocationId alone, so without this it stays orphaned on
-                // the old (inactive) partner id and disappears from that partner's location list.
-                existing.PartnerCredentialId = partnerCredentialId;
                 existing.LastUpdated = location.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerLocations.Update(existing);
@@ -273,13 +274,22 @@ namespace OCPI.Core.Roaming.Services
             await _dbContext.SaveChangesAsync();
         }
 
-        public async Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId)
+        public async Task<int?> GetPartnerLocationDbIdAsync(string countryCode, string partyId, string locationId, int? partnerCredentialId = null)
         {
-            var loc = await _dbContext.OcpiPartnerLocations
-                .Where(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId)
-                .Select(l => (int?)l.Id)
-                .FirstOrDefaultAsync();
-            return loc;
+            var query = _dbContext.OcpiPartnerLocations
+                .Where(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId);
+
+            // Now that a removed-and-re-added partner can leave behind an older location
+            // generation (see StorePartnerLocationAsync), CountryCode+PartyId+LocationId alone is
+            // no longer guaranteed unique. Callers that already resolved the partner (from the
+            // Authorization token) pass its id for an exact match; callers that haven't (the
+            // read-back GET endpoints) fall back to whichever generation belongs to the currently
+            // active partner row.
+            query = partnerCredentialId.HasValue
+                ? query.Where(l => l.PartnerCredentialId == partnerCredentialId.Value)
+                : query.Where(l => _dbContext.OcpiPartnerCredentials.Any(p => p.Id == l.PartnerCredentialId && p.IsActive));
+
+            return await query.Select(l => (int?)l.Id).FirstOrDefaultAsync();
         }
 
         public async Task<int?> GetPartnerEvseDbIdAsync(int partnerLocationId, string evseUid)
@@ -293,8 +303,12 @@ namespace OCPI.Core.Roaming.Services
 
         public async Task<OcpiLocation?> GetStoredPartnerLocationAsync(string countryCode, string partyId, string locationId)
         {
+            // Only the currently active partner's generation of this location — an older,
+            // soft-deleted partner's rows are kept for history but shouldn't resurface here.
             var loc = await _dbContext.OcpiPartnerLocations
-                .FirstOrDefaultAsync(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId);
+                .Where(l => l.CountryCode == countryCode && l.PartyId == partyId && l.LocationId == locationId)
+                .Where(l => _dbContext.OcpiPartnerCredentials.Any(p => p.Id == l.PartnerCredentialId && p.IsActive))
+                .FirstOrDefaultAsync();
 
             if (loc == null) return null;
 
