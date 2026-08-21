@@ -157,6 +157,11 @@ namespace OCPI.Core.Roaming.Services
                 existing.Latitude = Trunc(location.Coordinates?.Latitude, 20);
                 existing.Longitude = Trunc(location.Coordinates?.Longitude, 20);
                 existing.LocationType = Trunc(location.Type?.ToMemberValue(), 50);
+                // Re-point to the current partner credential row — a partner that was removed
+                // and re-added gets a new OcpiPartnerCredential.Id, but this location is matched
+                // by CountryCode+PartyId+LocationId alone, so without this it stays orphaned on
+                // the old (inactive) partner id and disappears from that partner's location list.
+                existing.PartnerCredentialId = partnerCredentialId;
                 existing.LastUpdated = location.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerLocations.Update(existing);
