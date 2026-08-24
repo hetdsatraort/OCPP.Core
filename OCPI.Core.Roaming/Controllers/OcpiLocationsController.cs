@@ -153,7 +153,7 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
-            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId, partner.Id);
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
 
@@ -189,7 +189,7 @@ namespace OCPI.Core.Roaming.Controllers
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
             // Resolve the stored partner location PK
-            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId, partner.Id);
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
 
@@ -222,7 +222,7 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
-            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId, partner.Id);
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
 
@@ -259,7 +259,7 @@ namespace OCPI.Core.Roaming.Controllers
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
             // Resolve the stored partner location PK
-            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId, partner.Id);
+            var partnerLocationId = await _locationService.GetPartnerLocationDbIdAsync(countryCode, partyId, locationId);
             if (partnerLocationId == null)
                 throw OcpiException.UnknownLocation($"Location {locationId} not found for partner {countryCode}/{partyId}");
 

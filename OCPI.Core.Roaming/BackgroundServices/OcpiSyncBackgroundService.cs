@@ -34,7 +34,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly ILogger<OcpiSyncBackgroundService> _logger;
         private readonly IConfiguration _configuration;
         private readonly TimeSpan _syncInterval;
-        private readonly TimeSpan _pushRequestDelay;
 
         // OCPI standard JSON options — enums as strings, case-insensitive property names.
         // JsonStringEnumMemberConverterV2 honours [EnumMember(Value = "...")] attributes (e.g.
@@ -60,11 +59,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _logger        = new PausableLogger<OcpiSyncBackgroundService>(logger, configuration, "OCPI:PauseSyncLogging");
             _configuration = configuration;
 
-            var intervalMinutes = configuration.GetValue<int>("OCPI:SyncIntervalMinutes", 10);
+            var intervalMinutes = configuration.GetValue<int>("OCPI:SyncIntervalMinutes", 5);
             _syncInterval = TimeSpan.FromMinutes(intervalMinutes);
-
-            var pushDelayMs = configuration.GetValue<int>("OCPI:PushRequestDelayMs", 200);
-            _pushRequestDelay = TimeSpan.FromMilliseconds(pushDelayMs);
         }
 
         // ── BackgroundService ──────────────────────────────────────────────────
@@ -171,16 +167,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     if (role is "EMSP" or "HUB")
                     {
                         await PullTokensFromEmspAsync(partner, endpoints, http, tokenService, ct);
-
-                        // Each push type is gated independently — a 429 partway through the
-                        // locations push shouldn't be treated as clearing by the time we reach
-                        // the sessions/EVSE-status push later in the same round.
-                        await PushIfNotCoolingDownAsync(partner, "locations",
-                            () => PushLocationsToEmspAsync(partner, endpoints, http, locationService, ct));
-                        await PushIfNotCoolingDownAsync(partner, "hosted sessions",
-                            () => PushHostedSessionsToEmspAsync(partner, endpoints, http, dbContext, ct));
-                        await PushIfNotCoolingDownAsync(partner, "EVSE statuses",
-                            () => PushEvseStatusesToEmspAsync(partner, endpoints, http, dbContext, onlineChargePoints, ct));
+                        await PushLocationsToEmspAsync(partner, endpoints, http, locationService, ct);
+                        await PushHostedSessionsToEmspAsync(partner, endpoints, http, dbContext, ct);
+                        await PushEvseStatusesToEmspAsync(partner, endpoints, http, dbContext, onlineChargePoints, ct);
                     }
 
                     partner.LastSyncOn = DateTime.UtcNow;
@@ -321,7 +310,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 // Pull nested EVSEs / connectors
                 if (location.Evses == null) continue;
                 var dbLocationId = await locationService.GetPartnerLocationDbIdAsync(
-                    partner.CountryCode, partner.PartyId, location.Id!, partner.Id);
+                    partner.CountryCode, partner.PartyId, location.Id!);
 
                 if (dbLocationId == null) continue;
 
@@ -485,7 +474,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     {
                         failed++;
                         _logger.LogWarning("PUT location {Id} to {CC}-{Party} → {Status}", location.Id, partner.CountryCode, partner.PartyId, resp.StatusCode);
-                        if (HandlePotentialRateLimit(resp, partner)) break;
                     }
                 }
                 catch (Exception ex)
@@ -493,8 +481,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     failed++;
                     _logger.LogError(ex, "Failed to push location {Id} to partner {CC}-{Party}", location.Id, partner.CountryCode, partner.PartyId);
                 }
-
-                await Task.Delay(_pushRequestDelay, ct);
             }
 
             _logger.LogInformation(
@@ -544,7 +530,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     {
                         failed++;
                         _logger.LogWarning("PUT session {Id} to {CC}-{Party} → {Status}", hosted.SessionId, partner.CountryCode, partner.PartyId, resp.StatusCode);
-                        if (HandlePotentialRateLimit(resp, partner)) break;
                     }
                 }
                 catch (Exception ex)
@@ -552,8 +537,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     failed++;
                     _logger.LogError(ex, "Failed to push session {Id} to partner {CC}-{Party}", hosted.SessionId, partner.CountryCode, partner.PartyId);
                 }
-
-                await Task.Delay(_pushRequestDelay, ct);
             }
 
             _logger.LogInformation(
@@ -663,7 +646,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         _logger.LogWarning(
                             "PATCH EVSE {EvseUid}={Status} to partner {CC}-{Party} → HTTP {Code}",
                             station.RecId, ocpiStatus, partner.CountryCode, partner.PartyId, resp.StatusCode);
-                        if (HandlePotentialRateLimit(resp, partner)) break;
                     }
                 }
                 catch (Exception ex)
@@ -673,8 +655,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         "Failed to PATCH EVSE status {EvseUid} to partner {CC}-{Party}",
                         station.RecId, partner.CountryCode, partner.PartyId);
                 }
-
-                await Task.Delay(_pushRequestDelay, ct);
             }
 
             _logger.LogInformation(
@@ -823,43 +803,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 // Follow OCPI Link header for next page (format: <url>; rel="next")
                 nextUrl = ParseLinkNextHeader(resp);
             }
-        }
-
-        // ── Rate-limit handling ─────────────────────────────────────────────────
-
-        /// <summary>
-        /// Runs <paramref name="pushAction"/> unless the partner is currently cooling down after
-        /// a prior 429 (in this round or a previous one). Skips it entirely if so — pushing to a
-        /// rate-limited partner anyway just extends the ban.
-        /// </summary>
-        private async Task PushIfNotCoolingDownAsync(OcpiPartnerCredential partner, string label, Func<Task> pushAction)
-        {
-            if (OcpiPartnerRateLimiter.IsCoolingDown(partner.Id, out var remaining))
-            {
-                _logger.LogWarning(
-                    "Partner {CC}-{Party} is cooling down after a 429 — skipping {Label} push for another {Remaining:g}",
-                    partner.CountryCode, partner.PartyId, label, remaining);
-                return;
-            }
-
-            await pushAction();
-        }
-
-        /// <summary>
-        /// Checks a push response for 429 Too Many Requests. If found, puts the partner on
-        /// cooldown (honouring their Retry-After header when present, else a conservative default)
-        /// and returns true so the caller can stop sending further items in this loop.
-        /// </summary>
-        private bool HandlePotentialRateLimit(HttpResponseMessage resp, OcpiPartnerCredential partner)
-        {
-            if (!OcpiPartnerRateLimiter.HandleIfRateLimited(resp, partner.Id))
-                return false;
-
-            _logger.LogWarning(
-                "Partner {CC}-{Party} returned 429 Too Many Requests — pausing pushes to them",
-                partner.CountryCode, partner.PartyId);
-
-            return true;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────
