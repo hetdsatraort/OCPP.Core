@@ -197,7 +197,8 @@ namespace OCPI.Core.Roaming.Controllers
                 return NotFound(new { success = false, message = "Partner not found" });
 
             var httpClient = _httpClientFactory.CreateClient();
-            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {partner.Token}");
+            var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
             httpClient.Timeout = TimeSpan.FromSeconds(10);
 
             try

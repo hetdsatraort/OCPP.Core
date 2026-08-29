@@ -33,7 +33,22 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly IServiceProvider _services;
         private readonly ILogger<OcpiSyncBackgroundService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IOcpiEndpointCache _endpointCache;
         private readonly TimeSpan _syncInterval;
+
+        // A partner with a hard daily request quota (e.g. Numocity: 200/day) can have its entire
+        // budget consumed by ONE round if a never-synced (LastSyncOn == null) pull is left fully
+        // unbounded — that used date_from=null, i.e. "give me your whole history", which pagination
+        // then walks 100-at-a-time with no limit. These two settings bound that:
+        //   - InitialSyncLookbackDays: when there's no prior sync, use "now minus N days" as
+        //     date_from instead of leaving it out entirely. Trade-off: a location/session/CDR that
+        //     hasn't changed in longer than this window won't backfill on the first sync.
+        //   - MaxPullPagesPerRound: hard cap on pages fetched per pull call, regardless of dateFrom,
+        //     as a safety net in case even the windowed query is large. Whatever's beyond the cap
+        //     isn't retried explicitly — it's picked up incrementally as later activity touches it —
+        //     so this is a deliberate completeness-vs-quota trade-off, not a full resumable sync.
+        private readonly int _initialSyncLookbackDays;
+        private readonly int _maxPullPagesPerRound;
 
         // OCPI standard JSON options — enums as strings, case-insensitive property names.
         // JsonStringEnumMemberConverterV2 honours [EnumMember(Value = "...")] attributes (e.g.
@@ -53,14 +68,19 @@ namespace OCPI.Core.Roaming.BackgroundServices
         public OcpiSyncBackgroundService(
             IServiceProvider services,
             ILogger<OcpiSyncBackgroundService> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IOcpiEndpointCache endpointCache)
         {
             _services      = services;
             _logger        = new PausableLogger<OcpiSyncBackgroundService>(logger, configuration, "OCPI:PauseSyncLogging");
             _configuration = configuration;
+            _endpointCache = endpointCache;
 
             var intervalMinutes = configuration.GetValue<int>("OCPI:SyncIntervalMinutes", 5);
             _syncInterval = TimeSpan.FromMinutes(intervalMinutes);
+
+            _initialSyncLookbackDays = Math.Max(1, configuration.GetValue<int>("OCPI:InitialSyncLookbackDays", 7));
+            _maxPullPagesPerRound = Math.Max(1, configuration.GetValue<int>("OCPI:MaxPullPagesPerRound", 10));
         }
 
         // ── BackgroundService ──────────────────────────────────────────────────
@@ -192,80 +212,18 @@ namespace OCPI.Core.Roaming.BackgroundServices
         // ── Endpoint discovery ─────────────────────────────────────────────────
 
         /// <summary>
-        /// Calls the partner's /versions URL, then the 2.2.1 details URL, and returns a
-        /// lookup keyed by "{module}_{role}" (lower-case), e.g. "locations_sender".
+        /// Returns the partner's endpoint map ("{module}_{role}", lower-case, e.g. "locations_sender"),
+        /// via <see cref="IOcpiEndpointCache"/> so repeated calls within the cache TTL
+        /// (<c>OCPI:EndpointCacheMinutes</c>) don't re-hit /versions and /versions/2.2.1 — those two
+        /// extra GETs per lookup used to be a meaningful share of the traffic that tripped partner
+        /// 429 rate limits, especially from OcpiOrphanSessionService's ~10s cycle.
         /// Returns null if discovery fails.
         /// </summary>
-        private async Task<Dictionary<string, string>?> DiscoverEndpointsAsync(
+        private Task<Dictionary<string, string>?> DiscoverEndpointsAsync(
             HttpClient http,
             OcpiPartnerCredential partner,
             CancellationToken ct)
-        {
-            try
-            {
-                // 1. GET /versions → list of version objects
-                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
-                var versionsResp = await http.GetAsync(partnerURL, ct);
-                if (!versionsResp.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning(
-                        "Partner {CC}-{Party} versions endpoint returned {Status}",
-                        partner.CountryCode, partner.PartyId, versionsResp.StatusCode);
-                    return null;
-                }
-
-                var versionsEnvelope = await DeserializeAsync<OcpiApiEnvelope<List<Services.OcpiVersionInfo>>>(versionsResp, ct);
-                var v221 = versionsEnvelope?.Data?.FirstOrDefault(v =>
-                    string.Equals(v.Version, "2.2.1", StringComparison.OrdinalIgnoreCase));
-
-                if (v221 == null)
-                {
-                    _logger.LogWarning(
-                        "Partner {CC}-{Party} does not advertise OCPI 2.2.1",
-                        partner.CountryCode, partner.PartyId);
-                    return null;
-                }
-
-                // 2. GET /versions/2.2.1 → endpoint list
-                var detailsResp = await http.GetAsync(v221.Url, ct);
-                if (!detailsResp.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning(
-                        "Partner {CC}-{Party} version details endpoint returned {Status}",
-                        partner.CountryCode, partner.PartyId, detailsResp.StatusCode);
-                    return null;
-                }
-
-                var detailsEnvelope = await DeserializeAsync<OcpiApiEnvelope<Services.OcpiVersionDetails>>(detailsResp, ct);
-                var endpoints = detailsEnvelope?.Data?.Endpoints;
-
-                if (endpoints == null || !endpoints.Any())
-                {
-                    _logger.LogWarning(
-                        "Partner {CC}-{Party} returned empty endpoint list",
-                        partner.CountryCode, partner.PartyId);
-                    return null;
-                }
-
-                var map = endpoints.ToDictionary(
-                    e => $"{e.Identifier.ToLowerInvariant()}_{e.Role.ToLowerInvariant()}",
-                    e => e.Url,
-                    StringComparer.OrdinalIgnoreCase);
-
-                _logger.LogDebug(
-                    "Discovered {Count} endpoints for partner {CC}-{Party}",
-                    map.Count, partner.CountryCode, partner.PartyId);
-
-                return map;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Endpoint discovery failed for partner {CC}-{Party}",
-                    partner.CountryCode, partner.PartyId);
-                return null;
-            }
-        }
+            => _endpointCache.GetEndpointsAsync(partner, http, _logger, ct);
 
         // ── PULL from CPO partner ──────────────────────────────────────────────
 
@@ -299,7 +257,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.AddDays(-1).ToString("yyyy-MM-dd");
+            var dateFrom = (partner.LastSyncOn?.AddDays(-1) ?? DateTime.UtcNow.AddDays(-_initialSyncLookbackDays))
+                .ToString("yyyy-MM-dd");
             var pulled   = 0;
 
             await foreach (var location in PaginateAsync<OCPI.Core.Roaming.Services.OcpiLocation>(http, url, dateFrom, ct))
@@ -347,7 +306,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.ToString("o");
+            var dateFrom = (partner.LastSyncOn ?? DateTime.UtcNow.AddDays(-_initialSyncLookbackDays)).ToString("o");
             var pulled   = 0;
 
             await foreach (var tariff in PaginateAsync<Contracts.OcpiTariff>(http, url, dateFrom, ct))
@@ -372,7 +331,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.ToString("o");
+            var dateFrom = (partner.LastSyncOn ?? DateTime.UtcNow.AddDays(-_initialSyncLookbackDays)).ToString("o");
             var pulled   = 0;
 
             await foreach (var session in PaginateAsync<OcpiSession>(http, url, dateFrom, ct))
@@ -398,7 +357,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             }
 
             // Always pull CDRs from last sync so we don't miss settlement records.
-            var dateFrom = partner.LastSyncOn?.ToString("o");
+            var dateFrom = (partner.LastSyncOn ?? DateTime.UtcNow.AddDays(-_initialSyncLookbackDays)).ToString("o");
             var pulled   = 0;
 
             await foreach (var cdr in PaginateAsync<Contracts.OcpiCdr>(http, url, dateFrom, ct))
@@ -425,7 +384,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 return;
             }
 
-            var dateFrom = partner.LastSyncOn?.ToString("o");
+            var dateFrom = (partner.LastSyncOn ?? DateTime.UtcNow.AddDays(-_initialSyncLookbackDays)).ToString("o");
             var pulled   = 0;
 
             await foreach (var token in PaginateAsync<Contracts.OcpiToken>(http, url, dateFrom, ct))
@@ -743,9 +702,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
         // ── Pagination helper ──────────────────────────────────────────────────
 
         /// <summary>
-        /// Iterates all pages of an OCPI sender endpoint, yielding items one by one.
+        /// Iterates pages of an OCPI sender endpoint, yielding items one by one.
         /// Adds <c>date_from</c> and <c>limit</c> query parameters; follows the OCPI
-        /// <c>Link</c> header for subsequent pages.
+        /// <c>Link</c> header for subsequent pages, up to <c>OCPI:MaxPullPagesPerRound</c> pages —
+        /// a safety net against a partner-side daily request quota being exhausted by one
+        /// unexpectedly large result set (see the field comments on <c>_maxPullPagesPerRound</c>).
         /// </summary>
         private async IAsyncEnumerable<T> PaginateAsync<T>(
             HttpClient http,
@@ -762,10 +723,23 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 firstUrl += $"&date_from={dateFrom}";
 
             string? nextUrl = firstUrl;
+            var page = 0;
 
             while (nextUrl != null)
             {
                 if (ct.IsCancellationRequested) yield break;
+
+                if (page >= _maxPullPagesPerRound)
+                {
+                    _logger.LogWarning(
+                        "PaginateAsync: hit the {Max}-page safety cap (OCPI:MaxPullPagesPerRound) for " +
+                        "{Url} — stopping this round with pages remaining. Anything not yet pulled will " +
+                        "be picked up incrementally as later activity touches it, not backfilled outright; " +
+                        "raise the cap if a full one-time backfill is needed and the daily quota allows it.",
+                        _maxPullPagesPerRound, url);
+                    yield break;
+                }
+                page++;
 
                 HttpResponseMessage resp;
                 try
@@ -809,7 +783,10 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
         private HttpClient CreatePartnerHttpClient(IHttpClientFactory factory, OcpiPartnerCredential partner)
         {
-            var http = factory.CreateClient();
+            // "OcpiPartner" carries OcpiPartnerRateLimitHandler — paces requests per partner host
+            // and retries 429s with backoff. Every outbound call to a partner platform must go
+            // through this client rather than the plain default one.
+            var http = factory.CreateClient("OcpiPartner");
             http.DefaultRequestHeaders.Clear();
             var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
             http.DefaultRequestHeaders.Add("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");

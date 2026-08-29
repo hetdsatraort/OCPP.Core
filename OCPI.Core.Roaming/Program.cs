@@ -21,6 +21,15 @@ builder.Services.AddDbContext<OCPPCoreContext>(options =>
 
 // Register OCPI Services
 builder.Services.AddHttpClient();
+
+// Rate-limited HttpClient for all outbound calls to OCPI partner platforms: paces requests per
+// partner host and retries 429 Too Many Requests honouring Retry-After / exponential backoff.
+// See OcpiPartnerRateLimitHandler / OcpiEndpointCache for why this exists.
+builder.Services.AddSingleton<OCPI.Core.Roaming.BackgroundServices.OcpiPartnerThrottle>();
+builder.Services.AddSingleton<OCPI.Core.Roaming.BackgroundServices.IOcpiEndpointCache, OCPI.Core.Roaming.BackgroundServices.OcpiEndpointCache>();
+builder.Services.AddTransient<OCPI.Core.Roaming.BackgroundServices.OcpiPartnerRateLimitHandler>();
+builder.Services.AddHttpClient("OcpiPartner")
+    .AddHttpMessageHandler<OCPI.Core.Roaming.BackgroundServices.OcpiPartnerRateLimitHandler>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiVersionService,     OCPI.Core.Roaming.Services.OcpiVersionService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiCredentialsService, OCPI.Core.Roaming.Services.OcpiCredentialsService>();
 builder.Services.AddScoped<OCPI.Core.Roaming.Services.IOcpiLocationService, OCPI.Core.Roaming.Services.OcpiLocationService>();

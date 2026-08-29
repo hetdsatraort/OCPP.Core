@@ -42,9 +42,18 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<OcpiOrphanSessionService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IOcpiEndpointCache _endpointCache;
         private readonly TimeSpan _checkInterval;
         private readonly TimeSpan _orphanTimeout;
         private readonly TimeSpan _disconnectedSessionTimeout;
+
+        // Some partners (e.g. Numocity) enforce a hard per-day request quota (confirmed: 200/day,
+        // via x-ratelimit-limit-day), not just a per-second rate limit. This loop's ~10s cadence of
+        // pushing completed-session/CDR, active-session, and EVSE-status updates to every EMSP/HUB
+        // partner can burn a whole day's quota in under an hour on its own. When disabled, those
+        // partners fall back to pulling sessions/CDRs from our sender endpoints themselves (which
+        // OCPI already supports) and to OcpiSyncBackgroundService's slower periodic push instead.
+        private readonly bool _realTimePartnerPushEnabled;
 
         // Mirrors OcpiSyncBackgroundService._jsonOptions — JsonStringEnumMemberConverterV2 must be
         // the only enum converter registered so it isn't shadowed for OCPI.Net enums like
@@ -59,11 +68,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
         public OcpiOrphanSessionService(
             IServiceScopeFactory scopeFactory,
             ILogger<OcpiOrphanSessionService> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IOcpiEndpointCache endpointCache)
         {
             _scopeFactory = scopeFactory;
             _logger = new PausableLogger<OcpiOrphanSessionService>(logger, configuration, "OCPI:PauseOrphanSessionLogging");
             _configuration = configuration;
+            _endpointCache = endpointCache;
+            _realTimePartnerPushEnabled = configuration.GetValue<bool>("OCPI:RealTimePartnerPushEnabled", false);
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
             var timeouSeconds = configuration.GetValue<int>("OCPI:OrphanTimeoutSeconds", 60);
@@ -364,16 +376,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             // Immediately notify EMSP/HUB partners of status change for any EVSEs whose
             // sessions just completed (so partners see "AVAILABLE" without waiting for the
-            // next full sync round).
-            if (completedChargePointIds.Count > 0)
+            // next full sync round). Skipped entirely when real-time partner push is disabled —
+            // partners then see it via OcpiSyncBackgroundService's periodic EVSE-status push instead.
+            if (completedChargePointIds.Count > 0 && _realTimePartnerPushEnabled)
             {
                 await NotifyEmspPartnersOfEvseStatusAsync(
                     db, httpFactory, completedChargePointIds.Distinct().ToList(), ct);
             }
 
-            // Generate the CDR for each completed partner-initiated session and push the final
-            // session + CDR to the originating eMSP partner in real time, instead of waiting for
-            // them to pull it on the next periodic sync round.
+            // Generate the CDR for each completed partner-initiated session — always, regardless of
+            // the push toggle, since this is the billing record of truth and a local DB write only.
+            // Whether it also gets PUSHed to the partner in real time is gated inside the method.
             if (completedPartnerSessions.Count > 0)
             {
                 await PushCompletedSessionsAndCdrsAsync(db, httpFactory, completedPartnerSessions, ct);
@@ -383,7 +396,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
             // too — without this, an eMSP partner only sees fresh numbers once per
             // OCPI:SyncIntervalMinutes bulk sync (5 min default) instead of on this loop's ~10s
             // cadence, which is what made TotalCost/SoC look permanently stuck/null while charging.
-            if (liveUpdatedPartnerSessions.Count > 0)
+            // Skipped entirely when real-time partner push is disabled; the periodic bulk sync
+            // (OcpiSyncBackgroundService.PushHostedSessionsToEmspAsync) still covers ACTIVE sessions.
+            if (liveUpdatedPartnerSessions.Count > 0 && _realTimePartnerPushEnabled)
             {
                 await PushActiveSessionUpdatesToEmspAsync(db, httpFactory, liveUpdatedPartnerSessions, ct);
             }
@@ -498,6 +513,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     continue;
                 }
 
+                if (!_realTimePartnerPushEnabled)
+                {
+                    // CDR/session are already persisted above and pullable via our
+                    // /2.2.1/sessions/sender and /2.2.1/cdrs/sender — real-time push just skipped.
+                    _logger.LogDebug(
+                        "OcpiOrphanSessionService: real-time partner push disabled — CDR {CdrId} for " +
+                        "session {SessionId} is available for partner {PartnerId} to pull, not pushed",
+                        cdr.CdrId, session.SessionId, partner.Id);
+                    continue;
+                }
+
                 await PushSessionAndCdrToPartnerAsync(partner, session, cdr, httpFactory, ct);
             }
         }
@@ -513,13 +539,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var ourCountryCode = _configuration["OCPI:CountryCode"] ?? "IN";
             var ourPartyId = _configuration["OCPI:PartyId"] ?? "CPO";
 
-            var http = httpFactory.CreateClient();
+            var http = httpFactory.CreateClient("OcpiPartner");
             http.DefaultRequestHeaders.TryAddWithoutValidation(
                 "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
 
             // ── Push final session state ──────────────────────────────
-            var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "sessions", httpFactory, ct);
+            var sessionsUrl = await _endpointCache.ResolveEndpointAsync(
+                partner, "sessions", new[] { "RECEIVER", "EMSP" }, http, _logger, ct);
             if (sessionsUrl != null)
             {
                 var wireSession = new OcpiSession
@@ -571,7 +598,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
             }
 
             // ── Push CDR ───────────────────────────────────────────────
-            var cdrsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "cdrs", httpFactory, ct);
+            var cdrsUrl = await _endpointCache.ResolveEndpointAsync(
+                partner, "cdrs", new[] { "RECEIVER", "EMSP" }, http, _logger, ct);
             if (cdrsUrl != null)
             {
                 var wireCdr = new OCPI.Contracts.OcpiCdr
@@ -657,13 +685,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (!partners.TryGetValue(group.Key, out var partner)) continue;
                 if (string.IsNullOrEmpty(partner.OutboundToken)) continue; // no log here — same partner already warned in PushCompletedSessionsAndCdrsAsync if genuinely unconfigured
 
-                var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(partner, "sessions", httpFactory, ct);
-                if (sessionsUrl == null) continue;
-
-                var http = httpFactory.CreateClient();
+                var http = httpFactory.CreateClient("OcpiPartner");
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(15);
+
+                var sessionsUrl = await _endpointCache.ResolveEndpointAsync(
+                    partner, "sessions", new[] { "RECEIVER", "EMSP" }, http, _logger, ct);
+                if (sessionsUrl == null) continue;
 
                 foreach (var session in group)
                 {
@@ -729,80 +758,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
             }
         }
 
-        /// <summary>
-        /// Walks the partner's /versions and version-details URLs to find the receiver endpoint
-        /// URL for the given OCPI module (e.g. "sessions", "cdrs", "commands"). Returns null if
-        /// discovery fails or the partner doesn't expose that module.
-        /// </summary>
-        private async Task<string?> DiscoverPartnerModuleEndpointAsync(
-            OcpiPartnerCredential partner,
-            string moduleIdentifier,
-            IHttpClientFactory httpFactory,
-            CancellationToken ct,
-            string[]? acceptableRoles = null)
-        {
-            acceptableRoles ??= new[] { "RECEIVER", "EMSP" };
-            try
-            {
-                var http = httpFactory.CreateClient();
-                http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
-                http.Timeout = TimeSpan.FromSeconds(10);
-
-                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
-                var vResp = await http.GetAsync(partnerURL, ct);
-                if (!vResp.IsSuccessStatusCode) return null;
-
-                using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
-                string? v221Url = null;
-                if (vDoc.RootElement.TryGetProperty("data", out var vData) &&
-                    vData.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var v in vData.EnumerateArray())
-                    {
-                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
-                        if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2") v221Url = url;
-                    }
-                }
-
-                if (v221Url == null) return null;
-
-                var dResp = await http.GetAsync(v221Url, ct);
-                if (!dResp.IsSuccessStatusCode) return null;
-
-                using var dDoc = JsonDocument.Parse(await dResp.Content.ReadAsStringAsync(ct));
-                if (dDoc.RootElement.TryGetProperty("data", out var dData) &&
-                    dData.TryGetProperty("endpoints", out var eps) &&
-                    eps.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var ep in eps.EnumerateArray())
-                    {
-                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
-                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
-
-                        if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        bool roleOk = role == null
-                            || acceptableRoles.Any(r => string.Equals(role, r, StringComparison.OrdinalIgnoreCase));
-
-                        if (roleOk)
-                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
-                    }
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "OcpiOrphanSessionService: endpoint discovery failed for partner {PartnerId} module={Module}",
-                    partner.Id, moduleIdentifier);
-                return null;
-            }
-        }
+        // Endpoint discovery for "sessions"/"cdrs"/"commands"/"locations" now goes through
+        // IOcpiEndpointCache.ResolveEndpointAsync, which caches the whole per-partner endpoint map
+        // (see OcpiEndpointCache.cs) instead of re-walking /versions on every call.
 
         /// <summary>
         /// GETs a fresh copy of each stale ACTIVE partner session directly from the partner CPO's
@@ -826,14 +784,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 try
                 {
-                    var sessionsUrl = await DiscoverPartnerModuleEndpointAsync(
-                        partner, "sessions", httpFactory, ct, acceptableRoles: new[] { "SENDER" });
-                    if (sessionsUrl == null) continue;
-
-                    var http = httpFactory.CreateClient();
+                    var http = httpFactory.CreateClient("OcpiPartner");
                     http.DefaultRequestHeaders.TryAddWithoutValidation(
                         "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                     http.Timeout = TimeSpan.FromSeconds(10);
+
+                    var sessionsUrl = await _endpointCache.ResolveEndpointAsync(
+                        partner, "sessions", new[] { "SENDER" }, http, _logger, ct);
+                    if (sessionsUrl == null) continue;
 
                     var url = $"{sessionsUrl.TrimEnd('/')}/{session.CountryCode}/{session.PartyId}/{session.SessionId}";
                     var resp = await http.GetAsync(url, ct);
@@ -917,13 +875,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (string.IsNullOrWhiteSpace(partner.OutboundToken)) continue;
                 if (ct.IsCancellationRequested) break;
 
-                var locationsUrl = await DiscoverLocationsReceiverAsync(partner, httpFactory, ct);
-                if (locationsUrl == null) continue;
-
-                var http = httpFactory.CreateClient();
+                var http = httpFactory.CreateClient("OcpiPartner");
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
+
+                var locationsUrl = await _endpointCache.ResolveEndpointAsync(
+                    partner, "locations", new[] { "RECEIVER", "EMSP" }, http, _logger, ct);
+                if (locationsUrl == null) continue;
 
                 foreach (var station in stations)
                 {
@@ -964,79 +923,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                             station.RecId, partner.CountryCode, partner.PartyId);
                     }
                 }
-            }
-        }
-
-        /// <summary>
-        /// Walks the partner's /versions → 2.2.1 details to find their locations RECEIVER
-        /// endpoint URL.  Returns null if discovery fails.
-        /// </summary>
-        private async Task<string?> DiscoverLocationsReceiverAsync(
-            OcpiPartnerCredential partner,
-            IHttpClientFactory httpFactory,
-            CancellationToken ct)
-        {
-            try
-            {
-                var http = httpFactory.CreateClient();
-                http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
-                http.Timeout = TimeSpan.FromSeconds(10);
-
-                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
-                var vResp = await http.GetAsync(partnerURL, ct);
-                if (!vResp.IsSuccessStatusCode) return null;
-
-                using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
-                string? v221Url = null;
-                if (vDoc.RootElement.TryGetProperty("data", out var vData) &&
-                    vData.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var v in vData.EnumerateArray())
-                    {
-                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
-                        if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2") v221Url = url;
-                    }
-                }
-
-                if (v221Url == null) return null;
-
-                var dResp = await http.GetAsync(v221Url, ct);
-                if (!dResp.IsSuccessStatusCode) return null;
-
-                using var dDoc = JsonDocument.Parse(await dResp.Content.ReadAsStringAsync(ct));
-                if (dDoc.RootElement.TryGetProperty("data", out var dData) &&
-                    dData.TryGetProperty("endpoints", out var eps) &&
-                    eps.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var ep in eps.EnumerateArray())
-                    {
-                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
-                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
-
-                        if (!string.Equals(id, "locations", StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        // Accept RECEIVER or EMSP role (some implementations omit role)
-                        bool roleOk = role == null
-                            || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "EMSP", StringComparison.OrdinalIgnoreCase);
-
-                        if (roleOk)
-                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
-                    }
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "OcpiOrphanSessionService: endpoint discovery failed for partner {CC}-{Party}",
-                    partner.CountryCode, partner.PartyId);
-                return null;
             }
         }
 
@@ -1431,8 +1317,13 @@ namespace OCPI.Core.Roaming.BackgroundServices
         {
             try
             {
-                var commandsUrl = await DiscoverPartnerCommandsEndpointAsync(
-                    partner, httpFactory, ct);
+                var http = httpFactory.CreateClient("OcpiPartner");
+                http.DefaultRequestHeaders.TryAddWithoutValidation(
+                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                var commandsUrl = await _endpointCache.ResolveEndpointAsync(
+                    partner, "commands", new[] { "RECEIVER", "CPO" }, http, _logger, ct);
 
                 if (commandsUrl == null)
                 {
@@ -1441,11 +1332,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         "cannot stop session {SessionId}", partner.Id, session.SessionId);
                     return false;
                 }
-
-                var http = httpFactory.CreateClient();
-                http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
-                http.Timeout = TimeSpan.FromSeconds(10);
 
                 var ourBaseUrl = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
                 var commandBody = new
@@ -1476,83 +1362,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "OcpiOrphanSessionService: error issuing STOP_SESSION to partner {PartnerId} " +
                     "for session {SessionId}", partner.Id, session.SessionId);
                 return false;
-            }
-        }
-
-        /// <summary>
-        /// Walks the partner's /versions and version-details URLs to find the
-        /// commands receiver endpoint URL.  Returns null if discovery fails.
-        /// </summary>
-        private async Task<string?> DiscoverPartnerCommandsEndpointAsync(
-            OcpiPartnerCredential partner,
-            IHttpClientFactory httpFactory,
-            CancellationToken ct)
-        {
-            try
-            {
-                var http = httpFactory.CreateClient();
-                http.DefaultRequestHeaders.TryAddWithoutValidation(
-                    "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
-                http.Timeout = TimeSpan.FromSeconds(10);
-
-                // Step 1: GET /versions
-                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
-                var vResp = await http.GetAsync(partnerURL, ct);
-                if (!vResp.IsSuccessStatusCode) return null;
-
-                using var vDoc = JsonDocument.Parse(await vResp.Content.ReadAsStringAsync(ct));
-
-                string? v221Url = null;
-                if (vDoc.RootElement.TryGetProperty("data", out var vData) &&
-                    vData.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var v in vData.EnumerateArray())
-                    {
-                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url", out var up) ? up.GetString() : null;
-                        if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2") v221Url = url;
-                    }
-                }
-
-                if (v221Url == null) return null;
-
-                // Step 2: GET version details
-                var dResp = await http.GetAsync(v221Url, ct);
-                if (!dResp.IsSuccessStatusCode) return null;
-
-                using var dDoc = JsonDocument.Parse(await dResp.Content.ReadAsStringAsync(ct));
-
-                if (dDoc.RootElement.TryGetProperty("data", out var dData) &&
-                    dData.TryGetProperty("endpoints", out var eps) &&
-                    eps.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var ep in eps.EnumerateArray())
-                    {
-                        var id = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
-                        var role = ep.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
-
-                        if (!string.Equals(id, "commands", StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        // Accept RECEIVER or CPO role (some implementations omit role)
-                        bool roleOk = role == null
-                            || string.Equals(role, "RECEIVER", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(role, "CPO", StringComparison.OrdinalIgnoreCase);
-
-                        if (roleOk)
-                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
-                    }
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "OcpiOrphanSessionService: endpoint discovery failed for partner {PartnerId}",
-                    partner.Id);
-                return null;
             }
         }
 
