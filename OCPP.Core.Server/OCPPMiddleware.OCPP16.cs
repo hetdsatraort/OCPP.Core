@@ -24,6 +24,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -370,6 +371,107 @@ namespace OCPP.Core.Server
         }
 
         /// <summary>
+        /// Sends a GetConfiguration-Request to the chargepoint. Pass urlKey=null (or empty) to
+        /// request the full configuration key list, or a comma-separated list of key names to
+        /// request only those keys.
+        /// </summary>
+        private async Task GetConfiguration16(ChargePointStatus chargePointStatus, HttpContext apiCallerContext, OCPPCoreContext dbContext, string urlKey)
+        {
+            ILogger logger = _logFactory.CreateLogger("OCPPMiddleware.OCPP16");
+            ControllerOCPP16 controller16 = new ControllerOCPP16(_configuration, _logFactory, chargePointStatus, dbContext);
+
+            Messages_OCPP16.GetConfigurationRequest getConfigurationRequest = new Messages_OCPP16.GetConfigurationRequest();
+            if (!string.IsNullOrEmpty(urlKey))
+            {
+                List<string> keys = urlKey.Split(',')
+                    .Select(k => k.Trim())
+                    .Where(k => k.Length > 0)
+                    .ToList();
+                if (keys.Count > 0)
+                {
+                    getConfigurationRequest.Key = keys;
+                }
+            }
+
+            logger.LogInformation("OCPPMiddleware.OCPP16 => GetConfiguration16: ChargePoint='{0}' / Key='{1}'", chargePointStatus.Id, urlKey ?? "(all)");
+
+            string jsonRequest = JsonConvert.SerializeObject(getConfigurationRequest);
+
+            OCPPMessage msgOut = new OCPPMessage();
+            msgOut.MessageType = "2";
+            msgOut.Action = "GetConfiguration";
+            msgOut.UniqueId = Guid.NewGuid().ToString("N");
+            msgOut.JsonPayload = jsonRequest;
+            msgOut.TaskCompletionSource = new TaskCompletionSource<string>();
+
+            // store HttpContext with MsgId for later answer processing (=> send anwer to API caller)
+            _requestQueue.Add(msgOut.UniqueId, msgOut);
+
+            // Send OCPP message with optional logging/dump
+            await SendOcpp16Message(msgOut, logger, chargePointStatus);
+
+            // Wait for asynchronous chargepoint response and processing
+            string apiResult = "{\"status\": \"Timeout\"}";
+            if (msgOut.TaskCompletionSource.Task.Wait(TimoutWaitForCharger))
+            {
+                apiResult = msgOut.TaskCompletionSource.Task.Result;
+            }
+            else
+            {
+                logger.LogInformation("OCPPMiddleware.OCPP16 => GetConfiguration16: Timeout (ChargePoint='{0}' / Key='{1}')", chargePointStatus.Id, urlKey ?? "(all)");
+            }
+
+            apiCallerContext.Response.StatusCode = 200;
+            apiCallerContext.Response.ContentType = "application/json";
+            await apiCallerContext.Response.WriteAsync(apiResult);
+        }
+
+        /// <summary>
+        /// Sends a ChangeConfiguration-Request to the chargepoint
+        /// </summary>
+        private async Task ChangeConfiguration16(ChargePointStatus chargePointStatus, HttpContext apiCallerContext, OCPPCoreContext dbContext, string key, string value)
+        {
+            ILogger logger = _logFactory.CreateLogger("OCPPMiddleware.OCPP16");
+            ControllerOCPP16 controller16 = new ControllerOCPP16(_configuration, _logFactory, chargePointStatus, dbContext);
+
+            Messages_OCPP16.ChangeConfigurationRequest changeConfigurationRequest = new Messages_OCPP16.ChangeConfigurationRequest();
+            changeConfigurationRequest.Key = key;
+            changeConfigurationRequest.Value = value;
+
+            logger.LogInformation("OCPPMiddleware.OCPP16 => ChangeConfiguration16: ChargePoint='{0}' / Key='{1}' / Value='{2}'", chargePointStatus.Id, key, value);
+
+            string jsonRequest = JsonConvert.SerializeObject(changeConfigurationRequest);
+
+            OCPPMessage msgOut = new OCPPMessage();
+            msgOut.MessageType = "2";
+            msgOut.Action = "ChangeConfiguration";
+            msgOut.UniqueId = Guid.NewGuid().ToString("N");
+            msgOut.JsonPayload = jsonRequest;
+            msgOut.TaskCompletionSource = new TaskCompletionSource<string>();
+
+            // store HttpContext with MsgId for later answer processing (=> send anwer to API caller)
+            _requestQueue.Add(msgOut.UniqueId, msgOut);
+
+            // Send OCPP message with optional logging/dump
+            await SendOcpp16Message(msgOut, logger, chargePointStatus);
+
+            // Wait for asynchronous chargepoint response and processing
+            string apiResult = "{\"status\": \"Timeout\"}";
+            if (msgOut.TaskCompletionSource.Task.Wait(TimoutWaitForCharger))
+            {
+                apiResult = msgOut.TaskCompletionSource.Task.Result;
+            }
+            else
+            {
+                logger.LogInformation("OCPPMiddleware.OCPP16 => ChangeConfiguration16: Timeout (ChargePoint='{0}' / Key='{1}' / Value='{2}')", chargePointStatus.Id, key, value);
+            }
+
+            apiCallerContext.Response.StatusCode = 200;
+            apiCallerContext.Response.ContentType = "application/json";
+            await apiCallerContext.Response.WriteAsync(apiResult);
+        }
+
+        /// <summary>
         /// Send a RemoteStartTransaction-Request to the chargepoint
         /// </summary>
         private async Task RemoteStartTransaction16(ChargePointStatus chargePointStatus, HttpContext apiCallerContext, OCPPCoreContext dbContext, string urlConnectorId, string idTag)
@@ -396,22 +498,6 @@ namespace OCPP.Core.Server
                 Messages_OCPP16.RemoteStartTransactionRequest remoteStartTransactionRequest = new Messages_OCPP16.RemoteStartTransactionRequest();
                 remoteStartTransactionRequest.ConnectorId = connectorId;
                 remoteStartTransactionRequest.IdTag = idTag;
-
-                remoteStartTransactionRequest.ChargingProfile = new Messages_OCPP16.ChargingProfile
-                {
-                    ChargingProfileId = connectorId > 0 ? connectorId : 1,
-                    StackLevel = 0,
-                    ChargingProfilePurpose = ChargingProfilePurpose.TxProfile,
-                    ChargingProfileKind = ChargingProfileKind.Relative,
-                    ChargingSchedule = new Messages_OCPP16.ChargingSchedule
-                    {
-                        ChargingRateUnit = ChargingScheduleChargingRateUnit.W,
-                        ChargingSchedulePeriod = new List<Messages_OCPP16.ChargingSchedulePeriod>
-                        {
-                            new Messages_OCPP16.ChargingSchedulePeriod { StartPeriod = 0, Limit = 120000 }
-                        }
-                    }
-                };
 
                 logger.LogInformation("OCPPMiddleware.OCPP16 => RemoteStartTransaction16: ChargePoint='{0}' / ConnectorId={1} / idTag='{2}'", chargePointStatus.Id, remoteStartTransactionRequest.ConnectorId, idTag);
 

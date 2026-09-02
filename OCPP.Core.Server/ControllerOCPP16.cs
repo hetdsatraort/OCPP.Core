@@ -124,6 +124,12 @@ namespace OCPP.Core.Server
                 case "ClearChargingProfile":
                     HandleClearChargingProfile(msgIn, msgOut);
                     break;
+                case "GetConfiguration":
+                    HandleGetConfiguration(msgIn, msgOut);
+                    break;
+                case "ChangeConfiguration":
+                    HandleChangeConfiguration(msgIn, msgOut);
+                    break;
                 case "RemoteStartTransaction":
                     HandleRemoteStartTransaction(msgIn, msgOut);
                     break;
