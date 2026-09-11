@@ -21,11 +21,24 @@ namespace OCPI.Core.Roaming.Controllers
     [Route("admin")]
     public class OcpiAdminController : ControllerBase
     {
+        // Mirrors OcpiSyncBackgroundService._jsonOptions — JsonStringEnumMemberConverterV2 must be
+        // registered explicitly; System.Text.Json's default enum handling doesn't know about
+        // [EnumMember] and throws a JsonException on every OCPI-wire enum value (status, standard,
+        // format, power_type, ...) without it. Missing this made GetPartnerLocationLiveStatus below
+        // fail on every call (while OcpiSyncBackgroundService's periodic pull, which does set this,
+        // kept working) — the "works eventually via background sync, never on-demand" symptom.
+        private static readonly JsonSerializerOptions _ocpiJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters                  = { new JsonStringEnumMemberConverterV2() }
+        };
+
         private readonly IOcpiLocationService _locationService;
         private readonly IOcpiCommandService _commandService;
         private readonly IOcpiSyncBackgroundService _syncService;
         private readonly IOcpiCredentialsService _credentialsService;
         private readonly IOcpiTariffService _tariffService;
+        private readonly IOcpiEndpointCache _endpointCache;
         private readonly OCPPCoreContext _dbContext;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IConfiguration _configuration;
@@ -36,6 +49,7 @@ namespace OCPI.Core.Roaming.Controllers
             IOcpiCommandService commandService,
             IOcpiCredentialsService credentialsService,
             IOcpiTariffService tariffService,
+            IOcpiEndpointCache endpointCache,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             OCPPCoreContext dbContext,
@@ -46,6 +60,7 @@ namespace OCPI.Core.Roaming.Controllers
             _commandService = commandService;
             _credentialsService = credentialsService;
             _tariffService = tariffService;
+            _endpointCache = endpointCache;
             _httpClientFactory = httpClientFactory;
             _configuration = configuration;
             _dbContext = dbContext;
@@ -161,6 +176,163 @@ namespace OCPI.Core.Roaming.Controllers
             });
 
             return Ok(new { success = true, data = result });
+        }
+
+        /// <summary>
+        /// On-demand live status for one partner location — bypasses the periodic sync cache and
+        /// pulls directly from the partner CPO's locations endpoint. Always goes through the
+        /// "OcpiPartner" named HttpClient (carries <see cref="OcpiPartnerRateLimitHandler"/>) so
+        /// an admin clicking this repeatedly can't trip the partner's own rate limit the way
+        /// unpaced calls used to (see the OcpiEndpointCache / rate-limit commit). Best-effort
+        /// persists the result into the same tables
+        /// OcpiSyncBackgroundService.PullLocationsFromCpoAsync populates, so the "last-synced"
+        /// snapshot other endpoints (e.g. GetPartnerLocations above) read also benefits.
+        /// </summary>
+        [HttpGet("partners/{partnerId:int}/locations/{locationId}/live-status")]
+        public async Task<IActionResult> GetPartnerLocationLiveStatus(
+            [FromRoute] int partnerId, [FromRoute] string locationId, CancellationToken ct)
+        {
+            var partner = await _dbContext.OcpiPartnerCredentials
+                .FirstOrDefaultAsync(p => p.Id == partnerId && p.IsActive, ct);
+
+            if (partner == null)
+                return NotFound(new { success = false, message = "Partner not found" });
+
+            var http = _httpClientFactory.CreateClient("OcpiPartner");
+            var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
+            http.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
+            http.Timeout = TimeSpan.FromSeconds(15);
+
+            try
+            {
+                var endpoint = await _endpointCache.ResolveEndpointAsync(
+                    partner, "locations", new[] { "SENDER", "CPO" }, http, _logger, ct);
+
+                if (endpoint == null)
+                    return Ok(new { success = false, message = "Partner does not expose a locations endpoint" });
+
+                // The {country_code}/{party_id} path segments must be the LOCATION's own identity,
+                // not necessarily the partner credential's — StorePartnerLocationAsync matches/stores
+                // by CountryCode+PartyId+LocationId taken from the location object itself, and that
+                // can differ from OcpiPartnerCredential.CountryCode/PartyId (e.g. a self-partner/test
+                // setup registered outside the normal onboarding handshake). Prefer whatever the last
+                // successful sync already stored for this location; fall back to the credential only
+                // before this location has ever been synced.
+                var storedLocation = await _dbContext.OcpiPartnerLocations
+                    .FirstOrDefaultAsync(l => l.PartnerCredentialId == partnerId && l.LocationId == locationId, ct);
+                var urlCountryCode = storedLocation?.CountryCode ?? partner.CountryCode;
+                var urlPartyId = storedLocation?.PartyId ?? partner.PartyId;
+
+                var url = $"{endpoint.TrimEnd('/')}/{urlCountryCode}/{urlPartyId}/{Uri.EscapeDataString(locationId)}";
+                var resp = await http.GetAsync(url, ct);
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    return Ok(new { success = false, message = "Location not found at partner" });
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var errBody = await resp.Content.ReadAsStringAsync(ct);
+                    _logger.LogWarning(
+                        "[Admin] Live location-status HTTP error for partner {Id}: {Status} {Body}",
+                        partnerId, (int)resp.StatusCode, errBody);
+                    return Ok(new { success = false, message = $"Partner returned HTTP {(int)resp.StatusCode}" });
+                }
+
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                OcpiApiEnvelope<OCPI.Core.Roaming.Services.OcpiLocation>? envelope;
+                try
+                {
+                    envelope = JsonSerializer.Deserialize<OcpiApiEnvelope<OCPI.Core.Roaming.Services.OcpiLocation>>(
+                        json, _ocpiJsonOptions);
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex,
+                        "[Admin] Failed to parse live location response for partner {Id} / location {LocationId}: {Body}",
+                        partnerId, locationId, json);
+                    return Ok(new { success = false, message = "Partner returned an unparseable location response" });
+                }
+
+                var location = envelope?.Data;
+                if (location == null)
+                    return Ok(new { success = false, message = "Partner returned an empty location" });
+
+                // Best-effort refresh of the synced snapshot — non-fatal if it fails.
+                try
+                {
+                    await _locationService.StorePartnerLocationAsync(partner.Id, location);
+                    if (location.Evses != null)
+                    {
+                        var dbLocationId = await _locationService.GetPartnerLocationDbIdAsync(
+                            location.CountryCode!, location.PartyId!, location.Id!);
+                        if (dbLocationId != null)
+                        {
+                            foreach (var evse in location.Evses)
+                            {
+                                await _locationService.StorePartnerEvseAsync(dbLocationId.Value, evse);
+                                if (evse.Connectors == null) continue;
+
+                                var dbEvseId = await _locationService.GetPartnerEvseDbIdAsync(dbLocationId.Value, evse.Uid!);
+                                if (dbEvseId == null) continue;
+
+                                foreach (var connector in evse.Connectors)
+                                    await _locationService.StorePartnerConnectorAsync(dbEvseId.Value, connector);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[Admin] Failed to persist live location snapshot for partner {Id} / location {LocationId}",
+                        partnerId, locationId);
+                }
+
+                // Reshape into the same camelCase field naming GetOurLocations already uses, rather
+                // than serializing the OCPI-wire (snake_case) contract type directly — keeps every
+                // location/EVSE/connector payload this API returns consistent for the frontend.
+                return Ok(new
+                {
+                    success = true,
+                    live = true,
+                    fetchedAtUtc = DateTime.UtcNow,
+                    data = new
+                    {
+                        id = location.Id,
+                        name = location.Name,
+                        address = location.Address,
+                        city = location.City,
+                        latitude = location.Coordinates?.Latitude,
+                        longitude = location.Coordinates?.Longitude,
+                        lastUpdated = location.LastUpdated,
+                        evses = (location.Evses ?? Enumerable.Empty<OcpiEvse>()).Select(e => new
+                        {
+                            uid = e.Uid,
+                            evseId = e.EvseId,
+                            status = e.Status.ToString(),
+                            physicalReference = e.PhysicalReference,
+                            connectors = (e.Connectors ?? Enumerable.Empty<OcpiConnector>()).Select(c => new
+                            {
+                                id = c.Id,
+                                standard = c.Standard.ToString(),
+                                format = c.Format.ToString(),
+                                powerType = c.PowerType.ToString(),
+                                maxVoltage = c.MaxVoltage,
+                                maxAmperage = c.MaxAmperage,
+                                maxElectricPower = c.MaxElectricPower
+                            })
+                        })
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[Admin] Error fetching live location status for partner {Id} / location {LocationId}",
+                    partnerId, locationId);
+                return Ok(new { success = false, message = "Error communicating with partner CPO" });
+            }
         }
 
         // ── Commands (Our Chargers) ────────────────────────────────────────────

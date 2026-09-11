@@ -407,6 +407,76 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// On-demand real-time location status. Local is already live — ConnectorStatus is
+        /// updated in real time by the OCPP server — so this simply re-uses
+        /// <see cref="GetLocationDetails"/>. Partner instead makes an outbound call to the
+        /// partner CPO via <see cref="OcpiPartnerHubController.GetPartnerHubLiveStatus"/>, rather
+        /// than reading the last-synced DB snapshot <see cref="GetLocationDetails"/> and
+        /// <see cref="GetConnectorStatus"/> use — intended for an explicit "Refresh live status"
+        /// action, not routine polling, since it counts against the partner's own rate limit.
+        /// </summary>
+        [HttpGet("location-live-status/{id}")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetLocationLiveStatus(string id)
+        {
+            try
+            {
+                if (!UnifiedId.TryParse(id, out var provider, out var nativeId))
+                    return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid location id" });
+
+                if (provider == ProviderType.Local)
+                {
+                    var detailsResult = await GetLocationDetails(id);
+                    var (_, value) = ExtractResult(detailsResult);
+
+                    if (value is UnifiedChargingResponseDto dto && dto.Success)
+                        return Ok(new UnifiedChargingResponseDto
+                        {
+                            Success = true,
+                            Message = "Local location status is always live",
+                            Data = new { live = true, fetchedAtUtc = DateTime.UtcNow, location = dto.Data }
+                        });
+
+                    return Ok(value);
+                }
+                else
+                {
+                    if (!int.TryParse(nativeId, out int locationDbId))
+                        return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Invalid partner location id" });
+
+                    var partnerCtl = CreateDelegate<OcpiPartnerHubController>();
+                    var result = await partnerCtl.GetPartnerHubLiveStatus(locationDbId);
+                    var (_, value) = ExtractResult(result);
+                    var json = ToJsonElement(value);
+
+                    if (GetBool(json, "success") != true)
+                        return Ok(new UnifiedChargingResponseDto
+                        {
+                            Success = false,
+                            Message = GetString(json, "message") ?? "Partner location live status unavailable"
+                        });
+
+                    return Ok(new UnifiedChargingResponseDto
+                    {
+                        Success = true,
+                        Message = "Partner location live status retrieved successfully",
+                        Data = new
+                        {
+                            live = true,
+                            fetchedAtUtc = GetString(json, "fetchedAtUtc"),
+                            location = GetObj(json, "data")
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving unified live location status for {Id}", id);
+                return Ok(new UnifiedChargingResponseDto { Success = false, Message = "An error occurred while retrieving live location status" });
+            }
+        }
+
         // ── Estimation ────────────────────────────────────────────────────────
 
         /// <summary>

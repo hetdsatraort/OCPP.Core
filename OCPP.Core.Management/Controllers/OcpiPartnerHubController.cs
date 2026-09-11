@@ -181,6 +181,64 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// On-demand live status for one partner hub (location) — proxies to the OCPI roaming
+        /// service's live-status endpoint (see OcpiAdminController.GetPartnerLocationLiveStatus),
+        /// which bypasses the periodic sync cache and pulls directly from the partner CPO. Unlike
+        /// <see cref="GetPartnerHubDetails"/> (a DB snapshot last refreshed by the background
+        /// sync), this makes a real-time outbound call — intended for an explicit "Refresh live
+        /// status" action, not routine polling, since it counts against the partner's own rate
+        /// limit (the roaming service paces it via the "OcpiPartner" HttpClient either way).
+        /// </summary>
+        [HttpGet("live-status/{id:int}")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetPartnerHubLiveStatus([FromRoute] int id)
+        {
+            try
+            {
+                var location = await _dbContext.OcpiPartnerLocations
+                    .FirstOrDefaultAsync(l => l.Id == id);
+
+                if (location == null)
+                    return Ok(new { success = false, message = "Partner hub not found" });
+
+                var partner = await _dbContext.OcpiPartnerCredentials
+                    .FirstOrDefaultAsync(p => p.Id == location.PartnerCredentialId && p.IsActive);
+
+                if (partner == null)
+                    return Ok(new { success = false, message = "Partner not found or inactive" });
+
+                var roamingApiUrl = _config.GetValue<string>("OcpiRoamingApiUrl");
+                if (string.IsNullOrEmpty(roamingApiUrl))
+                    return StatusCode(200, new { success = false, message = "OCPI roaming service not configured" });
+
+                var http = _httpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(20);
+
+                var resp = await http.GetAsync(
+                    $"{roamingApiUrl.TrimEnd('/')}/admin/partners/{partner.Id}/locations/{Uri.EscapeDataString(location.LocationId)}/live-status");
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    return Ok(new { success = false, message = "Partner or location not found at roaming service" });
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var errBody = await resp.Content.ReadAsStringAsync();
+                    _logger.LogWarning(
+                        "Partner live-status HTTP error: {Status} {Body}", (int)resp.StatusCode, errBody);
+                    return Ok(new { success = false, message = $"OCPI roaming service returned HTTP {(int)resp.StatusCode}" });
+                }
+
+                var result = await resp.Content.ReadFromJsonAsync<JsonElement>();
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving live partner hub status for id={Id}", id);
+                return Ok(new { success = false, message = "Error communicating with OCPI roaming service" });
+            }
+        }
+
+        /// <summary>
         /// Get a single EVSE (station) with its connectors (guns).
         /// </summary>
         [HttpGet("evse/{id:int}")]
