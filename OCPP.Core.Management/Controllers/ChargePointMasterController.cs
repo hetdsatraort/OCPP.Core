@@ -197,6 +197,7 @@ namespace OCPP.Core.Management.Controllers
         public async Task<IActionResult> GetLogs(
             string chargePointId,
             [FromQuery] int? connectorId = null,
+            [FromQuery] List<string> messages = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
             [FromQuery] int page = 1,
@@ -215,6 +216,8 @@ namespace OCPP.Core.Management.Controllers
 
                 if (connectorId.HasValue)
                     query = query.Where(m => m.ConnectorId == connectorId.Value);
+                if (messages != null && messages.Count > 0)
+                    query = query.Where(m => messages.Contains(m.Message));
                 if (from.HasValue)
                     query = query.Where(m => m.LogTime >= from.Value);
                 if (to.HasValue)
@@ -255,6 +258,42 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "GetLogs: Error loading message logs for '{ChargePointId}'", chargePointId);
                 return Ok(new { success = false, message = "Error retrieving message logs" });
+            }
+        }
+
+        /// <summary>
+        /// Distinct OCPP action names (Heartbeat, MeterValues, StatusNotification, ...) actually
+        /// logged for this chargepoint — drives the message-type multi-select filter on <see cref="GetLogs"/>.
+        /// Derived from the data itself rather than a hard-coded list, since the set of possible
+        /// <see cref="MessageLog.Message"/> values differs across OCPP 1.6/2.0/2.1 and evolves with
+        /// OCPP.Core.Server's own action set.
+        /// </summary>
+        [HttpGet("{chargePointId}/log-message-types")]
+        [Authorize]
+        public async Task<IActionResult> GetLogMessageTypes(string chargePointId)
+        {
+            if (!IsAdmin())
+                return StatusCode((int)HttpStatusCode.Unauthorized);
+
+            try
+            {
+                var chargePoint = await _dbContext.ChargePoints.FindAsync(chargePointId);
+                if (chargePoint == null)
+                    return Ok(new { success = false, message = "Chargepoint not found" });
+
+                var messageTypes = await _dbContext.MessageLogs
+                    .Where(m => m.ChargePointId == chargePointId && m.Message != null)
+                    .Select(m => m.Message)
+                    .Distinct()
+                    .OrderBy(m => m)
+                    .ToListAsync();
+
+                return Ok(new { success = true, data = messageTypes });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "GetLogMessageTypes: Error loading message types for '{ChargePointId}'", chargePointId);
+                return Ok(new { success = false, message = "Error retrieving message types" });
             }
         }
 
