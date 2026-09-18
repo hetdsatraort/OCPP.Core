@@ -212,19 +212,12 @@ namespace OCPI.Core.Roaming.Controllers
                 if (endpoint == null)
                     return Ok(new { success = false, message = "Partner does not expose a locations endpoint" });
 
-                // The {country_code}/{party_id} path segments must be the LOCATION's own identity,
-                // not necessarily the partner credential's — StorePartnerLocationAsync matches/stores
-                // by CountryCode+PartyId+LocationId taken from the location object itself, and that
-                // can differ from OcpiPartnerCredential.CountryCode/PartyId (e.g. a self-partner/test
-                // setup registered outside the normal onboarding handshake). Prefer whatever the last
-                // successful sync already stored for this location; fall back to the credential only
-                // before this location has ever been synced.
-                var storedLocation = await _dbContext.OcpiPartnerLocations
-                    .FirstOrDefaultAsync(l => l.PartnerCredentialId == partnerId && l.LocationId == locationId, ct);
-                var urlCountryCode = storedLocation?.CountryCode ?? partner.CountryCode;
-                var urlPartyId = storedLocation?.PartyId ?? partner.PartyId;
-
-                var url = $"{endpoint.TrimEnd('/')}/{urlCountryCode}/{urlPartyId}/{Uri.EscapeDataString(locationId)}";
+                // Numocity (a real, functional CPO partner) 404s on the spec-shaped
+                // {country_code}/{party_id}/{location_id} path but answers correctly on plain
+                // {location_id}[/{evse_id}] — confirmed via curl against
+                // roaminghub.numocity.com/ocpi/cpo/2.2.1/locations/... — so match what partners
+                // actually serve instead of the country_code/party_id form.
+                var url = $"{endpoint.TrimEnd('/')}/{Uri.EscapeDataString(locationId)}";
                 var resp = await http.GetAsync(url, ct);
 
                 if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -257,6 +250,69 @@ namespace OCPI.Core.Roaming.Controllers
                 var location = envelope?.Data;
                 if (location == null)
                     return Ok(new { success = false, message = "Partner returned an empty location" });
+
+                // The plain location GET above often leaves `evses` unpopulated — connector detail
+                // is only reliable from the dedicated {location_id}/{evse_id} endpoint (per the same
+                // Numocity curl evidence). Re-fetch each known EVSE explicitly rather than trusting
+                // whatever came back embedded in the location response. Known EVSE UIDs come from the
+                // location response itself, unioned with what the periodic full-list sync
+                // (OcpiSyncBackgroundService.PullLocationsFromCpoAsync, which pulls GET /locations and
+                // does receive evses) has already stored for this location.
+                var storedLocation = await _dbContext.OcpiPartnerLocations
+                    .FirstOrDefaultAsync(l => l.PartnerCredentialId == partnerId && l.LocationId == locationId, ct);
+
+                var evseUids = (location.Evses ?? Enumerable.Empty<OcpiEvse>())
+                    .Select(e => e.Uid)
+                    .Where(uid => !string.IsNullOrEmpty(uid))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (storedLocation != null)
+                {
+                    var knownEvseUids = await _dbContext.OcpiPartnerEvses
+                        .Where(e => e.PartnerLocationId == storedLocation.Id)
+                        .Select(e => e.EvseUid)
+                        .ToListAsync(ct);
+
+                    foreach (var uid in knownEvseUids)
+                        if (!string.IsNullOrEmpty(uid))
+                            evseUids.Add(uid);
+                }
+
+                if (evseUids.Count > 0)
+                {
+                    var enrichedEvses = new List<OcpiEvse>();
+                    foreach (var evseUid in evseUids)
+                    {
+                        var evseUrl = $"{url}/{Uri.EscapeDataString(evseUid!)}";
+                        try
+                        {
+                            var evseResp = await http.GetAsync(evseUrl, ct);
+                            if (!evseResp.IsSuccessStatusCode)
+                            {
+                                _logger.LogWarning(
+                                    "[Admin] Live EVSE fetch failed for partner {Id} / location {LocationId} / evse {EvseUid}: HTTP {Status}",
+                                    partnerId, locationId, evseUid, (int)evseResp.StatusCode);
+                                continue;
+                            }
+
+                            var evseJson = await evseResp.Content.ReadAsStringAsync(ct);
+                            var evseEnvelope = JsonSerializer.Deserialize<OcpiApiEnvelope<OcpiEvse>>(evseJson, _ocpiJsonOptions);
+                            if (evseEnvelope?.Data != null)
+                                enrichedEvses.Add(evseEnvelope.Data);
+                        }
+                        catch (JsonException ex)
+                        {
+                            _logger.LogWarning(ex,
+                                "[Admin] Failed to parse live EVSE response for partner {Id} / location {LocationId} / evse {EvseUid}",
+                                partnerId, locationId, evseUid);
+                        }
+                    }
+
+                    // Only replace the embedded evses if we actually got something back — otherwise
+                    // keep whatever (possibly empty) list the location response already carried.
+                    if (enrichedEvses.Count > 0)
+                        location.Evses = enrichedEvses;
+                }
 
                 // Best-effort refresh of the synced snapshot — non-fatal if it fails.
                 try
