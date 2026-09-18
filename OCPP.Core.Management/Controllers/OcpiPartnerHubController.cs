@@ -499,7 +499,15 @@ namespace OCPP.Core.Management.Controllers
                 if (evse == null)
                     return Ok(new { success = false, message = "EVSE not found" });
 
-                if (!string.Equals(evse.Status, "AVAILABLE", StringComparison.OrdinalIgnoreCase))
+                // evse.Status is our last-synced snapshot of what the partner reported, and different
+                // CPOs use different OCPI status values for "cable connected, awaiting authorization" —
+                // Numocity reports BLOCKED for exactly that moment, which is precisely when a driver is
+                // expected to hit Start. Requiring an exact AVAILABLE match blocked that entire flow.
+                // Only reject states genuinely incompatible with starting a new session; let the partner
+                // CPO's own command response (ACCEPTED/REJECTED) be authoritative for everything else.
+                var nonStartableStatuses = new[] { "CHARGING", "OUTOFORDER", "INOPERATIVE", "REMOVED", "PLANNED" };
+                if (!string.IsNullOrEmpty(evse.Status) &&
+                    nonStartableStatuses.Contains(evse.Status, StringComparer.OrdinalIgnoreCase))
                     return Ok(new { success = false, message = $"EVSE is not available (current status: {evse.Status})" });
 
                 var location = await _dbContext.OcpiPartnerLocations
