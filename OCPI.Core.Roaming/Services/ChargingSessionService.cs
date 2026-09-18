@@ -117,6 +117,30 @@ namespace OCPI.Core.Roaming.Services
 
                 var isActive = ops.EndDateTime == DateTime.MinValue || ops.EndDateTime == null;
 
+                // Mirrors OcpiOrphanSessionService.PushActiveSessionUpdatesToEmspAsync's ChargingPeriods
+                // construction — without this, a partner eMSP that falls back to pulling this GET
+                // endpoint (e.g. our own RefreshStaleSessionsFromPartnerAsync, used for a self-partner
+                // test setup) gets a session with no StateOfCharge at all, even though the real-time
+                // push path reports it. That race is what made SoC look intermittently missing against
+                // our own simulator setup while a real CPO (which populates this on every GET) never did.
+                var chargingPeriods = ops.CurrentStateOfCharge.HasValue
+                    ? new List<OcpiChargingPeriod>
+                      {
+                          new OcpiChargingPeriod
+                          {
+                              StartDateTime = ops.StateOfChargeLastUpdate ?? DateTime.UtcNow,
+                              Dimensions = new List<OcpiCdrDimension>
+                              {
+                                  new OcpiCdrDimension
+                                  {
+                                      Type = CdrDimensionType.StateOfCharge,
+                                      Volume = ops.CurrentStateOfCharge.Value
+                                  }
+                              }
+                          }
+                      }
+                    : null;
+
                 return new OcpiSession
                 {
                     CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(countryCode),
@@ -132,6 +156,7 @@ namespace OCPI.Core.Roaming.Services
                     Currency = CurrencyCode.IndianRupee,
                     TotalCost = new OcpiPrice() { ExclVat = ops.TotalCost, InclVat = ops.TotalCost * 1.18m },
                     Status = isActive ? SessionStatus.Active : SessionStatus.Completed,
+                    ChargingPeriods = chargingPeriods,
                     LastUpdated = ops.LastUpdated == DateTime.MinValue ? ops.CreatedOn : ops.LastUpdated
                 };
             }
