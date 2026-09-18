@@ -52,14 +52,15 @@ namespace OCPI.Core.Roaming.Controllers
         /// <summary>
         /// Get a specific location
         /// </summary>
-        [HttpGet("{countryCode}/{partyId}/{locationId}")]
-        public async Task<IActionResult> GetLocation(
-            [FromRoute] string countryCode,
-            [FromRoute] string partyId,
-            [FromRoute] string locationId)
+        // No {country_code}/{party_id} prefix here: as the CPO Sender interface we only ever serve
+        // our own locations, so there's nothing to disambiguate. That prefix belongs on the eMSP
+        // Receiver side (see OcpiLocations_ReceiverController), where one eMSP stores locations
+        // pushed by many different CPOs and needs it to tell them apart.
+        [HttpGet("{locationId}")]
+        public async Task<IActionResult> GetLocation([FromRoute] string locationId)
         {
             var location = await _locationService.GetOurLocationAsync(locationId);
-            
+
             if (location == null)
                 throw OcpiException.UnknownLocation($"Location not found: {locationId}");
 
@@ -69,34 +70,30 @@ namespace OCPI.Core.Roaming.Controllers
         /// <summary>
         /// Get a specific EVSE within a location
         /// </summary>
-        [HttpGet("{countryCode}/{partyId}/{locationId}/{evseUid}")]
+        [HttpGet("{locationId}/{evseUid}")]
         public async Task<IActionResult> GetEvse(
-            [FromRoute] string countryCode,
-            [FromRoute] string partyId,
             [FromRoute] string locationId,
             [FromRoute] string evseUid)
         {
             var evse = await _locationService.GetOurEvseAsync(locationId, evseUid);
-            
+
             if (evse == null)
                 throw OcpiException.UnknownLocation($"EVSE not found: {evseUid}");
-            
+
             return OcpiOk(evse);
         }
 
         /// <summary>
         /// Get a specific connector within an EVSE
         /// </summary>
-        [HttpGet("{countryCode}/{partyId}/{locationId}/{evseUid}/{connectorId}")]
+        [HttpGet("{locationId}/{evseUid}/{connectorId}")]
         public async Task<IActionResult> GetConnector(
-            [FromRoute] string countryCode,
-            [FromRoute] string partyId,
             [FromRoute] string locationId,
             [FromRoute] string evseUid,
             [FromRoute] string connectorId)
         {
             var connector = await _locationService.GetOurConnectorAsync(locationId, evseUid, connectorId);
-            
+
             if (connector == null)
                 throw OcpiException.UnknownLocation($"Connector not found: {connectorId}");
 
