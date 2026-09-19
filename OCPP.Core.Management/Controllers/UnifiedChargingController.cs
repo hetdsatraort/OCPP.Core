@@ -1515,7 +1515,11 @@ namespace OCPP.Core.Management.Controllers
         {
             var status = GetString(s, "status");
             var limitProgressJson = GetObj(s, "limitProgress");
+            double? startingSoC = GetDouble(s, "startingStateOfCharge");
             double? currentSoC = GetDouble(s, "currentStateOfCharge");
+            double? socGain = (startingSoC.HasValue && currentSoC.HasValue)
+                ? currentSoC.Value - startingSoC.Value
+                : (double?)null;
 
             return new UnifiedSessionDto
             {
@@ -1541,9 +1545,11 @@ namespace OCPP.Core.Management.Controllers
                     CostPct = GetDouble(limitProgressJson, "costPct"),
                     TimePct = GetDouble(limitProgressJson, "timePct")
                 } : null,
-                BatteryStateOfCharge = currentSoC.HasValue ? new UnifiedBatteryStateOfChargeDto
+                BatteryStateOfCharge = (startingSoC.HasValue || currentSoC.HasValue) ? new UnifiedBatteryStateOfChargeDto
                 {
+                    StartSoC = startingSoC,
                     CurrentSoC = currentSoC,
+                    SoCGain = socGain,
                     LastUpdate = GetDateTime(s, "stateOfChargeLastUpdate"),
                     IsRealtime = false,
                     DataSource = "Partner CPO Report"

@@ -847,6 +847,9 @@ namespace OCPP.Core.Management.Controllers
                         durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
                         // Battery — only populated when the partner CPO reports a STATE_OF_CHARGE
                         // charging_period dimension (typically DC fast chargers only).
+                        // startingStateOfCharge is fixed at the first period we ever saw for this
+                        // session; currentStateOfCharge keeps refreshing as the CPO reports more.
+                        startingStateOfCharge = s.StartingStateOfCharge,
                         currentStateOfCharge = s.CurrentStateOfCharge,
                         stateOfChargeLastUpdate = s.StateOfChargeLastUpdate,
                         // Location
@@ -1193,6 +1196,7 @@ namespace OCPP.Core.Management.Controllers
                         totalCost = session.TotalCost,
                         totalPayable = session.TotalPayable,
                         currency = session.Currency ?? "INR",
+                        startingStateOfCharge = session.StartingStateOfCharge,
                         currentStateOfCharge = session.CurrentStateOfCharge,
                         stateOfChargeLastUpdate = session.StateOfChargeLastUpdate,
                         location = new

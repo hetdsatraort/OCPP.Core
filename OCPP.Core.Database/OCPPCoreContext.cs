@@ -897,6 +897,7 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.BatteryIncreaseLimit).IsRequired(false);
                 // BIT NOT NULL DEFAULT 0 — a simple boolean flag; no special column type needed.
                 entity.Property(e => e.LimitViolationHandled).HasDefaultValue(false);
+                entity.Property(e => e.StartingStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.CurrentStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.StateOfChargeLastUpdate).IsRequired(false);
 

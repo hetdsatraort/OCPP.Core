@@ -147,6 +147,16 @@ namespace OCPP.Core.Database.OCPIDTO
         public bool LimitViolationHandled { get; set; } = false;
 
         /// <summary>
+        /// EV state of charge (0–100%) from the STATE_OF_CHARGE dimension of the first
+        /// charging_period the partner CPO ever reported for this session. Set once — either at
+        /// creation (if the CPO's very first push already carries a charging_period) or backfilled
+        /// on the first later update that does — and never overwritten after that, so it stays a
+        /// true "start" baseline for SoC-gain reporting. Null when the CPO never reports SoC at all
+        /// (typically non-DC chargers).
+        /// </summary>
+        public decimal? StartingStateOfCharge { get; set; }
+
+        /// <summary>
         /// Latest EV state of charge (0–100%) reported by the partner CPO, extracted from the
         /// STATE_OF_CHARGE dimension of the most recent charging_period on the session. Not all
         /// CPOs report this — typically only DC fast chargers do. Null when never reported.

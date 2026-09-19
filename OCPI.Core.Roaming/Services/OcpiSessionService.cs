@@ -83,6 +83,12 @@ namespace OCPI.Core.Roaming.Services
                 var soc = ExtractStateOfCharge(session);
                 if (soc.HasValue)
                 {
+                    // First SoC value we ever see for this session becomes its starting baseline —
+                    // never overwritten after that — so SoCGain stays computable even though the
+                    // CPO only ever reports "the current periods", not an explicit start/end split.
+                    if (!existing.StartingStateOfCharge.HasValue)
+                        existing.StartingStateOfCharge = soc.Value;
+
                     existing.CurrentStateOfCharge = soc.Value;
                     existing.StateOfChargeLastUpdate = DateTime.UtcNow;
                 }
@@ -114,6 +120,7 @@ namespace OCPI.Core.Roaming.Services
                     TotalCost = session.TotalCost?.ExclVat,
                     PartnerCredentialId = partnerCredentialId,
                     LastUpdated = session.LastUpdated ?? DateTime.UtcNow,
+                    StartingStateOfCharge = soc,
                     CurrentStateOfCharge = soc,
                     StateOfChargeLastUpdate = soc.HasValue ? DateTime.UtcNow : null
                 };
@@ -153,6 +160,9 @@ namespace OCPI.Core.Roaming.Services
             var soc = ExtractStateOfCharge(session);
             if (soc.HasValue)
             {
+                if (!existing.StartingStateOfCharge.HasValue)
+                    existing.StartingStateOfCharge = soc.Value;
+
                 existing.CurrentStateOfCharge = soc.Value;
                 existing.StateOfChargeLastUpdate = DateTime.UtcNow;
             }
