@@ -1003,7 +1003,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 if (!string.IsNullOrWhiteSpace(apiKey))
                     client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
 
-                var url = $"{baseUrl}/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}" +
+                var url = $"{baseUrl}/API/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}" +
                           $"&connectorId={connectorNumber}&maxAgeMinutes={maxAgeMinutes}";
 
                 var resp = await client.GetAsync(url, ct);
