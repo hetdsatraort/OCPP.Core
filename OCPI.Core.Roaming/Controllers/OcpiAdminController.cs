@@ -734,7 +734,13 @@ namespace OCPI.Core.Roaming.Controllers
                     cost          = Math.Round(cost, 2),
                     tariff        = gun?.ChargerTariff ?? "NA",
                     tokenUid      = s.TokenUid,
-                    lastUpdated   = s.LastUpdated
+                    lastUpdated   = s.LastUpdated,
+                    // Battery — only populated for chargers that report a StateOfCharge MeterValues
+                    // measurand (typically DC fast chargers only). startingStateOfCharge is fixed at
+                    // whatever was captured near session start; currentStateOfCharge keeps refreshing.
+                    startingStateOfCharge  = s.StartingStateOfCharge,
+                    currentStateOfCharge   = s.CurrentStateOfCharge,
+                    stateOfChargeLastUpdate = s.StateOfChargeLastUpdate
                 };
             });
 
@@ -815,7 +821,10 @@ namespace OCPI.Core.Roaming.Controllers
                     tariff        = gun?.ChargerTariff ?? "NA",
                     liveMeter,
                     tokenUid      = s.TokenUid,
-                    lastUpdated   = s.LastUpdated
+                    lastUpdated   = s.LastUpdated,
+                    startingStateOfCharge  = s.StartingStateOfCharge,
+                    currentStateOfCharge   = s.CurrentStateOfCharge,
+                    stateOfChargeLastUpdate = s.StateOfChargeLastUpdate
                 }
             });
         }

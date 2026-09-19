@@ -145,6 +145,16 @@ namespace OCPI.Core.Roaming.Services
                                                        && g.ConnectorId == connectorNumber.ToString())
                             : null;
 
+                        // Single, non-blocking attempt to capture a starting SoC — mirrors
+                        // ChargingSessionController's GetCachedSoC(maxAgeMinutes: 2) right after a
+                        // regular ChargingSession starts. Not all chargers report SoC at all
+                        // (typically DC fast chargers only), and even those can take a few
+                        // MeterValues samples after StartTransaction before they report it, so a
+                        // miss here is the normal case, not an error — OcpiOrphanSessionService's
+                        // live-update loop backfills StartingStateOfCharge from the first reading
+                        // it does catch.
+                        var initialSoc = await GetInitialSoCAsync(chargePointId!, connectorNumber);
+
                         var hostedSession = new OcpiHostedSession
                         {
                             SessionId       = sessionId,
@@ -158,7 +168,10 @@ namespace OCPI.Core.Roaming.Services
                             StartDateTime   = ocppTransaction?.StartTime ?? DateTime.UtcNow,
                             Status          = "ACTIVE",
                             PartnerCredentialId    = requestingPartner?.Id,
-                            AuthorizationReference = authorizationReference
+                            AuthorizationReference = authorizationReference,
+                            StartingStateOfCharge   = initialSoc,
+                            CurrentStateOfCharge    = initialSoc,
+                            StateOfChargeLastUpdate = initialSoc.HasValue ? DateTime.UtcNow : null
                         };
 
                         await db.OcpiHostedSessions.AddAsync(hostedSession);
@@ -432,6 +445,59 @@ namespace OCPI.Core.Roaming.Services
             {
                 _logger.LogError(ex, "Error calling OCPP API {Url}", relativeUrl);
                 return (false, $"Communication error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Reads the OCPP server's cached MeterValues StateOfCharge measurand right after a
+        /// hosted session starts — the same <c>API/SoC/GetSoC</c> endpoint OcpiOrphanSessionService's
+        /// live-update loop and OCPP.Core.Management's ChargingSessionController both use.
+        /// A short <c>maxAgeMinutes</c> (matching ChargingSessionController's initial-capture call)
+        /// means a stale reading from some earlier session on the same connector is never mistaken
+        /// for this one's starting SoC. Returns null — never throws — on any failure or when the
+        /// charger hasn't reported SoC yet, both of which are the normal case, not an error.
+        /// </summary>
+        private async Task<decimal?> GetInitialSoCAsync(string chargePointId, int connectorNumber, int maxAgeMinutes = 2)
+        {
+            var serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+            if (string.IsNullOrEmpty(serverApiUrl))
+                return null;
+
+            try
+            {
+                var apiKey = _config.GetValue<string>("ApiKey") ?? string.Empty;
+                var baseUrl = serverApiUrl.TrimEnd('/');
+
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                    client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
+
+                var url = $"{baseUrl}/API/SoC/GetSoC?chargePointId={Uri.EscapeDataString(chargePointId)}" +
+                          $"&connectorId={connectorNumber}&maxAgeMinutes={maxAgeMinutes}";
+
+                var resp = await client.GetAsync(url);
+                if (!resp.IsSuccessStatusCode) return null;
+
+                var body = await resp.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(body);
+
+                if (doc.RootElement.TryGetProperty("success", out var successProp) && successProp.GetBoolean() &&
+                    doc.RootElement.TryGetProperty("data", out var dataProp) &&
+                    dataProp.ValueKind != JsonValueKind.Null &&
+                    dataProp.TryGetProperty("soC", out var socProp) &&
+                    socProp.ValueKind == JsonValueKind.Number)
+                {
+                    return socProp.GetDecimal();
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex,
+                    "OCPI START_SESSION: initial SoC lookup failed for {ChargePointId}/{Connector}",
+                    chargePointId, connectorNumber);
+                return null;
             }
         }
 

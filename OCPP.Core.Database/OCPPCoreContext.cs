@@ -935,6 +935,7 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
                 entity.Property(e => e.AuthorizationReference).HasMaxLength(36);
+                entity.Property(e => e.StartingStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.CurrentStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.StateOfChargeLastUpdate).IsRequired(false);
 

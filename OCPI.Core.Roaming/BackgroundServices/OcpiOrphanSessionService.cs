@@ -346,6 +346,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         var soc = await GetLiveSoCAsync(httpFactory, session.ChargePointId, session.ConnectorNumber, ct);
                         if (soc.HasValue)
                         {
+                            // Backfill StartingStateOfCharge from the first reading we ever catch for
+                            // this session, in case OcpiCommandService's own single attempt right at
+                            // START_SESSION missed it (the charger can take a few MeterValues samples
+                            // before it starts reporting SoC at all) — mirrors ChargingSessionController's
+                            // lazy SoCStart backfill on its own session-details polling. Never overwritten
+                            // once set, so it stays a true "start" baseline.
+                            if (!session.StartingStateOfCharge.HasValue)
+                                session.StartingStateOfCharge = (decimal)soc.Value;
+
                             session.CurrentStateOfCharge = (decimal)soc.Value;
                             session.StateOfChargeLastUpdate = DateTime.UtcNow;
                             if (session.PartnerCredentialId.HasValue && !liveUpdatedPartnerSessions.Contains(session))

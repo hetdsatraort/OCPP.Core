@@ -98,6 +98,18 @@ namespace OCPP.Core.Database.OCPIDTO
         public decimal? TotalCost { get; set; }
 
         /// <summary>
+        /// EV state of charge (0–100%) captured shortly after the session started, before the
+        /// charger has delivered any meaningful energy. Set once — either by a single lookup in
+        /// <c>OcpiCommandService.HandleStartSessionAsync</c> right after the OCPP transaction is
+        /// confirmed, or, when the charger hasn't reported SoC yet at that point (it can take a
+        /// few MeterValues samples after StartTransaction), backfilled from the first live
+        /// reading <c>OcpiOrphanSessionService</c> picks up. Never overwritten after that, so it
+        /// stays a true "start" baseline for SoC-gain reporting. Null when the charger never
+        /// reports SoC at all (typically non-DC chargers).
+        /// </summary>
+        public decimal? StartingStateOfCharge { get; set; }
+
+        /// <summary>
         /// Latest EV state of charge (0–100%), pulled from the OCPP server's cached MeterValues
         /// StateOfCharge measurand for this charge point/connector. Only populated for chargers
         /// that actually report it (typically DC fast chargers). Pushed to eMSP partners via the
