@@ -17,7 +17,11 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string ConnectorId { get; set; }
         public string ChargerTypeName { get; set; }
         public string PowerOutput { get; set; }
-        /// <summary>Null for Partner connectors — pricing is set by the partner CPO and only known via CDR.</summary>
+        /// <summary>
+        /// For Partner connectors, the partner CPO's own energy price resolved from their locally
+        /// cached OCPI tariff (see OcpiPartnerHubController.BuildConnectorTariffLookupAsync); null
+        /// when no tariff has been synced/cached yet for that connector.
+        /// </summary>
         public string Tariff { get; set; }
         public string Status { get; set; }
         public DateTime? LastUpdated { get; set; }

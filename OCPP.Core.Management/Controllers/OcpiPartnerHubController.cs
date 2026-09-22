@@ -415,6 +415,11 @@ namespace OCPP.Core.Management.Controllers
                     .Where(c => evseIds.Contains(c.PartnerEvseId))
                     .ToListAsync();
 
+                var partnerKeyByEvseId = evses.ToDictionary(
+                    e => e.Id,
+                    e => locationData.First(x => x.Location.Id == e.PartnerLocationId).Partner);
+                var tariffByConnectorId = await BuildConnectorTariffLookupAsync(connectors, partnerKeyByEvseId);
+
                 var results = locationData.Select(x =>
                 {
                     var locationEvses = evses.Where(e => e.PartnerLocationId == x.Location.Id).ToList();
@@ -447,7 +452,8 @@ namespace OCPP.Core.Management.Controllers
                         availableConnectors,
                         stations = locationEvses.Select(e =>
                             MapEvseToStationDto(e, x.Location.Id,
-                                connectors.Where(c => c.PartnerEvseId == e.Id)))
+                                connectors.Where(c => c.PartnerEvseId == e.Id),
+                                tariffByConnectorId))
                     };
                 });
 
@@ -1288,7 +1294,8 @@ namespace OCPP.Core.Management.Controllers
         private static object MapEvseToStationDto(
             OcpiPartnerEvse evse,
             int locationDbId,
-            IEnumerable<OcpiPartnerConnector> connectors)
+            IEnumerable<OcpiPartnerConnector> connectors,
+            IReadOnlyDictionary<int, decimal?> tariffByConnectorId = null)
         {
             var connList = connectors.ToList();
             return new
@@ -1305,11 +1312,12 @@ namespace OCPP.Core.Management.Controllers
                 chargingGunCount = connList.Count,
                 lastUpdated = evse.LastUpdated,
                 // Nested guns
-                chargers = connList.Select(c => MapConnectorToGunDto(evse, c))
+                chargers = connList.Select(c => MapConnectorToGunDto(evse, c,
+                    tariffByConnectorId != null && tariffByConnectorId.TryGetValue(c.Id, out var t) ? t : null))
             };
         }
 
-        private static object MapConnectorToGunDto(OcpiPartnerEvse evse, OcpiPartnerConnector connector)
+        private static object MapConnectorToGunDto(OcpiPartnerEvse evse, OcpiPartnerConnector connector, decimal? tariffPerKwh = null)
         {
             double? powerKw = connector.MaxElectricPower.HasValue
                 ? Math.Round(connector.MaxElectricPower.Value / 1000.0, 2)
@@ -1331,9 +1339,59 @@ namespace OCPP.Core.Management.Controllers
                 maxElectricPowerW = connector.MaxElectricPower,
                 chargerStatus = evse.Status ?? "UNKNOWN",
                 isOcpiPartner = true,
-                lastUpdated = connector.LastUpdated
+                lastUpdated = connector.LastUpdated,
+                // The partner CPO's own energy price, resolved from a locally cached OCPI tariff
+                // (see BuildConnectorTariffLookupAsync) — null when nothing has been synced/cached yet.
+                tariff = tariffPerKwh
             };
         }
+
+        /// <summary>
+        /// Batch-resolves each connector's partner-published energy price (₹/kWh) from the locally
+        /// cached OcpiTariff table — no outbound OCPI calls, so it's cheap enough to run for a whole
+        /// listing page. Mirrors OcpiAdminController.GetPartnerConnectorTariff's "fast path" (step 1:
+        /// locally synced tariff_ids, step 3: local tariff cache) but skips its live-pull fallback,
+        /// since that goes over the network per-connector and isn't affordable for a list endpoint —
+        /// a connector whose tariff hasn't been synced/cached yet is simply left out of the result
+        /// (caller shows null tariff for it, same as the estimate flow would until it resolves).
+        /// </summary>
+        private async Task<Dictionary<int, decimal?>> BuildConnectorTariffLookupAsync(
+            List<OcpiPartnerConnector> connectors,
+            IReadOnlyDictionary<int, OcpiPartnerCredential> partnerByEvseId)
+        {
+            var connectorTariffIds = connectors
+                .Select(c => new { Connector = c, TariffId = ParseFirstTariffId(c.TariffIds) })
+                .Where(x => x.TariffId != null && partnerByEvseId.ContainsKey(x.Connector.PartnerEvseId))
+                .ToList();
+
+            if (connectorTariffIds.Count == 0)
+                return new Dictionary<int, decimal?>();
+
+            var countryCodes = partnerByEvseId.Values.Select(p => p.CountryCode).Distinct().ToList();
+            var partyIds = partnerByEvseId.Values.Select(p => p.PartyId).Distinct().ToList();
+
+            var tariffs = await _dbContext.OcpiTariffs
+                .Where(t => t.IsActive && countryCodes.Contains(t.CountryCode) && partyIds.Contains(t.PartyId))
+                .ToListAsync();
+
+            var priceByKey = tariffs
+                .GroupBy(t => (t.CountryCode, t.PartyId, t.TariffId))
+                .ToDictionary(g => g.Key, g => g.First().EnergyPrice);
+
+            var result = new Dictionary<int, decimal?>();
+            foreach (var x in connectorTariffIds)
+            {
+                var partner = partnerByEvseId[x.Connector.PartnerEvseId];
+                if (priceByKey.TryGetValue((partner.CountryCode, partner.PartyId, x.TariffId), out var price))
+                    result[x.Connector.Id] = price;
+            }
+            return result;
+        }
+
+        private static string ParseFirstTariffId(string stored) =>
+            string.IsNullOrWhiteSpace(stored)
+                ? null
+                : stored.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
 
         private static double CalculateDistance(double lat1, double lon1, double lat2, double lon2)
         {

@@ -1467,6 +1467,7 @@ namespace OCPP.Core.Management.Controllers
             ConnectorId = GetString(c, "connectorId"),
             ChargerTypeName = GetString(c, "chargerTypeName"),
             PowerOutput = GetDouble(c, "powerOutputKw")?.ToString("F2"),
+            Tariff = GetDouble(c, "tariff")?.ToString("F2"),
             Status = GetString(c, "chargerStatus"),
             LastUpdated = GetDateTime(c, "lastUpdated")
         };
