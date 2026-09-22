@@ -476,19 +476,25 @@ namespace OCPI.Core.Roaming.Services
                 MaxVoltage = ParseVoltage(gun.PowerOutput),
                 MaxAmperage = ParseAmperage(gun.PowerOutput),
                 MaxElectricPower = ParsePower(gun.PowerOutput),
-                // Referenced by GunTariffIdPrefix + gun.RecId so an eMSP partner pulling this
-                // connector (or our own eMSP-role code, in a self-partner test setup) can resolve
-                // it via the Tariffs module — see OcpiTariffService.GetTariffAsync, which
-                // synthesizes a tariff on demand from this same gun's ChargerTariff since that
-                // per-kWh value was never separately synced into the OcpiTariffs table.
-                TariffIds = !string.IsNullOrEmpty(gun.ChargerTariff) ? new[] { $"{GunTariffIdPrefix}{gun.RecId}" } : null,
+                // Referenced by GunTariffIdPrefix + gun.RecId (hyphens stripped) so an eMSP
+                // partner pulling this connector (or our own eMSP-role code, in a self-partner
+                // test setup) can resolve it via the Tariffs module — see
+                // OcpiTariffService.GetTariffAsync/GetTariffsAsync, which compute a matching
+                // tariff live from this same gun's ChargerTariff on every request (no separate
+                // sync or persisted duplicate). Hyphens are stripped because OcpiTariff.TariffId
+                // is capped at 36 chars (the OCPI spec's own tariff_id limit) — "GUN-" (4) plus a
+                // hyphenated GUID (36) would overflow it; "GUN-" plus the bare 32 hex chars fits
+                // exactly.
+                TariffIds = !string.IsNullOrEmpty(gun.ChargerTariff)
+                    ? new[] { $"{GunTariffIdPrefix}{gun.RecId.Replace("-", "")}" }
+                    : null,
                 LastUpdated = gun.UpdatedOn
             };
         }
 
         /// <summary>
         /// Prefix used to derive a tariff_id for our own ChargingGuns — see MapToOcpiConnector and
-        /// OcpiTariffService.GetTariffAsync's on-demand synthesis fallback.
+        /// OcpiTariffService.GetTariffAsync's on-demand computation fallback.
         /// </summary>
         public const string GunTariffIdPrefix = "GUN-";
 

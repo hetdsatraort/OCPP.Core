@@ -26,17 +26,21 @@ namespace OCPI.Core.Roaming.Services
         {
             var dbTariffs = await _dbContext.OcpiTariffs
                 .Where(t => t.IsActive)
-                .OrderBy(t => t.TariffId)
-                .Skip(offset)
-                .Take(limit)
                 .ToListAsync();
 
-            return dbTariffs.Select(s => MapToOcpiTariff(s)).ToList();
+            var all = dbTariffs.Select(MapToOcpiTariff)
+                .Concat(await BuildOwnGunTariffsAsync())
+                .OrderBy(t => t.Id)
+                .ToList();
+
+            return all.Skip(offset).Take(limit).ToList();
         }
 
         public async Task<int> GetTariffCountAsync()
         {
-            return await _dbContext.OcpiTariffs.Where(t => t.IsActive).CountAsync();
+            var dbCount = await _dbContext.OcpiTariffs.Where(t => t.IsActive).CountAsync();
+            var gunCount = (await BuildOwnGunTariffsAsync()).Count;
+            return dbCount + gunCount;
         }
 
         public async Task<OcpiTariff> GetTariffAsync(string countryCode, string partyId, string tariffId)
@@ -51,6 +55,35 @@ namespace OCPI.Core.Roaming.Services
                 return MapToOcpiTariff(dbTariff);
 
             return await SynthesizeOwnGunTariffAsync(countryCode, partyId, tariffId) ?? null!;
+        }
+
+        /// <summary>
+        /// Our own CPO server answers Tariffs module requests (bulk list and single-id lookup
+        /// alike) the same way any external CPO's server would: by computing the answer itself,
+        /// live, from its own local data — no separate sync job feeding it, no persisted duplicate
+        /// of ChargingGun.ChargerTariff. A partner-sync background service only ever pulls FROM a
+        /// CPO over HTTP, treating every CPO (including our own self-partner test loop) uniformly;
+        /// it has no business reaching into ChargingGuns directly, so this computation lives here,
+        /// in the code that actually answers the request. See SynthesizeOwnGunTariffAsync for the
+        /// single-id form this mirrors.
+        /// </summary>
+        private async Task<List<OcpiTariff>> BuildOwnGunTariffsAsync()
+        {
+            var ourCountryCode = _configuration.GetValue<string>("OCPI:CountryCode") ?? "IN";
+            var ourPartyId = _configuration.GetValue<string>("OCPI:PartyId") ?? "HYC";
+
+            var guns = await _dbContext.ChargingGuns
+                .Where(g => g.Active == 1 && g.ChargerTariff != null && g.ChargerTariff != "")
+                .ToListAsync();
+
+            var result = new List<OcpiTariff>();
+            foreach (var gun in guns)
+            {
+                var tariff = BuildGunTariff(gun, ourCountryCode, ourPartyId);
+                if (tariff != null)
+                    result.Add(tariff);
+            }
+            return result;
         }
 
         /// <summary>
@@ -73,18 +106,27 @@ namespace OCPI.Core.Roaming.Services
                 !tariffId.StartsWith(OcpiLocationService.GunTariffIdPrefix, StringComparison.OrdinalIgnoreCase))
                 return null;
 
+            // gunRecId here is the gun's RecId with hyphens stripped (see
+            // OcpiLocationService.MapToOcpiConnector — done so the id fits OcpiTariff.TariffId's
+            // 36-char cap), so match it against RecId the same way.
             var gunRecId = tariffId.Substring(OcpiLocationService.GunTariffIdPrefix.Length);
             var gun = await _dbContext.ChargingGuns
-                .FirstOrDefaultAsync(g => g.RecId == gunRecId && g.Active == 1);
+                .FirstOrDefaultAsync(g => g.RecId.Replace("-", "") == gunRecId && g.Active == 1);
 
-            if (gun == null || !double.TryParse(gun.ChargerTariff, out var tariffValue) || tariffValue <= 0)
+            return gun == null ? null : BuildGunTariff(gun, ourCountryCode, ourPartyId);
+        }
+
+        private static OcpiTariff? BuildGunTariff(
+            OCPP.Core.Database.EVCDTO.ChargingGuns gun, string ourCountryCode, string ourPartyId)
+        {
+            if (!double.TryParse(gun.ChargerTariff, out var tariffValue) || tariffValue <= 0)
                 return null;
 
             return new OcpiTariff
             {
                 CountryCode = OcpiEnumMemberHelper.ParseMemberValue<CountryCode>(ourCountryCode),
                 PartyId = ourPartyId,
-                Id = tariffId,
+                Id = $"{OcpiLocationService.GunTariffIdPrefix}{gun.RecId.Replace("-", "")}",
                 Currency = CurrencyCode.IndianRupee,
                 Elements = new List<OcpiTariffElement>
                 {
@@ -190,7 +232,25 @@ namespace OCPI.Core.Roaming.Services
                 _logger.LogInformation("Created new tariff {TariffId}", tariff.Id);
             }
 
-            await _dbContext.SaveChangesAsync();
+            try
+            {
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                // This DbContext is shared for a whole sync round (OcpiSyncBackgroundService
+                // creates one per round, across every partner's locations/tariffs/sessions/CDRs).
+                // A failed save (e.g. a constraint violation on this one tariff) otherwise leaves
+                // the bad entity tracked as Added/Modified, so every later SaveChangesAsync() call
+                // in the round keeps re-sending it alongside whatever else changed — and fails too,
+                // even for entities that are themselves perfectly valid. Clear tracking so the rest
+                // of the round can proceed; every Store*/CreateOrUpdate* method here already
+                // re-queries and re-adds its own entity per call, so nothing relies on state
+                // surviving across calls on this context.
+                _dbContext.ChangeTracker.Clear();
+                throw;
+            }
+
             return tariff.Id!;
         }
 
