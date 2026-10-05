@@ -1090,6 +1090,15 @@ namespace OCPP.Core.Management.Controllers
                         userEmail = user?.EMailID,
                         userPhone = user?.PhoneNumber,
                         invoiceNumber = invoiceNumbers.TryGetValue(s.Id, out var inv) ? inv : null,
+                        // Same names as ChargingSessionDto (charging-sessions list). Like a local
+                        // session, soCEnd stays null until the session has ended; the partner's
+                        // latest live reading is exposed separately as soCCurrent.
+                        soCStart = (double?)s.StartingStateOfCharge,
+                        soCEnd = s.EndDateTime.HasValue || s.Status == "COMPLETED"
+                            ? (double?)s.CurrentStateOfCharge
+                            : null,
+                        soCCurrent = (double?)s.CurrentStateOfCharge,
+                        soCLastUpdate = s.StateOfChargeLastUpdate,
                     };
                 });
 
