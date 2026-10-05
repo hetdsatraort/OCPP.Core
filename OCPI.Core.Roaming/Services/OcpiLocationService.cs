@@ -149,14 +149,15 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                existing.Name = Trunc(location.Name, 255);
-                existing.Address = Trunc(location.Address, 500);
-                existing.City = Trunc(location.City, 100);
-                existing.PostalCode = Trunc(location.PostalCode, 20);
-                existing.Country = Trunc(location.Country, 3);
-                existing.Latitude = Trunc(location.Coordinates?.Latitude, 20);
-                existing.Longitude = Trunc(location.Coordinates?.Longitude, 20);
-                existing.LocationType = Trunc(location.Type?.ToMemberValue(), 50);
+                // Merge, don't overwrite — see StorePartnerEvseAsync (PATCH bodies are partial).
+                existing.Name = Trunc(location.Name, 255) ?? existing.Name;
+                existing.Address = Trunc(location.Address, 500) ?? existing.Address;
+                existing.City = Trunc(location.City, 100) ?? existing.City;
+                existing.PostalCode = Trunc(location.PostalCode, 20) ?? existing.PostalCode;
+                existing.Country = Trunc(location.Country, 3) ?? existing.Country;
+                existing.Latitude = Trunc(location.Coordinates?.Latitude, 20) ?? existing.Latitude;
+                existing.Longitude = Trunc(location.Coordinates?.Longitude, 20) ?? existing.Longitude;
+                existing.LocationType = Trunc(location.Type?.ToMemberValue(), 50) ?? existing.LocationType;
                 // Re-point to the current partner credential row — a partner that was removed
                 // and re-added gets a new OcpiPartnerCredential.Id, but this location is matched
                 // by CountryCode+PartyId+LocationId alone, so without this it stays orphaned on
@@ -198,11 +199,18 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                existing.EvseId = Trunc(evse.EvseId, 48);
-                existing.Status = Trunc(evse.Status?.ToMemberValue(), 50);
-                existing.StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow;
-                existing.FloorLevel = Trunc(evse.FloorLevel, 10);
-                existing.PhysicalReference = Trunc(evse.PhysicalReference, 50);
+                // Merge, don't overwrite: partners PATCH an EVSE with only the changed fields
+                // (typically just status + last_updated when a session starts). Assigning those
+                // absent fields as null wiped PhysicalReference/EvseId, and the app's charger
+                // name (PhysicalReference ?? EvseId ?? EvseUid) fell back to the raw EVSE GUID.
+                existing.EvseId = Trunc(evse.EvseId, 48) ?? existing.EvseId;
+                if (evse.Status != null)
+                {
+                    existing.Status = Trunc(evse.Status?.ToMemberValue(), 50);
+                    existing.StatusDateTime = evse.LastUpdated ?? DateTime.UtcNow;
+                }
+                existing.FloorLevel = Trunc(evse.FloorLevel, 10) ?? existing.FloorLevel;
+                existing.PhysicalReference = Trunc(evse.PhysicalReference, 50) ?? existing.PhysicalReference;
                 existing.LastUpdated = evse.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerEvses.Update(existing);
@@ -240,13 +248,14 @@ namespace OCPI.Core.Roaming.Services
 
             if (existing != null)
             {
-                existing.Standard = Trunc(connector.Standard?.ToMemberValue(), 50);
-                existing.Format = Trunc(connector.Format?.ToMemberValue(), 20);
-                existing.PowerType = Trunc(connector.PowerType?.ToMemberValue(), 50);
-                existing.MaxVoltage = connector.MaxVoltage;
-                existing.MaxAmperage = connector.MaxAmperage;
-                existing.MaxElectricPower = connector.MaxElectricPower;
-                existing.TariffIds = tariffIds;
+                // Merge, don't overwrite — see StorePartnerEvseAsync (PATCH bodies are partial).
+                existing.Standard = Trunc(connector.Standard?.ToMemberValue(), 50) ?? existing.Standard;
+                existing.Format = Trunc(connector.Format?.ToMemberValue(), 20) ?? existing.Format;
+                existing.PowerType = Trunc(connector.PowerType?.ToMemberValue(), 50) ?? existing.PowerType;
+                existing.MaxVoltage = connector.MaxVoltage ?? existing.MaxVoltage;
+                existing.MaxAmperage = connector.MaxAmperage ?? existing.MaxAmperage;
+                existing.MaxElectricPower = connector.MaxElectricPower ?? existing.MaxElectricPower;
+                existing.TariffIds = tariffIds ?? existing.TariffIds;
                 existing.LastUpdated = connector.LastUpdated ?? DateTime.UtcNow;
 
                 _dbContext.OcpiPartnerConnectors.Update(existing);
@@ -449,7 +458,21 @@ namespace OCPI.Core.Roaming.Services
             }
             else
             {
-                status = MapStatus(guns.FirstOrDefault(g => g.ChargingStationId == station.RecId)?.ChargerStatus ?? "UNKNOWN");
+                var gun = guns.FirstOrDefault(g => g.ChargingStationId == station.RecId);
+                var gunStatus = gun?.ChargerStatus ?? "UNKNOWN";
+
+                // Occupied without an open transaction = plugged in, awaiting authorization —
+                // publish as startable (see OcppConnectorStatusHelper.NormalizeAwaitingAuthorization).
+                if (string.Equals(gunStatus, "Occupied", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(gun?.ConnectorId, out var connectorNumber) &&
+                    !_dbContext.Transactions.Any(t => t.ChargePointId == chargePointId
+                                                   && t.ConnectorId == connectorNumber
+                                                   && t.StopTime == null))
+                {
+                    gunStatus = "Available";
+                }
+
+                status = MapStatus(gunStatus);
             }
 
             return new OcpiEvse

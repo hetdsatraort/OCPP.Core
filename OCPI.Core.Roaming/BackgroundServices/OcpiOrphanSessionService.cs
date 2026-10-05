@@ -870,9 +870,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .Where(cs => chargePointIds.Contains(cs.ChargePointId) && cs.Active == 1)
                 .ToListAsync(ct);
 
+            // Occupied without an open transaction = plugged in, awaiting authorization — publish
+            // as startable (see OcppConnectorStatusHelper.NormalizeAwaitingAuthorization).
+            var openTxConnectors = await OcppConnectorStatusHelper.GetOpenTransactionConnectorsAsync(db, chargePointIds, ct);
+
             var statusByChargePoint = connStatuses
                 .GroupBy(cs => cs.ChargePointId)
-                .ToDictionary(g => g.Key, g => g.Select(cs => cs.LastStatus).ToList());
+                .ToDictionary(g => g.Key, g => g
+                    .Select(cs => OcppConnectorStatusHelper.NormalizeAwaitingAuthorization(cs.LastStatus, cs.ChargePointId, cs.ConnectorId, openTxConnectors))
+                    .ToList());
 
             // Check which charge points are currently online via the OCPP server so we never
             // push a stale ConnectorStatuses value for an offline charger.

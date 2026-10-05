@@ -542,9 +542,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .Where(cs => chargePointIds.Contains(cs.ChargePointId) && cs.Active == 1)
                 .ToListAsync(ct);
 
+            // The OCPP server collapses Preparing (cable plugged in, awaiting authorization) into
+            // "Occupied", the same value it uses while charging. Reporting that as CHARGING made
+            // partner eMSPs refuse to send START_SESSION once a driver had plugged in — so an
+            // Occupied connector with no open transaction is published as startable instead.
+            var openTxConnectors = await OcppConnectorStatusHelper.GetOpenTransactionConnectorsAsync(dbContext, chargePointIds, ct);
+
             var statusByChargePoint = connectorStatuses
                 .GroupBy(cs => cs.ChargePointId)
-                .ToDictionary(g => g.Key, g => g.Select(cs => cs.LastStatus).ToList());
+                .ToDictionary(g => g.Key, g => g
+                    .Select(cs => OcppConnectorStatusHelper.NormalizeAwaitingAuthorization(cs.LastStatus, cs.ChargePointId, cs.ConnectorId, openTxConnectors))
+                    .ToList());
 
             var hubIds = stations.Select(s => s.ChargingHubId).Distinct().ToList();
             var hubs   = await dbContext.ChargingHubs

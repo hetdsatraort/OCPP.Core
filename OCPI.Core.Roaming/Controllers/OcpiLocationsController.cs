@@ -128,6 +128,12 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 throw OcpiException.InvalidParameters("Invalid partner credentials");
 
+            // PATCH bodies only carry changed fields — identity may be absent; use the route
+            // values, otherwise StorePartnerLocationAsync can't match the existing row.
+            if (string.IsNullOrEmpty(location.CountryCode)) location.CountryCode = countryCode;
+            if (string.IsNullOrEmpty(location.PartyId)) location.PartyId = partyId;
+            if (string.IsNullOrEmpty(location.Id)) location.Id = locationId;
+
             // Partially update location in database
             await _locationService.StorePartnerLocationAsync(partner.Id, location);
 
@@ -229,6 +235,10 @@ namespace OCPI.Core.Roaming.Controllers
             var partnerEvseId = await _locationService.GetPartnerEvseDbIdAsync(partnerLocationId.Value, evseUid);
             if (partnerEvseId == null)
                 throw OcpiException.UnknownLocation($"EVSE {evseUid} not found under location {locationId}");
+
+            // PATCH bodies only carry changed fields — Id may be absent; use the route value.
+            if (string.IsNullOrEmpty(connector.Id))
+                connector.Id = connectorId;
 
             await _locationService.StorePartnerConnectorAsync(partnerEvseId.Value, connector);
 
