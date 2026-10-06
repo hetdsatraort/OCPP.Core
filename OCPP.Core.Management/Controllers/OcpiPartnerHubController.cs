@@ -1029,6 +1029,22 @@ namespace OCPP.Core.Management.Controllers
 
                 var totalCount = await query.CountAsync();
 
+                // Summary across the whole filtered set (not just this page) — same shape as
+                // ChargingSessionController.GetChargingSessions' Summary block. The "fee" is what
+                // the user is charged: TotalPayable (actual cost + platform fee + GST) once the
+                // invoice is computed, otherwise the partner's reported TotalCost.
+                var summaryRows = await query
+                    .Select(s => new { s.TotalEnergy, s.TotalCost, s.TotalPayable, s.Status, s.StartDateTime, s.EndDateTime })
+                    .ToListAsync();
+
+                var nowUtc = DateTime.UtcNow;
+                var totalEnergy = summaryRows.Sum(r => (double)(r.TotalEnergy ?? 0));
+                var totalFee = summaryRows.Sum(r => r.TotalPayable ?? r.TotalCost ?? 0);
+                var totalChargingTime = TimeSpan.FromTicks(summaryRows.Sum(r =>
+                    Math.Max(0, ((r.EndDateTime ?? nowUtc) - r.StartDateTime).Ticks)));
+                var activeSessions = summaryRows.Count(r => r.Status == "ACTIVE");
+                var completedSessions = summaryRows.Count(r => r.Status == "COMPLETED");
+
                 var sessions = await query
                     .OrderByDescending(s => s.StartDateTime)
                     .Skip((page - 1) * pageSize)
@@ -1111,7 +1127,26 @@ namespace OCPP.Core.Management.Controllers
                         page,
                         pageSize,
                         totalPages = (int)Math.Ceiling((double)totalCount / pageSize),
-                        sessions = result
+                        sessions = result,
+                        summary = new
+                        {
+                            totalEnergyTransmitted = Math.Round(totalEnergy, 3),
+                            totalEnergyUnit = "kWh",
+                            totalChargingTotalFee = Math.Round(totalFee, 2),
+                            totalFeeUnit = "₹",
+                            totalChargingTime = new
+                            {
+                                totalHours = Math.Round(totalChargingTime.TotalHours, 2),
+                                totalMinutes = Math.Round(totalChargingTime.TotalMinutes, 0),
+                                formattedDuration = totalChargingTime.Days > 0
+                                    ? $"{totalChargingTime.Days}d {totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                    : totalChargingTime.Hours > 0
+                                        ? $"{totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                        : $"{totalChargingTime.Minutes}m"
+                            },
+                            activeSessions,
+                            completedSessions
+                        }
                     }
                 });
             }
