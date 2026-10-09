@@ -162,6 +162,8 @@ namespace OCPP.Core.Management
             services.AddScoped<IFileStorageService, FileStorageService>();
             services.AddScoped<IInvoiceService, InvoiceService>();
             services.AddScoped<IPartnerInvoiceService, PartnerInvoiceService>();
+            services.AddScoped<IEmailNotificationServices, EmailNotificationServices>();
+            services.AddScoped<IEmailTemplateSevices, EmailTemplateSevices>();
             services.AddDistributedMemoryCache();
             
             // Add HttpClient for background services

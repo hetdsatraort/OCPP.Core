@@ -7,11 +7,15 @@ using OCPP.Core.Database.EVCDTO;
 using OCPP.Core.Management.Controllers;
 using System;
 using System.Net.Http;
+using System.Net.Mail;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using static QuestPDF.Helpers.Colors;
+using MailKit.Net.Smtp;
+using MimeKit;
+using MailKit.Security;
+using SmtpClient = MailKit.Net.Smtp.SmtpClient;
 
 namespace OCPP.Core.Management.Services
 {
@@ -19,6 +23,7 @@ namespace OCPP.Core.Management.Services
     {
 
         Task<(string message, bool success)> CallEmailServiceTemplate(string email, string emailBody, string subject);
+        Task SendEmailAsync(string toEmail, string subject, string htmlBody);
     }
 
 
@@ -26,9 +31,9 @@ namespace OCPP.Core.Management.Services
     {
         private readonly OCPPCoreContext _dbContext;
         private readonly IConfiguration _configuration;
-        private readonly ILogger _logger;
+        private readonly ILogger<EmailTemplateSevices> _logger;
 
-        public EmailTemplateSevices(OCPPCoreContext dbContext, IConfiguration configuration, ILogger logger)
+        public EmailTemplateSevices(OCPPCoreContext dbContext, IConfiguration configuration, ILogger<EmailTemplateSevices> logger)
         {
             _dbContext = dbContext;
             _configuration = configuration;
@@ -123,6 +128,48 @@ namespace OCPP.Core.Management.Services
         }
 
 
+
+
+        public async Task SendEmailAsync(string toEmail, string subject, string htmlBody)
+        {
+            try
+            {
+                var senderEmail = _configuration["SmtpSettings:SenderEmail"]!;
+                var password = _configuration["SmtpSettings:Password"]!;
+                var host = _configuration["SmtpSettings:Host"]!;
+                var port = int.Parse(_configuration["SmtpSettings:Port"]!);
+
+                var message = new MimeMessage();
+
+                message.From.Add(new MailboxAddress("HyCharge", senderEmail));
+                message.To.Add(MailboxAddress.Parse(toEmail));
+                message.Subject = subject;
+
+                message.Body = new BodyBuilder
+                {
+                    HtmlBody = htmlBody
+                }.ToMessageBody();
+
+                using var smtp = new SmtpClient();
+
+                //await smtp.ConnectAsync(host, port, SecureSocketOptions.SslOnConnect); // gmail requires SSL
+                await smtp.ConnectAsync(host, port, SecureSocketOptions.StartTls); // use StartTLS for other SMTP servers
+                await smtp.AuthenticateAsync(senderEmail, password);
+                //await smtp.SendAsync(message);
+                var response = await smtp.SendAsync(message);
+
+                Console.WriteLine($"SMTP response: {response}");
+                _logger.LogInformation($"SMTP response: {response}");
+
+                await smtp.DisconnectAsync(true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error sending email: {ex.Message}");
+                throw;
+            }
+
+        }
 
 
     }
