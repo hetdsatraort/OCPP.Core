@@ -59,6 +59,7 @@ namespace OCPP.Core.Server
         private readonly ILoggerFactory _logFactory;
         private readonly ILogger _logger;
         private readonly IConfiguration _configuration;
+        private readonly MessageDumpWriter _messageDump;
 
         // Dictionary with status objects for each charge point
         private static readonly ConcurrentDictionary<string, ChargePointStatus> _chargePointStatusDict = new ConcurrentDictionary<string, ChargePointStatus>();
@@ -66,11 +67,12 @@ namespace OCPP.Core.Server
         // Dictionary for processing asynchronous API calls
         private Dictionary<string, OCPPMessage> _requestQueue = new Dictionary<string, OCPPMessage>();
 
-        public OCPPMiddleware(RequestDelegate next, ILoggerFactory logFactory, IConfiguration configuration)
+        public OCPPMiddleware(RequestDelegate next, ILoggerFactory logFactory, IConfiguration configuration, MessageDumpWriter messageDump)
         {
             _next = next;
             _logFactory = logFactory;
             _configuration = configuration;
+            _messageDump = messageDump;
 
             _logger = logFactory.CreateLogger("OCPPMiddleware");
 
@@ -881,27 +883,6 @@ namespace OCPP.Core.Server
             {
                 _logger.LogWarning("OCPPMiddleware => Bad path request");
                 context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
-            }
-        }
-
-        /// <summary>
-        /// Dumps an OCPP message in the dump dir
-        /// </summary>
-        private void DumpMessage(string nameSuffix, string message)
-        {
-            string dumpDir = _configuration.GetValue<string>("MessageDumpDir");
-            if (!string.IsNullOrWhiteSpace(dumpDir))
-            {
-                string path = Path.Combine(dumpDir, string.Format("{0}_{1}.txt", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-ffff"), nameSuffix));
-                try
-                {
-                    // Write incoming message into dump directory
-                    File.WriteAllText(path, message);
-                }
-                catch (Exception exp)
-                {
-                    _logger.LogError(exp, "OCPPMiddleware.DumpMessage => Error dumping message '{0}' to path: '{1}'", nameSuffix, path);
-                }
             }
         }
     }

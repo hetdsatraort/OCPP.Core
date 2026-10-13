@@ -34,11 +34,29 @@ Edit the appsettings.json file and configure the 'SQLite' *or* 'SqlServer' entry
 	"SqlServer": "Server=.;Database=OCPP.Core;Trusted_Connection=True;"
 	},
 ```
-If you configure a dump directory, the server writes all OCPP requests and responses there. You can also log basic message information in the database.
+If you configure a dump directory, the server writes all OCPP requests and responses there. Leave it empty to turn message dumps off. The directory is created if it doesn't exist. You can also log basic message information in the database.
 ```
 "MessageDumpDir": "c:\\temp\\OCPP",
+"MessageDumpRetentionDays": 30, // delete day folders older than this (0 = keep forever)
 "DbMessageLog": 2,  //0=None, 1=Info, 2=Verbose (all)
 ```
+Messages are grouped into one folder per day and one file per chargepoint:
+```
+c:\temp\OCPP\
+	2026-10-13\
+		CP-HUB01-A.log
+		CP-HUB01-B.log
+	2026-10-14\
+		...
+```
+Each line is one message, with tab-separated fields: timestamp, direction (`IN` = from the chargepoint, `OUT` = to the chargepoint), OCPP protocol and the raw message:
+```
+2026-10-13T14:22:05.123+05:30	IN	ocpp1.6	[2,"abc123","Heartbeat",{}]
+2026-10-13T14:22:05.131+05:30	OUT	ocpp1.6	[3,"abc123",{"currentTime":"..."}]
+```
+Messages are queued in memory and written by a background worker, so dumping never slows down the chargepoint connections. If the disk can't keep up and the queue fills (10,000 messages), new messages are left out of the dump and a warning with the count is logged.
+The files can be opened or tailed while the server is running. When `MessageDumpRetentionDays` is greater than 0, expired day folders are deleted at startup and when the date changes. Only folders named `yyyy-MM-dd` are deleted.
+The dump settings are read once at startup, so changes need a server restart.
 **OCPP.Core.Management**
 See above for the database connection. The appsettings.json file also contains the user logins, passwords and role. Administrators can create and edit chargepoints and tags. Regular users can see the chargepoints and transactions.
 ```
@@ -70,7 +88,7 @@ They are compiled 'portable' and run on different platforms.
 ### Windows
 * Download and install the .NET.Core 3.1 runtime.
 * Extract the ZIP file somewhere. 
-* Open the file "appsettings.json" in the OCPP.Server and configure "MessageDumpDir" to an existing directory or leave it empty to turn off message dumps.
+* Open the file "appsettings.json" in the OCPP.Server and configure "MessageDumpDir" to a directory or leave it empty to turn off message dumps.
 * Start the "OCPP.Core.Server.exe" and "OCPP.Core.Management.exe". 
 * Open "http://localhost:8082" in a browser.
 
@@ -79,7 +97,7 @@ They are compiled 'portable' and run on different platforms.
 * Extract the ZIP file somewhere. 
 * Open the file "appsettings.json" in both projects
 	* change the paths to the sqlite file to a valid unix path: "SQLite": "Filename=./../SQLite/OCPP.Core.sqlite;"
-	* Only OCPP.Server: configure the "MessageDumpDir" to an existing directory or leave it empty to turn off message dumps.
+	* Only OCPP.Server: configure the "MessageDumpDir" to a valid unix path (e.g. "/var/log/ocpp") or leave it empty to turn off message dumps. The server process needs write permission there.
 * Give the file "SQLite/OCPP.Core.sqlite" Read&Write permissions to everone.
 * Start both projects in consoles:
 	```

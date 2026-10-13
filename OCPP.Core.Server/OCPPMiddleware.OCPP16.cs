@@ -72,11 +72,8 @@ namespace OCPP.Core.Server
 
                                 string ocppMessage = UTF8Encoding.UTF8.GetString(bMessage);
 
-                                // write message (async) to dump directory
-                                _ = Task.Run(() =>
-                                {
-                                    DumpMessage("ocpp16-in", ocppMessage);
-                                });
+                                // queue message for dump directory (non-blocking)
+                                _messageDump.Dump(chargePointStatus.Id, chargePointStatus.Protocol, "IN", ocppMessage);
 
                                 Match match = Regex.Match(ocppMessage, MessageRegExp);
                                 if (match != null && match.Groups != null && match.Groups.Count >= 3)
@@ -624,11 +621,8 @@ namespace OCPP.Core.Server
                 ocppTextMessage = string.Format("[{0},\"{1}\",\"{2}\",\"{3}\",{4}]", "4", string.Empty, Messages_OCPP16.ErrorCodes.ProtocolError, string.Empty, "{}");
             }
 
-            // write message (async) to dump directory
-            _ = Task.Run(() =>
-            {
-                DumpMessage("ocpp16-out", ocppTextMessage);
-            });
+            // queue message for dump directory (non-blocking)
+            _messageDump.Dump(chargePointStatus.Id, chargePointStatus.Protocol, "OUT", ocppTextMessage);
 
             byte[] binaryMessage = UTF8Encoding.UTF8.GetBytes(ocppTextMessage);
             await chargePointStatus.WebSocket.SendAsync(new ArraySegment<byte>(binaryMessage, 0, binaryMessage.Length), WebSocketMessageType.Text, true, CancellationToken.None);

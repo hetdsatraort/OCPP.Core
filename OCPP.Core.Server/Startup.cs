@@ -66,6 +66,10 @@ namespace OCPP.Core.Server
         {
             services.AddOCPPDbContext(Configuration);
             services.AddControllers();
+
+            // Background writer for raw OCPP message dumps (MessageDumpDir)
+            services.AddSingleton<MessageDumpWriter>();
+            services.AddHostedService(sp => sp.GetRequiredService<MessageDumpWriter>());
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
