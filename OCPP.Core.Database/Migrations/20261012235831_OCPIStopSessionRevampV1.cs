@@ -30,6 +30,11 @@ namespace OCPP.Core.Database.Migrations
                 type: "int",
                 nullable: false,
                 defaultValue: 0);
+
+            migrationBuilder.Sql(@"
+                UPDATE OcpiPartnerSession SET IsBilled = 1
+                WHERE LimitViolationHandled = 1
+                OR Status NOT IN ('ACTIVE', 'PENDING');");
         }
 
         /// <inheritdoc />
