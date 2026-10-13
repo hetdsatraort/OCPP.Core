@@ -464,11 +464,44 @@ namespace OCPP.Core.Management.Controllers
 
                 if (existingValidation != null)
                 {
-                    _logger.LogWarning($"Duplicate payment attempt detected for OrderId: {request.OrderId}, UserId: {request.UserId}");
-                    return BadRequest(new AddCreditsResponseDto
+                    // A different user trying to claim this order is a genuine conflict
+                    if (existingValidation.UserId != request.UserId)
                     {
-                        Success = false,
-                        Message = "This payment has already been processed",
+                        _logger.LogWarning($"Payment claim mismatch for OrderId: {request.OrderId}, RequestUserId: {request.UserId}, OwnerUserId: {existingValidation.UserId}");
+                        return Conflict(new AddCreditsResponseDto
+                        {
+                            Success = false,
+                            Message = "This payment is not associated with your account"
+                        });
+                    }
+
+                    // Same user — the order was already credited (typically by the payment webhook
+                    // racing the app's callback). Treat as an idempotent success.
+                    var owner = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == request.UserId);
+                    decimal.TryParse(owner?.CreditBalance, out var currentBalance);
+
+                    if (existingValidation.Status == "Processed")
+                    {
+                        _logger.LogInformation($"Add-credits replay for already processed OrderId: {request.OrderId}, UserId: {request.UserId}");
+                        return Ok(new AddCreditsResponseDto
+                        {
+                            Success = true,
+                            AlreadyProcessed = true,
+                            Message = "Credits already added for this payment",
+                            NewBalance = currentBalance,
+                            ValidationId = existingValidation.RecId,
+                            TransactionId = existingValidation.WalletTransactionId
+                        });
+                    }
+
+                    // "Verified" — another request is mid-way through crediting this order
+                    _logger.LogInformation($"Add-credits replay while OrderId: {request.OrderId} is still being processed, UserId: {request.UserId}");
+                    return Accepted(new AddCreditsResponseDto
+                    {
+                        Success = true,
+                        AlreadyProcessed = true,
+                        Message = "Payment received and is being credited to your wallet",
+                        NewBalance = currentBalance,
                         ValidationId = existingValidation.RecId
                     });
                 }

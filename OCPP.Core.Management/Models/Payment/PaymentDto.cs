@@ -86,6 +86,8 @@ namespace OCPP.Core.Management.Models.Payment
         public decimal NewBalance { get; set; }
         public string ValidationId { get; set; }
         public string TransactionId { get; set; }
+        /// <summary>True when this order had already been credited before this request (idempotent replay)</summary>
+        public bool AlreadyProcessed { get; set; }
     }
 
     public class InternalWebhookPayloadDto
