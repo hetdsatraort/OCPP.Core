@@ -106,6 +106,11 @@ namespace OCPI.Core.Roaming.Services
                 if (partnerSession != null)
                 {
                     partnerSession.TotalCost = ocpiCdr.TotalCost.ExclVat;
+                    // The platform fee on the invoice is per-kWh, so the final energy must come
+                    // from the CDR too — the last session push may predate the charger stopping.
+                    if (ocpiCdr.TotalEnergy > 0)
+                        partnerSession.TotalEnergy = ocpiCdr.TotalEnergy;
+                    partnerSession.EndDateTime ??= ocpiCdr.EndDateTime;
                     partnerSession.LastUpdated = DateTime.UtcNow;
                     await _dbContext.SaveChangesAsync();
                 }

@@ -80,6 +80,7 @@ namespace OCPI.Core.Roaming.Services
     public class PartnerInvoiceResult
     {
         public string InvoiceNumber { get; set; } = string.Empty;
+        public decimal EnergyConsumedKwh { get; set; }
         public decimal PartnerCost { get; set; }
         public decimal GrandTotal { get; set; }
         public decimal TotalPayable { get; set; }

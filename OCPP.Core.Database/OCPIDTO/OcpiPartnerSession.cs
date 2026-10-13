@@ -141,10 +141,28 @@ namespace OCPP.Core.Database.OCPIDTO
         public double? BatteryIncreaseLimit { get; set; }
 
         /// <summary>
-        /// Set to true once a limit-violation debit has been recorded for this session
-        /// to prevent double-billing when the partner later sends the final COMPLETED status.
+        /// Set to true once a configured limit was reached and a STOP_SESSION was issued to the
+        /// partner CPO. Does NOT mean the session was billed — billing only happens once the
+        /// session has actually ended (see <see cref="IsBilled"/>), because a partner charger can
+        /// keep delivering energy for minutes after the stop is requested.
         /// </summary>
         public bool LimitViolationHandled { get; set; } = false;
+
+        /// <summary>
+        /// Set to true once the user's wallet has been debited for this session's final cost.
+        /// Prevents double-billing.
+        /// </summary>
+        public bool IsBilled { get; set; } = false;
+
+        /// <summary>
+        /// When we last sent a STOP_SESSION command to the partner CPO for this session (limit
+        /// auto-stop or manual stop). Null if no stop was ever requested. Used to re-send the
+        /// stop while the partner still reports the session as ACTIVE.
+        /// </summary>
+        public DateTime? LastStopAttemptAt { get; set; }
+
+        /// <summary>Number of STOP_SESSION commands sent to the partner CPO for this session.</summary>
+        public int StopAttempts { get; set; } = 0;
 
         /// <summary>
         /// EV state of charge (0–100%) from the STATE_OF_CHARGE dimension of the first

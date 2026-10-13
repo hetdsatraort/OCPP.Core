@@ -83,6 +83,13 @@ namespace OCPP.Core.Management.Services.Invoice
                 return existing;
             }
 
+            // The invoice is never recomputed once issued, so creating it while the partner's
+            // charger is still delivering energy would freeze it at a partial cost.
+            if (IsSessionLive(session))
+            {
+                throw new InvalidOperationException("Invoice can only be generated once the partner session has ended");
+            }
+
             if (!session.TotalCost.HasValue || session.TotalCost <= 0)
             {
                 throw new InvalidOperationException("Invoice can only be generated once the partner session has a reported cost");
@@ -207,6 +214,15 @@ namespace OCPP.Core.Management.Services.Invoice
 
             throw new InvalidOperationException("Failed to allocate a partner invoice number after multiple attempts");
         }
+
+        /// <summary>
+        /// True while the partner may still be adding energy/cost to the session: it hasn't
+        /// reported an end time and is still ACTIVE (or a PENDING start placeholder).
+        /// </summary>
+        public static bool IsSessionLive(OcpiPartnerSession session) =>
+            !session.EndDateTime.HasValue
+            && (string.Equals(session.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(session.Status, "PENDING", StringComparison.OrdinalIgnoreCase));
 
         public byte[] RenderPdf(OcpiPartnerSessionInvoice invoice)
         {

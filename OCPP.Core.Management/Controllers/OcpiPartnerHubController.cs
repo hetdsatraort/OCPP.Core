@@ -641,26 +641,10 @@ namespace OCPP.Core.Management.Controllers
 
                 var result = await resp.Content.ReadFromJsonAsync<JsonElement>();
 
-                // EmspStopSession only fires the OCPI STOP_SESSION command and returns as soon as
-                // it's accepted/rejected by the partner CPO — it does NOT wait for the charge point
-                // to actually stop (that arrives later, asynchronously, via the CPO's Session push
-                // setting EndDateTime, which may be delayed or — in a self-partner test setup —
-                // never arrive promptly). Bill immediately using whatever TotalCost is already
-                // known at the moment the stop is requested, the same way
-                // OcpiOrphanSessionService.ProcessPartnerSessionsAsync bills a limit-violation
-                // auto-stop without waiting for confirmation either — a manual stop is just as
-                // deliberate a "stop charging now" action as a limit violation, so it shouldn't be
-                // billed any less promptly. If the eventual completion push later reports a higher
-                // final cost, OcpiOrphanSessionService's branch A will still flip the session to
-                // COMPLETED (skipping re-billing via LimitViolationHandled below) — the small
-                // window between "stop requested" and "charger actually stops" is an accepted,
-                // pre-existing limitation shared with the auto-stop path.
-                await _dbContext.Entry(session).ReloadAsync();
-                if (!session.LimitViolationHandled && session.TotalCost.HasValue && session.TotalCost.Value > 0)
-                {
-                    await ApplyPartnerSessionWalletDeductionAsync(session);
-                }
-
+                // No billing here: EmspStopSession only sends the OCPI STOP_SESSION command — the
+                // partner's charger can keep delivering energy until it actually stops. The wallet
+                // is debited once, for the final cost, by OcpiOrphanSessionService after the partner
+                // reports the session as ended (it also re-sends the stop if the partner ignores it).
                 return Ok(result);
             }
             catch (Exception ex)
@@ -713,77 +697,6 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogError(ex, "Error polling partner session by authorization reference {AuthorizationReference}", authorizationReference);
                 return Ok(new { success = false, message = "Error communicating with OCPI roaming service" });
             }
-        }
-
-        /// <summary>
-        /// Debits <c>session.TotalCost</c> plus HyCharge's own platform fee (+ 9% CGST + 9% SGST
-        /// on the fee, via <see cref="PartnerInvoiceService"/>) from the user's wallet and marks
-        /// the session handled, mirroring OcpiOrphanSessionService.ApplyPartnerSessionBillingAsync
-        /// so the session isn't billed twice when that background service later sees the same
-        /// completed/handled session.
-        /// </summary>
-        private async Task ApplyPartnerSessionWalletDeductionAsync(OcpiPartnerSession session)
-        {
-            if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
-                return;
-
-            var invoice = await _partnerInvoiceService.GetOrCreateInvoiceAsync(session);
-
-            var lastWalletTx = await _dbContext.WalletTransactionLogs
-                .Where(w => w.UserId == session.UserId && w.Active == 1)
-                .OrderByDescending(w => w.CreatedOn)
-                .FirstOrDefaultAsync();
-
-            decimal previousBalance = 0;
-            if (lastWalletTx != null && decimal.TryParse(lastWalletTx.CurrentCreditBalance, out var lastBalance))
-                previousBalance = lastBalance;
-
-            decimal totalFee = invoice.TotalPayable;
-            decimal newBalance = previousBalance - totalFee;
-
-            if (newBalance < 0)
-                _logger.LogWarning(
-                    "Billing user {UserId} for partner session {SessionId} — balance went negative. " +
-                    "Previous: {Prev:F2}, Fee: {Fee:F2} {Ccy}, New: {New:F2}",
-                    session.UserId, session.SessionId, previousBalance, totalFee, session.Currency, newBalance);
-
-            var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
-            {
-                RecId = Guid.NewGuid().ToString(),
-                UserId = session.UserId,
-                PreviousCreditBalance = previousBalance.ToString("F2"),
-                CurrentCreditBalance = newBalance.ToString("F2"),
-                TransactionType = "Debit",
-                // ChargingSessionId is a FK into EVCDTO.ChargingSession (our own-charger session
-                // table) — OCPI partner sessions live in OcpiPartnerSessions instead and have no
-                // row there, so setting this to session.SessionId violates FK_WalletTransactionLog_ChargingSession.
-                // The OCPI session id is already captured in AdditionalInfo1 below.
-                ChargingSessionId = null,
-                AdditionalInfo1 = $"OCPI partner session stopped — {session.SessionId} | Invoice: {invoice.InvoiceNumber}",
-                AdditionalInfo2 = $"Energy: {session.TotalEnergy:F3} kWh | Partner cost: {invoice.PartnerCost:F2} {session.Currency} | Platform fee+GST: {invoice.GrandTotal:F2}",
-                AdditionalInfo3 = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}",
-                Active = 1,
-                CreatedOn = DateTime.UtcNow,
-                UpdatedOn = DateTime.UtcNow
-            };
-
-            _dbContext.WalletTransactionLogs.Add(walletTx);
-
-            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == session.UserId);
-            if (user != null)
-            {
-                user.CreditBalance = newBalance.ToString("F2");
-                user.UpdatedOn = DateTime.UtcNow;
-            }
-
-            session.LimitViolationHandled = true;
-            session.LastUpdated = DateTime.UtcNow;
-
-            await _dbContext.SaveChangesAsync();
-
-            _logger.LogInformation(
-                "Debited {Fee:F2} {Ccy} from user {UserId} for partner session {SessionId}; new balance: {Balance:F2}",
-                totalFee, session.Currency, session.UserId, session.SessionId, newBalance);
         }
 
         /// <summary>
@@ -1197,7 +1110,10 @@ namespace OCPP.Core.Management.Controllers
 
                 object costDetails = null;
                 string invoiceNumber = null;
-                if (session.TotalCost.HasValue && session.TotalCost.Value > 0)
+                // Invoices are immutable once issued, so only build one after the session has
+                // ended — issuing it mid-session would freeze the cost at a partial reading.
+                if (!PartnerInvoiceService.IsSessionLive(session)
+                    && session.TotalCost.HasValue && session.TotalCost.Value > 0)
                 {
                     try
                     {

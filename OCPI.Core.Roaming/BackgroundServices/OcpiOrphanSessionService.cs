@@ -47,6 +47,13 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly TimeSpan _orphanTimeout;
         private readonly TimeSpan _disconnectedSessionTimeout;
 
+        // eMSP role: how long to wait for a partner's CDR after a session ends before billing on
+        // the session's last reported cost, and how often / how many times to re-send a
+        // STOP_SESSION the partner hasn't acted on.
+        private readonly TimeSpan _partnerBillingGrace;
+        private readonly TimeSpan _partnerStopRetryInterval;
+        private readonly int _partnerStopMaxAttempts;
+
         // Some partners (e.g. Numocity) enforce a hard per-day request quota (confirmed: 200/day,
         // via x-ratelimit-limit-day), not just a per-second rate limit. This loop's ~10s cadence of
         // pushing completed-session/CDR, active-session, and EVSE-status updates to every EMSP/HUB
@@ -84,6 +91,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _checkInterval = TimeSpan.FromSeconds(intervalSeconds);
             _orphanTimeout = TimeSpan.FromSeconds(timeouSeconds);
             _disconnectedSessionTimeout = TimeSpan.FromSeconds(disconnectedSeconds);
+
+            _partnerBillingGrace = TimeSpan.FromSeconds(
+                configuration.GetValue<int>("OCPI:PartnerBillingGraceSeconds", 300));
+            _partnerStopRetryInterval = TimeSpan.FromSeconds(
+                configuration.GetValue<int>("OCPI:PartnerStopRetrySeconds", 60));
+            _partnerStopMaxAttempts = configuration.GetValue<int>("OCPI:PartnerStopMaxAttempts", 5);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1079,12 +1092,17 @@ namespace OCPI.Core.Roaming.BackgroundServices
         //
         // This method:
         //   A) Marks sessions as COMPLETED when the partner has set EndDateTime.
-        //      Bills the user's wallet for the final TotalCost.
-        //   B) Checks configured limits (Energy / Cost / Time) and issues a STOP_SESSION
-        //      command to the partner CPO when a limit is exceeded, then bills the wallet
-        //      for the current TotalCost.  LimitViolationHandled is set to prevent double-billing.
-        //   C) Marks sessions without UserId as INVALID when they are stale (eMSP sessions
+        //   B) Marks sessions without UserId as INVALID when they are stale (eMSP sessions
         //      that were never formally started from our app and have timed out).
+        //   C) Re-sends STOP_SESSION (limit auto-stop or manual stop) while the partner still
+        //      reports the session as ACTIVE, up to OCPI:PartnerStopMaxAttempts.
+        //   D) Checks configured limits (Energy / Cost / Time) and issues a STOP_SESSION
+        //      command to the partner CPO when a limit is exceeded. Does NOT bill — a partner
+        //      charger can keep delivering energy for minutes after the stop is requested (or
+        //      ignore it entirely), so the cost at stop time is not the final cost.
+        //   E) Bills the user's wallet ONCE, for the final cost, after the session has ended —
+        //      as soon as the partner's CDR arrives, or OCPI:PartnerBillingGraceSeconds after the end
+        //      if the partner never sends one. IsBilled prevents double-billing.
 
         private async Task ProcessPartnerSessionsAsync(CancellationToken ct)
         {
@@ -1097,14 +1115,23 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 .Where(s => s.Status == "ACTIVE")
                 .ToListAsync(ct);
 
-            if (activeSessions.Count == 0)
+            // Ended app-user sessions still awaiting their final debit. Includes sessions the
+            // partner pushed straight to COMPLETED, which never pass through the ACTIVE list above.
+            // Sessions without a reported cost yet are picked up once the partner (or CDR) sends one.
+            var unbilledEndedSessions = await db.OcpiPartnerSessions
+                .Where(s => s.UserId != null && !s.IsBilled && s.TotalCost > 0
+                            && (s.Status == "COMPLETED" || (s.Status == "ACTIVE" && s.EndDateTime != null)))
+                .ToListAsync(ct);
+
+            if (activeSessions.Count == 0 && unbilledEndedSessions.Count == 0)
             {
-                _logger.LogDebug("OcpiOrphanSessionService: no ACTIVE partner sessions to process");
+                _logger.LogDebug("OcpiOrphanSessionService: no ACTIVE or unbilled partner sessions to process");
                 return;
             }
 
             _logger.LogInformation(
-                "OcpiOrphanSessionService: processing {Count} ACTIVE partner session(s)", activeSessions.Count);
+                "OcpiOrphanSessionService: processing {Count} ACTIVE and {Unbilled} unbilled ended partner session(s)",
+                activeSessions.Count, unbilledEndedSessions.Count);
 
             // ── Bulk-load ancillary data ──────────────────────────────────────────
 
@@ -1136,20 +1163,22 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 await RefreshStaleSessionsFromPartnerAsync(staleSessions, partners, sessionService, httpFactory, ct);
             }
 
-            // Only need wallet/user data for app-initiated sessions with limits
-            var limitedUserIds = activeSessions
-                .Where(s => s.UserId != null && !s.LimitViolationHandled
-                            && (s.EnergyLimit.HasValue || s.CostLimit.HasValue || s.TimeLimit.HasValue))
+            // Wallet/user data is only needed for the sessions we may bill this cycle
+            var allBillingUserIds = unbilledEndedSessions
                 .Select(s => s.UserId!)
                 .Distinct().ToList();
 
-            // Also include sessions that completed (EndDateTime set) to finalise billing
-            var completedUserIds = activeSessions
-                .Where(s => s.EndDateTime.HasValue && s.UserId != null && !s.LimitViolationHandled)
-                .Select(s => s.UserId!)
-                .Distinct().ToList();
-
-            var allBillingUserIds = limitedUserIds.Union(completedUserIds).Distinct().ToList();
+            // A received CDR is the partner's authoritative final cost (OcpiCdrService writes it
+            // back onto the session), so it lets us bill without waiting out the grace period.
+            var unbilledSessionIds = unbilledEndedSessions.Select(s => s.SessionId).ToList();
+            var sessionIdsWithCdr = unbilledSessionIds.Any()
+                ? (await db.OcpiCdrs
+                      .Where(c => c.SessionId != null && unbilledSessionIds.Contains(c.SessionId))
+                      .Select(c => c.SessionId)
+                      .Distinct()
+                      .ToListAsync(ct))
+                  .ToHashSet()
+                : new HashSet<string>();
 
             var walletBalancesDict = new Dictionary<string, string>();
             if (allBillingUserIds.Any())
@@ -1174,31 +1203,18 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             int completedCount = 0;
             int limitStoppedCount = 0;
+            int stopRetriedCount = 0;
             int orphanInvalidated = 0;
+            int billedCount = 0;
 
             foreach (var session in activeSessions)
             {
-                // ── A) Partner has set EndDateTime → mark COMPLETED and finalise billing ──
+                // ── A) Partner has set EndDateTime → mark COMPLETED (billed in E below) ──
                 if (session.EndDateTime.HasValue)
                 {
                     session.Status = "COMPLETED";
                     session.LastUpdated = DateTime.UtcNow;
                     completedCount++;
-
-                    if (!session.LimitViolationHandled
-                        && session.UserId != null
-                        && session.TotalCost.HasValue
-                        && session.TotalCost > 0)
-                    {
-                        bool billed = await ApplyPartnerSessionBillingAsync(
-                            db, invoiceClient, session, walletBalancesDict, usersDict,
-                            walletsToAdd, usersToUpdate,
-                            violationReason: null, ct);
-                        if (billed)
-                        {
-                            session.LimitViolationHandled = true;
-                        }
-                    }
 
                     _logger.LogInformation(
                         "OcpiOrphanSessionService: partner session {SessionId} marked COMPLETED " +
@@ -1224,7 +1240,35 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     continue;
                 }
 
-                // ── C) Check user-configured limits ───────────────────────────────────
+                // ── C) Stop already requested but partner still reports ACTIVE → re-send ──
+                // Covers both limit auto-stops and manual stops (OcpiAdminController.EmspStopSession
+                // records LastStopAttemptAt too). A partner may reject, lose or simply be slow to
+                // act on the command; without this the user keeps charging indefinitely.
+                if (session.LastStopAttemptAt.HasValue)
+                {
+                    if (session.StopAttempts < _partnerStopMaxAttempts
+                        && DateTime.UtcNow - session.LastStopAttemptAt.Value >= _partnerStopRetryInterval)
+                    {
+                        _logger.LogWarning(
+                            "OcpiOrphanSessionService: partner session {SessionId} still ACTIVE {Elapsed:F0}s after " +
+                            "STOP_SESSION — re-sending (attempt {Attempt}/{Max})",
+                            session.SessionId, (DateTime.UtcNow - session.LastStopAttemptAt.Value).TotalSeconds,
+                            session.StopAttempts + 1, _partnerStopMaxAttempts);
+
+                        await SendStopToPartnerAsync(session, partners, httpFactory, ct);
+                        stopRetriedCount++;
+
+                        if (session.StopAttempts >= _partnerStopMaxAttempts)
+                            _logger.LogError(
+                                "OcpiOrphanSessionService: partner session {SessionId} — sent {Attempts} STOP_SESSION " +
+                                "commands without the partner ending the session; giving up on retries. " +
+                                "The user will be billed for whatever the partner finally reports.",
+                                session.SessionId, session.StopAttempts);
+                    }
+                    continue;
+                }
+
+                // ── D) Check user-configured limits ───────────────────────────────────
                 if (session.LimitViolationHandled) continue;
                 if (session.UserId == null) continue; // no limits to enforce
                 if (!session.EnergyLimit.HasValue && !session.CostLimit.HasValue
@@ -1261,49 +1305,36 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "OcpiOrphanSessionService: partner session {SessionId} — limit(s) exceeded: {Violations}",
                     session.SessionId, string.Join("; ", violations));
 
-                // Issue STOP_SESSION to the partner CPO (best-effort; session will be reconciled on next sync)
-                if (session.PartnerCredentialId.HasValue &&
-                    partners.TryGetValue(session.PartnerCredentialId.Value, out var partner) &&
-                    !string.IsNullOrEmpty(partner.OutboundToken))
-                {
-                    bool stopped = await IssueStopSessionToPartnerAsync(
-                        session, partner, httpFactory, ct);
+                // Only request the stop here — billing waits until the partner reports the session
+                // as ended (E below). Retries are handled by C on later cycles.
+                await SendStopToPartnerAsync(session, partners, httpFactory, ct);
 
-                    _logger.LogInformation(
-                        "OcpiOrphanSessionService: STOP_SESSION to partner {PartnerId} for session {SessionId}: {Result}",
-                        partner.Id, session.SessionId, stopped ? "ACCEPTED" : "not accepted / failed");
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "OcpiOrphanSessionService: cannot send STOP for session {SessionId} — " +
-                        "partner credential missing or has no outbound token", session.SessionId);
-                }
-
-                // Bill the user for current consumption if we already have a cost figure. If the
-                // partner hasn't reported TotalCost yet, leave LimitViolationHandled false (do NOT
-                // set it here) so the "Partner has set EndDateTime" branch above can still bill the
-                // session once the partner reports the final cost on a later sync — otherwise this
-                // session would be marked handled with zero billed and never charged at all.
-                // Likewise, if billing was attempted but the Management API call failed (transient
-                // network issue), leave it unhandled so this cycle's attempt is retried rather than
-                // silently dropping the charge.
-                bool billingAttemptFailed = false;
-                if (session.TotalCost.HasValue && session.TotalCost > 0)
-                {
-                    bool billed = await ApplyPartnerSessionBillingAsync(
-                        db, invoiceClient, session, walletBalancesDict, usersDict,
-                        walletsToAdd, usersToUpdate,
-                        violationReason: string.Join("; ", violations), ct);
-                    billingAttemptFailed = !billed;
-                }
-
-                if (!billingAttemptFailed)
-                {
-                    session.LimitViolationHandled = true;
-                }
-                session.LastUpdated = DateTime.UtcNow;
+                session.LimitViolationHandled = true;
                 limitStoppedCount++;
+            }
+
+            // ── E) Bill ended sessions for their final cost ──────────────────────────
+            foreach (var session in unbilledEndedSessions)
+            {
+                // Partners may send a few last session updates and the CDR shortly after the end.
+                // Billing waits for the CDR, or the grace period if no CDR ever arrives, so the
+                // invoice (which is immutable once issued) reflects the final cost.
+                var endedAt = session.EndDateTime ?? session.LastUpdated;
+                bool hasCdr = sessionIdsWithCdr.Contains(session.SessionId);
+                if (!hasCdr && DateTime.UtcNow - endedAt < _partnerBillingGrace)
+                    continue;
+
+                bool billed = await ApplyPartnerSessionBillingAsync(
+                    db, invoiceClient, session, walletBalancesDict, usersDict,
+                    walletsToAdd, usersToUpdate, ct);
+
+                // On failure (e.g. Management API unreachable) leave IsBilled false so the next
+                // cycle retries rather than silently dropping the charge.
+                if (billed)
+                {
+                    session.IsBilled = true;
+                    billedCount++;
+                }
             }
 
             // ── Batch save ────────────────────────────────────────────────────────
@@ -1314,8 +1345,45 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
             _logger.LogInformation(
                 "OcpiOrphanSessionService: partner session cycle done — " +
-                "completed: {Completed}, limit-stopped: {LimitStopped}, invalidated: {Invalidated}",
-                completedCount, limitStoppedCount, orphanInvalidated);
+                "completed: {Completed}, limit-stopped: {LimitStopped}, stop-retried: {StopRetried}, " +
+                "invalidated: {Invalidated}, billed: {Billed}",
+                completedCount, limitStoppedCount, stopRetriedCount, orphanInvalidated, billedCount);
+        }
+
+        /// <summary>
+        /// Sends STOP_SESSION to the session's partner CPO and records the attempt
+        /// (<see cref="OcpiPartnerSession.LastStopAttemptAt"/> / <see cref="OcpiPartnerSession.StopAttempts"/>)
+        /// whether or not it succeeds, so step C retries it until the partner ends the session.
+        /// </summary>
+        private async Task SendStopToPartnerAsync(
+            OcpiPartnerSession session,
+            Dictionary<int, OcpiPartnerCredential> partners,
+            IHttpClientFactory httpFactory,
+            CancellationToken ct)
+        {
+            // LastUpdated is deliberately left alone: it drives the stale-session live refresh, and
+            // right after a stop is exactly when we want fresh data from the partner.
+            session.LastStopAttemptAt = DateTime.UtcNow;
+            session.StopAttempts++;
+
+            if (session.PartnerCredentialId.HasValue &&
+                partners.TryGetValue(session.PartnerCredentialId.Value, out var partner) &&
+                !string.IsNullOrEmpty(partner.OutboundToken))
+            {
+                bool stopped = await IssueStopSessionToPartnerAsync(
+                    session, partner, httpFactory, ct);
+
+                _logger.LogInformation(
+                    "OcpiOrphanSessionService: STOP_SESSION to partner {PartnerId} for session {SessionId} " +
+                    "(attempt {Attempt}): {Result}",
+                    partner.Id, session.SessionId, session.StopAttempts, stopped ? "ACCEPTED" : "not accepted / failed");
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "OcpiOrphanSessionService: cannot send STOP for session {SessionId} — " +
+                    "partner credential missing or has no outbound token", session.SessionId);
+            }
         }
 
         // ── OCPI outbound STOP_SESSION ─────────────────────────────────────────
@@ -1403,7 +1471,6 @@ namespace OCPI.Core.Roaming.BackgroundServices
             Dictionary<string, OCPP.Core.Database.EVCDTO.Users> usersDict,
             List<OCPP.Core.Database.EVCDTO.WalletTransactionLog> walletsToAdd,
             List<OCPP.Core.Database.EVCDTO.Users> usersToUpdate,
-            string? violationReason,
             CancellationToken ct)
         {
             if (session.UserId == null || !session.TotalCost.HasValue || session.TotalCost <= 0)
@@ -1434,11 +1501,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     "balance went negative. Previous: {Prev:F2}, Fee: {Fee:F2} {Ccy}, New: {New:F2}",
                     session.UserId, session.SessionId, previousBalance, totalFee, session.Currency, newBalance);
 
-            var info1 = violationReason != null
+            var info1 = session.LimitViolationHandled
                 ? $"OCPI partner session auto-stopped — limit exceeded: {session.SessionId} | Invoice: {invoice.InvoiceNumber}"
                 : $"OCPI partner session completed — {session.SessionId} | Invoice: {invoice.InvoiceNumber}";
-            var info2 = $"Energy: {session.TotalEnergy:F3} kWh | Partner cost: {invoice.PartnerCost:F2} {session.Currency} | Platform fee+GST: {invoice.GrandTotal:F2}";
-            var info3 = violationReason ?? $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}";
+            var info2 = $"Energy: {invoice.EnergyConsumedKwh:F3} kWh | Partner cost: {invoice.PartnerCost:F2} {session.Currency} | Platform fee+GST: {invoice.GrandTotal:F2}";
+            var info3 = $"Partner: {session.CountryCode}-{session.PartyId} | EVSE: {session.EvseUid}";
 
             var walletTx = new OCPP.Core.Database.EVCDTO.WalletTransactionLog
             {

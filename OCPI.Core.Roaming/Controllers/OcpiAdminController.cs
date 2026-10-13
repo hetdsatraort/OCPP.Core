@@ -1107,6 +1107,15 @@ namespace OCPI.Core.Roaming.Controllers
                 "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
 
+            // Record the attempt up front (even if the call below fails) so OcpiOrphanSessionService
+            // re-sends the stop while the partner keeps reporting the session as ACTIVE.
+            if (session.Status == "ACTIVE" && !session.EndDateTime.HasValue)
+            {
+                session.LastStopAttemptAt = DateTime.UtcNow;
+                session.StopAttempts++;
+                await _dbContext.SaveChangesAsync();
+            }
+
             try
             {
                 var resp = await http.PostAsJsonAsync(
