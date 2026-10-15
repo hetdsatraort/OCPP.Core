@@ -384,8 +384,35 @@ namespace OCPP.Core.Management.Controllers
                     s.StartDateTime,
                     s.EndDateTime,
                     s.TokenUid,
+                    s.AuthorizationReference,
+                    s.StopReason,
+                    s.StopReasonDetail,
                     PartnerName = s.PartnerCredential != null ? s.PartnerCredential.BusinessName : null
                 })
+                .ToListAsync();
+
+            // ── Stop-reason inputs (see TransactionStopReasonResolver) ──────────────────────
+            // Recorded StopReason lives on the sessions loaded above. The wallet debit is only needed
+            // as the legacy fallback for app sessions ended before StopReason was recorded.
+            var sessionIds = sessions.Values
+                .Where(s => s.StopReason == null && s.EndTime != DateTime.MinValue)
+                .Select(s => s.RecId).ToList();
+            var walletDebits = (await _dbContext.WalletTransactionLogs.AsNoTracking()
+                    .Where(w => w.ChargingSessionId != null && sessionIds.Contains(w.ChargingSessionId) &&
+                                w.TransactionType == "Debit" && w.Active == 1)
+                    .Select(w => new { w.ChargingSessionId, w.AdditionalInfo1, w.AdditionalInfo3, w.CreatedOn })
+                    .ToListAsync())
+                .GroupBy(w => w.ChargingSessionId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(w => w.CreatedOn).First());
+
+            // OCPI app/limit stops: our user's eMSP-side session for a hosted session on our charger
+            // (same CPO session id, or the echoed authorization reference)
+            var hostedSessionIds = ocpiSessions.Select(o => o.SessionId).ToList();
+            var hostedAuthRefs = ocpiSessions.Where(o => o.AuthorizationReference != null).Select(o => o.AuthorizationReference).ToList();
+            var partnerSessions = await _dbContext.OcpiPartnerSessions.AsNoTracking()
+                .Where(p => hostedSessionIds.Contains(p.SessionId) ||
+                            (p.AuthorizationReference != null && hostedAuthRefs.Contains(p.AuthorizationReference)))
+                .Select(p => new { p.SessionId, p.AuthorizationReference, p.StopReason, p.StopReasonDetail, p.LimitViolationHandled, p.LastStopAttemptAt })
                 .ToListAsync();
 
             var ocpiByTxId = ocpiSessions
@@ -474,6 +501,41 @@ namespace OCPP.Core.Management.Controllers
                 };
 
                 bool ocpiActive = ocpi != null && string.Equals(ocpi.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+
+                if (!isOpen)
+                {
+                    var debit = session != null && walletDebits.TryGetValue(session.RecId, out var d) ? d : null;
+                    var partner = ocpi == null ? null : partnerSessions.FirstOrDefault(p =>
+                        p.SessionId == ocpi.SessionId ||
+                        (ocpi.AuthorizationReference != null && p.AuthorizationReference == ocpi.AuthorizationReference));
+
+                    var resolved = TransactionStopReasonResolver.Resolve(new TransactionStopReasonResolver.Inputs
+                    {
+                        Transaction = t,
+                        AppSession = session,
+                        WalletInfo1 = debit?.AdditionalInfo1,
+                        WalletInfo3 = debit?.AdditionalInfo3,
+                        HasHostedSession = ocpi != null,
+                        HostedStopReason = ocpi?.StopReason,
+                        HostedStopReasonDetail = ocpi?.StopReasonDetail,
+                        PartnerName = ocpi?.PartnerName,
+                        HasPartnerSession = partner != null,
+                        PartnerStopReason = partner?.StopReason,
+                        PartnerStopReasonDetail = partner?.StopReasonDetail,
+                        PartnerLimitViolationHandled = partner?.LimitViolationHandled ?? false,
+                        PartnerLastStopAttemptAt = partner?.LastStopAttemptAt
+                    });
+
+                    if (resolved != null)
+                    {
+                        item.StopReasonCode = resolved.Code;
+                        item.StopReasonLabel = resolved.Label;
+                        item.StopReasonCategory = resolved.Category;
+                        item.StopReasonSource = resolved.Source;
+                        item.StopReasonDetail = resolved.Detail;
+                        item.StopReasonIsDerived = resolved.IsDerived;
+                    }
+                }
 
                 if (isOpen)
                 {

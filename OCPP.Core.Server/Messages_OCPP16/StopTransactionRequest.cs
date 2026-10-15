@@ -45,7 +45,9 @@ namespace OCPP.Core.Server.Messages_OCPP16
 
         [Newtonsoft.Json.JsonProperty("reason", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         [Newtonsoft.Json.JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]
-        public StopTransactionRequestReason Reason { get; set; }
+        // Nullable: "reason" is optional and most chargers omit it. As a plain enum a missing
+        // value silently became EmergencyStop (= 0).
+        public StopTransactionRequestReason? Reason { get; set; }
 
         [Newtonsoft.Json.JsonProperty("transactionData", Required = Newtonsoft.Json.Required.DisallowNull, NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
         public System.Collections.Generic.ICollection<TransactionData> TransactionData { get; set; }

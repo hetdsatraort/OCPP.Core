@@ -235,6 +235,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         // ── Transaction stopped → close the OCPI session ──────────
                         session.Status = "COMPLETED";
                         session.EndDateTime = tx.StopTime.Value;
+                        // Keep a reason set by the stop path (e.g. PartnerStop from STOP_SESSION);
+                        // otherwise nothing of ours stopped it
+                        if (session.StopReason == null)
+                        {
+                            bool closedByBackend = TransactionStopReasons.IsSystemClosed(tx.StopReason);
+                            session.StopReason = closedByBackend ? SessionStopReasons.SystemClosed : SessionStopReasons.ChargerEnded;
+                            session.StopReasonDetail = closedByBackend ? "Stale transaction closed by the backend." : null;
+                        }
 
                         if (tx.MeterStop.HasValue && tx.MeterStop.Value >= tx.MeterStart)
                             session.TotalEnergy = (decimal)Math.Round(tx.MeterStop.Value - tx.MeterStart, 4);
@@ -324,6 +332,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                         {
                             session.Status = "COMPLETED";
                             session.EndDateTime = session.LastUpdated;
+                            session.StopReason = SessionStopReasons.ChargerDisconnected;
+                            session.StopReasonDetail = "Charger went offline mid-session; closed with the last known energy reading.";
 
                             var gunForCost = guns.FirstOrDefault(g => g.RecId == session.ConnectorId);
                             if (gunForCost != null && double.TryParse(gunForCost.ChargerTariff, out var offlineTariff))
@@ -385,6 +395,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     session.Status = "INVALID";
                     session.EndDateTime = DateTime.UtcNow;
                     session.LastUpdated = DateTime.UtcNow;
+                    session.StopReason = SessionStopReasons.SystemClosed;
+                    session.StopReasonDetail = "The charger never started a transaction for this session.";
                     closedAsInvalid++;
 
                     _logger.LogWarning(
@@ -1214,6 +1226,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     session.Status = "COMPLETED";
                     session.LastUpdated = DateTime.UtcNow;
+                    // AppStop / LimitReached were set when we sent STOP_SESSION; if we never asked,
+                    // the partner's charger ended it
+                    session.StopReason ??= SessionStopReasons.ChargerEnded;
                     completedCount++;
 
                     _logger.LogInformation(
@@ -1231,6 +1246,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     session.Status = "INVALID";
                     session.EndDateTime = DateTime.UtcNow;
                     session.LastUpdated = DateTime.UtcNow;
+                    session.StopReason ??= SessionStopReasons.SystemClosed;
+                    session.StopReasonDetail ??= "No updates from the partner and no app user; session invalidated.";
                     orphanInvalidated++;
 
                     _logger.LogWarning(
@@ -1276,6 +1293,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     continue;
 
                 var violations = new List<string>();
+                var violatedLimits = new List<string>(); // short names stored as StopReasonDetail, same format as OCPP sessions
                 var elapsed = DateTime.UtcNow - session.StartDateTime;
 
                 if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
@@ -1283,6 +1301,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     violations.Add(
                         $"Energy {session.TotalEnergy:F3} kWh ≥ limit {session.EnergyLimit:F3} kWh");
+                    violatedLimits.Add("Energy");
                 }
 
                 if (session.CostLimit.HasValue && session.TotalCost.HasValue
@@ -1290,6 +1309,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     violations.Add(
                         $"Cost {session.TotalCost:F2} {session.Currency} ≥ limit {session.CostLimit:F2}");
+                    violatedLimits.Add("Cost");
                 }
 
                 if (session.TimeLimit.HasValue
@@ -1297,6 +1317,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 {
                     violations.Add(
                         $"Time {elapsed.TotalMinutes:F1} min ≥ limit {session.TimeLimit} min");
+                    violatedLimits.Add("Time");
                 }
 
                 if (violations.Count == 0) continue;
@@ -1310,6 +1331,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 await SendStopToPartnerAsync(session, partners, httpFactory, ct);
 
                 session.LimitViolationHandled = true;
+                session.StopReason = SessionStopReasons.LimitReached;
+                session.StopReasonDetail = string.Join(", ", violatedLimits);
                 limitStoppedCount++;
             }
 

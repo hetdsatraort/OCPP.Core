@@ -177,6 +177,8 @@ namespace OCPP.Core.Management.Controllers
 
                         zombie.EndTime = DateTime.UtcNow;
                         zombie.UpdatedOn = DateTime.UtcNow;
+                        zombie.StopReason ??= SessionStopReasons.SystemClosed;
+                        zombie.StopReasonDetail ??= "Stale session closed when a new session was started on the same gun.";
 
                         if (zombie.TransactionId.HasValue)
                         {
@@ -700,6 +702,11 @@ namespace OCPP.Core.Management.Controllers
 
                 // Update session with end details
                 session.EndTime = actualEndTime;
+                // The OCPP server reports when the transaction was already closed: the charger ended
+                // it (EV unplugged / stopped at charger) and the app is only closing the session.
+                bool chargerAlreadyStopped = ocppResult.Status == "NoOpenTransaction" || ocppResult.Status == "Superseded";
+                session.StopReason = chargerAlreadyStopped ? SessionStopReasons.ChargerEnded : SessionStopReasons.AppStop;
+                session.StopReasonDetail = chargerAlreadyStopped ? "The charger had already stopped when the app closed the session." : null;
                 session.EndMeterReading = endReading.ToString("F3");
                 session.StartMeterReading = startReading.ToString("F3");
 
@@ -1255,6 +1262,10 @@ namespace OCPP.Core.Management.Controllers
                         AdditionalInfo3 = walletTransactionLog.AdditionalInfo3,
                         CreatedOn = walletTransactionLog.CreatedOn
                     };
+
+                    // Sessions ended before StopReason was recorded: infer from the debit text
+                    sessionDto.StopReason ??= SessionStopReasonMapper.ForChargingSession(
+                        session, walletTransactionLog.AdditionalInfo1, walletTransactionLog.AdditionalInfo3);
                 }
 
                 bool isActive = session.EndTime == DateTime.MinValue;
@@ -1496,6 +1507,8 @@ namespace OCPP.Core.Management.Controllers
                             // Mark session as force-ended
                             stuckSession.EndTime = DateTime.UtcNow;
                             stuckSession.UpdatedOn = DateTime.UtcNow;
+                            stuckSession.StopReason ??= SessionStopReasons.SystemClosed;
+                            stuckSession.StopReasonDetail ??= "Stuck session force-ended when the connector was unlocked.";
 
                             // Try to get final meter reading from transaction if available
                             if (stuckSession.TransactionId.HasValue)
@@ -1999,6 +2012,8 @@ namespace OCPP.Core.Management.Controllers
                                 // Update session status
                                 session.EndTime = DateTime.UtcNow;
                                 session.UpdatedOn = DateTime.UtcNow;
+                                session.StopReason = SessionStopReasons.LimitReached;
+                                session.StopReasonDetail = string.Join(", ", limitCheck.ViolatedLimits);
 
                                 // Get final meter reading from pre-loaded data
                                 connectorStatusesDict.TryGetValue($"{chargingStation.ChargingPointId}_{connectorId}", 
@@ -2255,6 +2270,20 @@ namespace OCPP.Core.Management.Controllers
 
                             session.EndTime = transaction.StopTime.Value;
                             session.UpdatedOn = DateTime.UtcNow;
+                            // The transaction ended without our app/limit stop: the charger ended it, or our
+                            // backend closed the transaction record itself (stale / force-closed)
+                            if (TransactionStopReasons.IsSystemClosed(transaction.StopReason))
+                            {
+                                session.StopReason = SessionStopReasons.SystemClosed;
+                                session.StopReasonDetail = transaction.StopReason == TransactionStopReasons.AdminForceClosed
+                                    ? "Transaction force-closed by an admin."
+                                    : "Stale transaction closed by the backend.";
+                            }
+                            else
+                            {
+                                session.StopReason = SessionStopReasons.ChargerEnded;
+                                session.StopReasonDetail = null;
+                            }
                             double startMeter = transaction.MeterStart;
                             double endMeter = transaction.MeterStop ?? startMeter;
                             double energyConsumed = Math.Max(0, endMeter - startMeter);
@@ -2412,6 +2441,8 @@ namespace OCPP.Core.Management.Controllers
 
                             session.EndTime = DateTime.UtcNow;
                             session.UpdatedOn = DateTime.UtcNow;
+                            session.StopReason = SessionStopReasons.ZeroEnergy;
+                            session.StopReasonDetail = $"No energy delivered after {(DateTime.UtcNow - session.StartTime).TotalMinutes:F0} min.";
                             session.EndMeterReading = meterBaseline.ToString("F2");
                             session.EnergyTransmitted = "0.00";
                             session.ChargingTotalFee = "0.00";
@@ -2816,7 +2847,9 @@ namespace OCPP.Core.Management.Controllers
                 CostLimit = session.CostLimit,
                 TimeLimit = session.TimeLimit,
                 BatteryIncreaseLimit = session.BatteryIncreaseLimit,
-                UserId = session.UserId
+                UserId = session.UserId,
+                // Recorded reason only; the details endpoint adds the wallet fallback for legacy rows
+                StopReason = SessionStopReasonMapper.ForChargingSession(session)
             };
         }
 
@@ -2902,7 +2935,9 @@ namespace OCPP.Core.Management.Controllers
                 CostLimit = session.CostLimit,
                 TimeLimit = session.TimeLimit,
                 BatteryIncreaseLimit = session.BatteryIncreaseLimit,
-                UserId = session.UserId
+                UserId = session.UserId,
+                // Recorded reason only; the details endpoint adds the wallet fallback for legacy rows
+                StopReason = SessionStopReasonMapper.ForChargingSession(session)
             };
         }
 

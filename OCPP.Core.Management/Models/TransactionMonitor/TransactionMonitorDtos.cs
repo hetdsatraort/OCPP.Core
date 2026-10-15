@@ -37,7 +37,19 @@ namespace OCPP.Core.Management.Models.TransactionMonitor
         public double MeterStart { get; set; }
         public DateTime? StopTime { get; set; }
         public double? MeterStop { get; set; }
+        /// <summary>Raw value stored on the transaction (charger reason, NotReported, or our system marker)</summary>
         public string StopReason { get; set; }
+
+        // Resolved from our own session data (see TransactionStopReasonResolver). Closed transactions only.
+        public string StopReasonCode { get; set; }
+        public string StopReasonLabel { get; set; }
+        /// <summary>app | limit | partner | system | charger | fault</summary>
+        public string StopReasonCategory { get; set; }
+        /// <summary>OCPP app | OCPP limit | OCPI app | OCPI limit | OCPI partner | System | Charger</summary>
+        public string StopReasonSource { get; set; }
+        public string StopReasonDetail { get; set; }
+        /// <summary>True when inferred from legacy data (wallet text / OCPI flags) rather than recorded</summary>
+        public bool StopReasonIsDerived { get; set; }
         public bool IsOpen { get; set; }
         public bool ClosedBySystem { get; set; }
         public double DurationMinutes { get; set; }

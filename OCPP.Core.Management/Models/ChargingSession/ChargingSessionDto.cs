@@ -72,6 +72,9 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public int? TimeLimit { get; set; }  // Minutes
         public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
         public string UserId { get; set; } = string.Empty;
+
+        /// <summary>Why the session ended (null while active). See SessionStopReasonMapper.</summary>
+        public OCPP.Core.Management.Services.SessionStopReasonDto StopReason { get; set; }
     }
 
     public class ChargingGunStatusDto

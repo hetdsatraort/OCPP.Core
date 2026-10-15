@@ -314,6 +314,10 @@ namespace OCPP.Core.Database
 
                 entity.Property(e => e.VehicleId).HasMaxLength(50);
 
+                entity.Property(e => e.StopReason).HasMaxLength(50);
+
+                entity.Property(e => e.StopReasonDetail).HasMaxLength(200);
+
                 entity.HasOne<EVCDTO.UserVehicle>()
                     .WithMany()
                     .HasForeignKey(d => d.VehicleId)
@@ -888,6 +892,8 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
                 entity.Property(e => e.TotalPayable).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.StopReason).HasMaxLength(50);
+                entity.Property(e => e.StopReasonDetail).HasMaxLength(200);
 
                 // ── App-side eMSP tracking columns ────────────────────────────
                 entity.Property(e => e.UserId).HasMaxLength(250).IsRequired(false);
@@ -939,6 +945,8 @@ namespace OCPP.Core.Database
                 entity.Property(e => e.TotalEnergy).HasColumnType("decimal(18,4)");
                 entity.Property(e => e.TotalCost).HasColumnType("decimal(18,2)");
                 entity.Property(e => e.AuthorizationReference).HasMaxLength(36);
+                entity.Property(e => e.StopReason).HasMaxLength(50);
+                entity.Property(e => e.StopReasonDetail).HasMaxLength(200);
                 entity.Property(e => e.StartingStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.CurrentStateOfCharge).HasColumnType("decimal(5,2)").IsRequired(false);
                 entity.Property(e => e.StateOfChargeLastUpdate).IsRequired(false);

@@ -165,6 +165,18 @@ namespace OCPP.Core.Database.OCPIDTO
         public int StopAttempts { get; set; } = 0;
 
         /// <summary>
+        /// Why the session ended — a <see cref="SessionStopReasons"/> code written by the code path
+        /// that requested the stop (app stop / limit auto-stop / system). Null while active, when the
+        /// partner CPO ended it without a stop from us, and on sessions from before this column existed.
+        /// </summary>
+        [MaxLength(50)]
+        public string? StopReason { get; set; }
+
+        /// <summary>Extra context, e.g. the violated limits "Energy, Cost".</summary>
+        [MaxLength(200)]
+        public string? StopReasonDetail { get; set; }
+
+        /// <summary>
         /// EV state of charge (0–100%) from the STATE_OF_CHARGE dimension of the first
         /// charging_period the partner CPO ever reported for this session. Set once — either at
         /// creation (if the CPO's very first push already carries a charging_period) or backfilled

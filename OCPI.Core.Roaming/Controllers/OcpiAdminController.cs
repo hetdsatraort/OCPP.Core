@@ -1113,6 +1113,8 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 session.LastStopAttemptAt = DateTime.UtcNow;
                 session.StopAttempts++;
+                // Don't overwrite LimitReached if a limit auto-stop is already in flight
+                session.StopReason ??= SessionStopReasons.AppStop;
                 await _dbContext.SaveChangesAsync();
             }
 

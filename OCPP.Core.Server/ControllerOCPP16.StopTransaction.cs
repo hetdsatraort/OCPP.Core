@@ -146,7 +146,9 @@ namespace OCPP.Core.Server
                             {
                                 transaction.StopTagId = idTag;
                                 transaction.MeterStop =  (double)stopTransactionRequest.MeterStop / 1000; // Meter value here is always Wh
-                                transaction.StopReason = stopTransactionRequest.Reason.ToString();
+                                // Charger's own reason if it sent one; the business reason (app/limit/system)
+                                // is resolved by Management from session data, not here.
+                                transaction.StopReason = stopTransactionRequest.Reason?.ToString() ?? TransactionStopReasons.NotReported;
                                 transaction.StopTime = stopTransactionRequest.Timestamp.UtcDateTime;
                                 DbContext.SaveChanges();
                             }

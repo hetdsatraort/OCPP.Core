@@ -241,6 +241,13 @@ namespace OCPI.Core.Roaming.Services
 
             var chargePointId = station.ChargingPointId;
 
+            // The eMSP (roaming partner) asked for the stop — record it before the charger reports the end
+            if (ocpiSession.Status == "ACTIVE")
+            {
+                ocpiSession.StopReason ??= SessionStopReasons.PartnerStop;
+                await _dbContext.SaveChangesAsync();
+            }
+
             _ = Task.Run(async () =>
             {
                 try

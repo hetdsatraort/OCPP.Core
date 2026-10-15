@@ -9,6 +9,9 @@ namespace OCPP.Core.Database
     /// </summary>
     public static class TransactionStopReasons
     {
+        /// <summary>Written by the OCPP server when the charger's StopTransaction carries no reason</summary>
+        public const string NotReported = "NotReported";
+
         /// <summary>A newer transaction started on the same connector, so this one can no longer be running.</summary>
         public const string StaleSuperseded = "StaleSuperseded";
 

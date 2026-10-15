@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Database.OCPIDTO;
+using OCPP.Core.Management.Services;
 using OCPP.Core.Management.Services.Invoice;
 using System;
 using System.Collections.Generic;
@@ -785,6 +786,8 @@ namespace OCPP.Core.Management.Controllers
                         timeLimit = s.TimeLimit,
                         batteryIncreaseLimit = s.BatteryIncreaseLimit,
                         limitViolationHandled = s.LimitViolationHandled,
+                        stopReason = SessionStopReasonMapper.ForPartnerSession(s.StopReason, s.StopReasonDetail,
+                            s.EndDateTime.HasValue || s.Status != "ACTIVE", s.LimitViolationHandled, s.LastStopAttemptAt),
                         // Live limit progress (for active sessions)
                         limitProgress = s.Status == "ACTIVE" ? (object)new
                         {
@@ -1028,6 +1031,8 @@ namespace OCPP.Core.Management.Controllers
                             : null,
                         soCCurrent = (double?)s.CurrentStateOfCharge,
                         soCLastUpdate = s.StateOfChargeLastUpdate,
+                        stopReason = SessionStopReasonMapper.ForPartnerSession(s.StopReason, s.StopReasonDetail,
+                            s.EndDateTime.HasValue || s.Status != "ACTIVE", s.LimitViolationHandled, s.LastStopAttemptAt),
                     };
                 });
 
@@ -1194,6 +1199,8 @@ namespace OCPP.Core.Management.Controllers
                         timeLimit = session.TimeLimit,
                         batteryIncreaseLimit = session.BatteryIncreaseLimit,
                         limitViolationHandled = session.LimitViolationHandled,
+                        stopReason = SessionStopReasonMapper.ForPartnerSession(session.StopReason, session.StopReasonDetail,
+                            session.EndDateTime.HasValue || session.Status != "ACTIVE", session.LimitViolationHandled, session.LastStopAttemptAt),
                         invoiceNumber,
                         costDetails,
                         walletTransaction = walletTx != null ? new

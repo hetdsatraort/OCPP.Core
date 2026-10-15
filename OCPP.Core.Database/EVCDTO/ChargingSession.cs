@@ -35,5 +35,11 @@ namespace OCPP.Core.Database.EVCDTO
         public double? BatteryIncreaseLimit { get; set; }  // Percentage (0-100)
 
         public string VehicleId { get; set; }
+
+        // Why the session ended — a SessionStopReasons code written by the code path that ended it.
+        // Null on sessions closed before these columns existed (readers fall back to wallet-log text).
+        public string StopReason { get; set; }
+        /// <summary>Extra context, e.g. the violated limits "Energy, Cost"</summary>
+        public string StopReasonDetail { get; set; }
     }
 }

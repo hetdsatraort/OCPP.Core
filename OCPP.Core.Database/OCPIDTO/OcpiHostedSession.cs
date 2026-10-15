@@ -94,6 +94,18 @@ namespace OCPP.Core.Database.OCPIDTO
         [MaxLength(50)]
         public string Status { get; set; }
 
+        /// <summary>
+        /// Why the session ended — a <see cref="SessionStopReasons"/> code written by the code path
+        /// that ended it (eMSP STOP_SESSION, charger disconnected, invalidated). Null when the charger
+        /// ended it on its own and on sessions from before this column existed.
+        /// </summary>
+        [MaxLength(50)]
+        public string? StopReason { get; set; }
+
+        /// <summary>Extra context for <see cref="StopReason"/>.</summary>
+        [MaxLength(200)]
+        public string? StopReasonDetail { get; set; }
+
         /// <summary>Total cost of the session (excl. VAT).</summary>
         public decimal? TotalCost { get; set; }
 
