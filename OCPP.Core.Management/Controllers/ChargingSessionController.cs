@@ -235,10 +235,10 @@ namespace OCPP.Core.Management.Controllers
                     estimatedCosts.Add(("Cost Limit", (decimal)request.CostLimit.Value));
                 }
 
-                // 2. Energy Limit - energy × tariff
+                // 2. Energy Limit - energy × tariff + 18% GST (the cost limit above is already GST-inclusive)
                 if (request.EnergyLimit.HasValue && request.EnergyLimit.Value > 0 && tariff > 0)
                 {
-                    decimal energyCost = (decimal)(request.EnergyLimit.Value * tariff);
+                    decimal energyCost = (decimal)(request.EnergyLimit.Value * tariff * 1.18);
                     estimatedCosts.Add(("Energy Limit", energyCost));
                 }
 
@@ -256,7 +256,7 @@ namespace OCPP.Core.Management.Controllers
                     // Calculate estimated energy: Power (kW) × Time (hours) = Energy (kWh)
                     double timeInHours = request.TimeLimit.Value / 60.0;
                     double estimatedEnergy = estimatedPowerKw * timeInHours;
-                    decimal timeCost = (decimal)(estimatedEnergy * tariff);
+                    decimal timeCost = (decimal)(estimatedEnergy * tariff * 1.18);
                     estimatedCosts.Add(("Time Limit", timeCost));
                 }
 

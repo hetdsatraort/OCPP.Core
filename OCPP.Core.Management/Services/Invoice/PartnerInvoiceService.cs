@@ -28,8 +28,9 @@ namespace OCPP.Core.Management.Services.Invoice
     public class PartnerInvoiceService : IPartnerInvoiceService
     {
         private const string InvoicePrefix = "ORTEV-OCPI";
-        private const decimal CgstRate = 9m;
-        private const decimal SgstRate = 9m;
+        // Shared with the limit check in OcpiOrphanSessionService so it projects the same total
+        private const decimal CgstRate = PartnerSessionCharges.CgstRate;
+        private const decimal SgstRate = PartnerSessionCharges.SgstRate;
         private const string SacCode = "998717";
         private const string LineItemDescription = "OCPI Roaming Platform Fee";
         private const int MaxAllocationAttempts = 5;

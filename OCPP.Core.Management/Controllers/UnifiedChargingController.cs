@@ -1501,7 +1501,8 @@ namespace OCPP.Core.Management.Controllers
                 LimitProgress = isActive ? new UnifiedLimitProgressDto
                 {
                     EnergyPct = energyLimit > 0 ? Math.Round(energy / energyLimit.Value * 100, 1) : (double?)null,
-                    CostPct = costLimit > 0 ? Math.Round((double)cost / costLimit.Value * 100, 1) : (double?)null,
+                    // The limit is enforced on cost incl. 18% GST (ChargingSessionController.CheckSessionLimitViolations)
+                    CostPct = costLimit > 0 ? Math.Round((double)cost * 1.18 / costLimit.Value * 100, 1) : (double?)null,
                     TimePct = timeLimit > 0 ? Math.Round(elapsedMinutes / timeLimit.Value * 100, 1) : (double?)null
                 } : null,
                 BatteryStateOfCharge = (socStart.HasValue || socLatest.HasValue) ? new UnifiedBatteryStateOfChargeDto

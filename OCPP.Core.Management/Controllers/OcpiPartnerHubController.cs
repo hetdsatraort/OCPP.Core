@@ -756,6 +756,9 @@ namespace OCPP.Core.Management.Controllers
                     .Where(c => sessionEvseIds.Contains(c.PartnerEvseId))
                     .ToListAsync();
 
+                var feePerKwhByPartner = await GetPlatformFeePerKwhByPartnerAsync(
+                    sessions.Where(s => s.Status == "ACTIVE").Select(s => s.PartnerCredentialId));
+
                 var result = sessions.Select(s =>
                 {
                     var loc = locations.FirstOrDefault(l => l.LocationId == s.LocationId);
@@ -811,9 +814,8 @@ namespace OCPP.Core.Management.Controllers
                             energyPct = s.EnergyLimit.HasValue && s.TotalEnergy.HasValue
                                 ? Math.Round((double)s.TotalEnergy.Value / s.EnergyLimit.Value * 100, 1)
                                 : (double?)null,
-                            costPct = s.CostLimit.HasValue && s.TotalCost.HasValue
-                                ? Math.Round((double)s.TotalCost.Value / s.CostLimit.Value * 100, 1)
-                                : (double?)null,
+                            // Against partner cost + platform fee + GST — what the limit is enforced on
+                            costPct = ProjectedCostPct(s, feePerKwhByPartner),
                             timePct = s.TimeLimit.HasValue
                                 ? Math.Round(elapsed.TotalMinutes / s.TimeLimit.Value * 100, 1)
                                 : (double?)null,
@@ -864,12 +866,17 @@ namespace OCPP.Core.Management.Controllers
                 var elapsed = (session.EndDateTime ?? DateTime.UtcNow) - session.StartDateTime;
                 var violations = new List<string>();
 
+                // Cost is reported as the user will be billed: partner cost + platform fee + GST
+                var feePerKwhByPartner = await GetPlatformFeePerKwhByPartnerAsync(new[] { session.PartnerCredentialId });
+                var projectedPayable = PartnerSessionCharges.ProjectedPayable(
+                    session, FeeFor(session, feePerKwhByPartner));
+
                 if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue &&
                     (double)session.TotalEnergy.Value >= session.EnergyLimit.Value)
                     violations.Add("EnergyLimit");
 
-                if (session.CostLimit.HasValue && session.TotalCost.HasValue &&
-                    (double)session.TotalCost.Value >= session.CostLimit.Value)
+                if (session.CostLimit.HasValue && projectedPayable.HasValue &&
+                    (double)projectedPayable.Value >= session.CostLimit.Value)
                     violations.Add("CostLimit");
 
                 if (session.TimeLimit.HasValue && elapsed.TotalMinutes >= session.TimeLimit.Value)
@@ -898,11 +905,10 @@ namespace OCPP.Core.Management.Controllers
                             },
                             cost = new
                             {
-                                current = session.TotalCost,
+                                current = projectedPayable,
+                                partnerCost = session.TotalCost,
                                 limit = session.CostLimit,
-                                pct = session.CostLimit.HasValue && session.TotalCost.HasValue
-                                    ? Math.Round((double)session.TotalCost.Value / session.CostLimit.Value * 100, 1)
-                                    : (double?)null,
+                                pct = ProjectedCostPct(session, feePerKwhByPartner),
                                 currency = session.Currency
                             },
                             time = new
@@ -922,6 +928,37 @@ namespace OCPP.Core.Management.Controllers
                 _logger.LogError(ex, "Error retrieving partner session limit status for {SessionId}", sessionId);
                 return Ok(new { success = false, message = "Error retrieving session limit status" });
             }
+        }
+
+        /// <summary>Active platform fee (INR/kWh) for each of the given partners.</summary>
+        private async Task<Dictionary<int, decimal>> GetPlatformFeePerKwhByPartnerAsync(IEnumerable<int?> partnerCredentialIds)
+        {
+            var ids = partnerCredentialIds.Where(id => id.HasValue).Select(id => id!.Value).Distinct().ToList();
+            if (ids.Count == 0) return new Dictionary<int, decimal>();
+
+            return await _dbContext.OcpiPartnerPlatformFees
+                .AsNoTracking()
+                .Where(f => ids.Contains(f.PartnerCredentialId) && f.IsActive)
+                .GroupBy(f => f.PartnerCredentialId)
+                .Select(g => new { PartnerCredentialId = g.Key, FeePerKwh = g.First().FeePerKwh })
+                .ToDictionaryAsync(f => f.PartnerCredentialId, f => f.FeePerKwh);
+        }
+
+        private static decimal FeeFor(OcpiPartnerSession session, Dictionary<int, decimal> feePerKwhByPartner)
+            => session.PartnerCredentialId.HasValue
+               && feePerKwhByPartner.TryGetValue(session.PartnerCredentialId.Value, out var fee) ? fee : 0m;
+
+        /// <summary>
+        /// Cost-limit progress measured against partner cost + platform fee + GST, matching the
+        /// auto-stop in OCPI.Core.Roaming's OcpiOrphanSessionService.
+        /// </summary>
+        private static double? ProjectedCostPct(OcpiPartnerSession session, Dictionary<int, decimal> feePerKwhByPartner)
+        {
+            if (!session.CostLimit.HasValue || session.CostLimit.Value <= 0) return null;
+            var projected = PartnerSessionCharges.ProjectedPayable(session, FeeFor(session, feePerKwhByPartner));
+            return projected.HasValue
+                ? Math.Round((double)projected.Value / session.CostLimit.Value * 100, 1)
+                : (double?)null;
         }
 
         // ── Admin: Partner Session Listing / Detail ──────────────────────────

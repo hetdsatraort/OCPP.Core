@@ -1158,6 +1158,16 @@ namespace OCPI.Core.Roaming.BackgroundServices
                       .ToDictionaryAsync(p => p.Id, ct)
                 : new Dictionary<int, OcpiPartnerCredential>();
 
+            // Platform fee per partner — the cost limit is checked against what the user will
+            // actually be billed (partner cost + platform fee + GST), not the partner's cost alone
+            var feePerKwhByPartner = partnerIds.Any()
+                ? await db.OcpiPartnerPlatformFees
+                      .Where(f => partnerIds.Contains(f.PartnerCredentialId) && f.IsActive)
+                      .GroupBy(f => f.PartnerCredentialId)
+                      .Select(g => new { PartnerCredentialId = g.Key, FeePerKwh = g.First().FeePerKwh })
+                      .ToDictionaryAsync(f => f.PartnerCredentialId, f => f.FeePerKwh, ct)
+                : new Dictionary<int, decimal>();
+
             // ── Live-refresh sessions the partner hasn't pushed an update for recently ──
             // Some CPOs only PUT/PATCH our sessions receiver at start/stop, not incrementally
             // while charging — without this, TotalEnergy/TotalCost would only advance on the
@@ -1202,6 +1212,27 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     .ToListAsync(ct);
 
                 walletBalancesDict = lastTxns.ToDictionary(w => w.UserId, w => w.CurrentCreditBalance);
+            }
+
+            // Current wallet balance of users with an ACTIVE session, so a session is stopped once
+            // its running payable reaches what the user has left (same as OCPP sessions).
+            // Kept separate from walletBalancesDict, which billing (E) mutates as it debits.
+            var activeUserIds = activeSessions
+                .Where(s => s.UserId != null)
+                .Select(s => s.UserId!)
+                .Distinct().ToList();
+            var activeWalletBalances = new Dictionary<string, decimal>();
+            if (activeUserIds.Any())
+            {
+                var activeLastTxns = await db.WalletTransactionLogs
+                    .Where(w => activeUserIds.Contains(w.UserId) && w.Active == 1)
+                    .GroupBy(w => w.UserId)
+                    .Select(g => g.OrderByDescending(w => w.CreatedOn).First())
+                    .ToListAsync(ct);
+
+                foreach (var tx in activeLastTxns)
+                    if (decimal.TryParse(tx.CurrentCreditBalance, out var bal))
+                        activeWalletBalances[tx.UserId] = bal;
             }
 
             var usersDict = allBillingUserIds.Any()
@@ -1288,13 +1319,24 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 // ── D) Check user-configured limits ───────────────────────────────────
                 if (session.LimitViolationHandled) continue;
                 if (session.UserId == null) continue; // no limits to enforce
-                if (!session.EnergyLimit.HasValue && !session.CostLimit.HasValue
-                    && !session.TimeLimit.HasValue && !session.BatteryIncreaseLimit.HasValue)
-                    continue;
 
                 var violations = new List<string>();
                 var violatedLimits = new List<string>(); // short names stored as StopReasonDetail, same format as OCPP sessions
                 var elapsed = DateTime.UtcNow - session.StartDateTime;
+
+                decimal feePerKwh = session.PartnerCredentialId.HasValue
+                    && feePerKwhByPartner.TryGetValue(session.PartnerCredentialId.Value, out var fee) ? fee : 0m;
+                var projectedPayable = PartnerSessionCharges.ProjectedPayable(session, feePerKwh);
+
+                // Wallet balance applies to every app-user session, with or without user-set limits
+                if (projectedPayable > 0
+                    && activeWalletBalances.TryGetValue(session.UserId, out var walletBalance)
+                    && projectedPayable.Value >= walletBalance)
+                {
+                    violations.Add(
+                        $"Balance: payable {projectedPayable:F2} {session.Currency} ≥ wallet balance {walletBalance:F2}");
+                    violatedLimits.Add("Balance");
+                }
 
                 if (session.EnergyLimit.HasValue && session.TotalEnergy.HasValue
                     && (double)session.TotalEnergy.Value >= session.EnergyLimit.Value)
@@ -1304,11 +1346,11 @@ namespace OCPI.Core.Roaming.BackgroundServices
                     violatedLimits.Add("Energy");
                 }
 
-                if (session.CostLimit.HasValue && session.TotalCost.HasValue
-                    && (double)session.TotalCost.Value >= session.CostLimit.Value)
+                if (session.CostLimit.HasValue && projectedPayable.HasValue
+                    && (double)projectedPayable.Value >= session.CostLimit.Value)
                 {
                     violations.Add(
-                        $"Cost {session.TotalCost:F2} {session.Currency} ≥ limit {session.CostLimit:F2}");
+                        $"Cost {projectedPayable:F2} {session.Currency} (partner {session.TotalCost:F2} + platform fee + GST) ≥ limit {session.CostLimit:F2}");
                     violatedLimits.Add("Cost");
                 }
 
