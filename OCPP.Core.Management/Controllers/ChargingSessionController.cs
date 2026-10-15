@@ -2916,6 +2916,7 @@ namespace OCPP.Core.Management.Controllers
                 ConnectorName = connectorStatus?.ConnectorName,
                 StartMeterReading = session.StartMeterReading,
                 EndMeterReading = session.EndMeterReading,
+                CurrentMeterReading = isActive ? connectorStatus?.LastMeter : null,
                 EnergyTransmitted = session.EnergyTransmitted,
                 StartTime = session.StartTime,
                 EndTime = endTime,

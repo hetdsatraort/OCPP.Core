@@ -51,6 +51,8 @@ namespace OCPP.Core.Management.Models.ChargingSession
         public ChargingGuns ChargingGun { get; set; }
         public string StartMeterReading { get; set; }
         public string EndMeterReading { get; set; }
+        /// <summary>Live connector meter (kWh) for active sessions; null once completed or when unknown.</summary>
+        public double? CurrentMeterReading { get; set; }
         public string EnergyTransmitted { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime? EndTime { get; set; }

@@ -745,11 +745,24 @@ namespace OCPP.Core.Management.Controllers
                     .Where(p => partnerIds.Contains(p.Id))
                     .ToDictionaryAsync(p => p.Id, p => p);
 
+                // Resolve the OCPI evse_uid / connector_id strings back to our DB rows so callers
+                // get the same ids the location/connector endpoints expose
+                var locationDbIds = locations.Select(l => l.Id).ToList();
+                var sessionEvses = await _dbContext.OcpiPartnerEvses
+                    .Where(e => locationDbIds.Contains(e.PartnerLocationId))
+                    .ToListAsync();
+                var sessionEvseIds = sessionEvses.Select(e => e.Id).ToList();
+                var sessionConnectors = await _dbContext.OcpiPartnerConnectors
+                    .Where(c => sessionEvseIds.Contains(c.PartnerEvseId))
+                    .ToListAsync();
+
                 var result = sessions.Select(s =>
                 {
                     var loc = locations.FirstOrDefault(l => l.LocationId == s.LocationId);
                     var partner = loc != null && partners.TryGetValue(loc.PartnerCredentialId, out var p) ? p : null;
                     var elapsed = (s.EndDateTime ?? DateTime.UtcNow) - s.StartDateTime;
+                    var evse = loc == null ? null : sessionEvses.FirstOrDefault(e => e.PartnerLocationId == loc.Id && e.EvseUid == s.EvseUid);
+                    var connector = evse == null ? null : sessionConnectors.FirstOrDefault(c => c.PartnerEvseId == evse.Id && c.ConnectorId == s.ConnectorId);
 
                     return new
                     {
@@ -780,6 +793,10 @@ namespace OCPP.Core.Management.Controllers
                         partnerName = partner?.BusinessName,
                         evseUid = s.EvseUid,
                         connectorId = s.ConnectorId,
+                        evseDbId = evse?.Id,
+                        connectorDbId = connector?.Id,
+                        stationName = evse == null ? null : evse.PhysicalReference ?? evse.EvseId ?? evse.EvseUid,
+                        connectorStandard = connector?.Standard,
                         // Limits
                         energyLimit = s.EnergyLimit,
                         costLimit = s.CostLimit,

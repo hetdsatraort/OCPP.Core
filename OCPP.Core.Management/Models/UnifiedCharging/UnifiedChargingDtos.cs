@@ -102,10 +102,18 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public double EnergyDelivered { get; set; }
         public decimal Cost { get; set; }
         public string Currency { get; set; } = "INR";
+        /// <summary>Price per kWh used for Cost; Local only.</summary>
+        public double? Tariff { get; set; }
+        public int DurationMinutes { get; set; }
         public string LocationName { get; set; }
+        public string LocationAddress { get; set; }
         public string PartnerName { get; set; }
         public string StationId { get; set; }
+        public string StationName { get; set; }
         public string ConnectorId { get; set; }
+        public string ConnectorName { get; set; }
+        /// <summary>Why the session ended (SessionStopReasonDto shape); null while active.</summary>
+        public object StopReason { get; set; }
 
         // Limits
         public double? EnergyLimit { get; set; }

@@ -1407,9 +1407,14 @@ namespace OCPP.Core.Management.Controllers
                 EnergyDelivered = totalEnergy ?? 0,
                 Cost = (decimal)(totalCost ?? 0),
                 Currency = GetString(costDetails, "Currency") ?? "INR",
+                DurationMinutes = (int)Math.Max(0, elapsedMinutes),
                 LocationName = GetString(sessionJson, "ChargingHubName"),
+                LocationAddress = GetString(GetObj(sessionJson, "ChargingHub"), "AddressLine1"),
                 StationId = UnifiedId.Encode(ProviderType.Local, GetString(sessionJson, "ChargingStationId")),
+                StationName = GetString(sessionJson, "ChargingStationName"),
                 ConnectorId = UnifiedId.Encode(ProviderType.Local, GetString(sessionJson, "ChargingGunId")),
+                ConnectorName = GetString(sessionJson, "ConnectorName"),
+                StopReason = GetObj(sessionJson, "StopReason").ValueKind == JsonValueKind.Object ? (object)GetObj(sessionJson, "StopReason") : null,
                 EnergyLimit = energyLimit,
                 CostLimit = costLimit,
                 TimeLimit = timeLimit,
@@ -1423,40 +1428,102 @@ namespace OCPP.Core.Management.Controllers
 
         private static UnifiedSessionDto MapLocalListItemToUnified(JsonElement s)
         {
-            double.TryParse(GetString(s, "EnergyTransmitted"), out var energy);
-            decimal.TryParse(GetString(s, "ChargingTotalFee"), out var fee);
+            var status = GetString(s, "Status");
+            bool isActive = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
+            var gunJson = GetObj(s, "ChargingGun");
+            var startTime = GetDateTime(s, "StartTime") ?? DateTime.UtcNow;
+            var endTime = GetDateTime(s, "EndTime");
 
+            // Same tariff precedence as GetChargingSessionDetails: gun's tariff, then the session's
+            double? tariff = ParseDouble(GetString(gunJson, "ChargerTariff"));
+            if (!(tariff > 0)) tariff = ParseDouble(GetString(s, "ChargingTariff"));
+
+            double? meterStart = ParseDouble(GetString(s, "StartMeterReading"));
+            double? meterCurrent;
+            double energy;
+            decimal cost;
+
+            if (isActive)
+            {
+                // The DB row's EndMeterReading / EnergyTransmitted / ChargingTotalFee stay "0" until the
+                // session stops, so derive live values from the connector meter like the details endpoint.
+                // A meter below the start reading is stale (pre-session) and is ignored.
+                double? live = GetDouble(s, "CurrentMeterReading");
+                meterCurrent = (live.HasValue && meterStart.HasValue && live.Value >= meterStart.Value) ? live : meterStart;
+                energy = (meterCurrent.HasValue && meterStart.HasValue) ? Math.Round(meterCurrent.Value - meterStart.Value, 3) : 0;
+                cost = (decimal)Math.Round(energy * (tariff ?? 0), 2);
+            }
+            else
+            {
+                double? meterEnd = ParseDouble(GetString(s, "EndMeterReading"));
+                meterCurrent = meterEnd > 0 ? meterEnd : meterStart;
+                energy = ParseDouble(GetString(s, "EnergyTransmitted"))
+                    ?? ((meterCurrent.HasValue && meterStart.HasValue) ? Math.Max(0, meterCurrent.Value - meterStart.Value) : 0);
+                cost = (decimal)(ParseDouble(GetString(s, "ChargingTotalFee")) ?? 0);
+            }
+
+            double elapsedMinutes = Math.Max(0, ((endTime ?? DateTime.UtcNow) - startTime).TotalMinutes);
+
+            double? energyLimit = GetDouble(s, "EnergyLimit");
+            double? costLimit = GetDouble(s, "CostLimit");
+            int? timeLimit = GetInt(s, "TimeLimit");
+
+            // While active, SoCEnd holds the last SoC the charger reported, i.e. the current SoC
             double? socStart = GetDouble(s, "SoCStart");
-            double? socEnd = GetDouble(s, "SoCEnd");
+            double? socLatest = GetDouble(s, "SoCEnd");
+
+            var stopReasonJson = GetObj(s, "StopReason");
 
             return new UnifiedSessionDto
             {
                 Id = UnifiedId.Encode(ProviderType.Local, GetString(s, "RecId")),
                 ProviderType = ProviderType.Local,
-                Status = GetString(s, "Status"),
-                IsActive = string.Equals(GetString(s, "Status"), "Active", StringComparison.OrdinalIgnoreCase),
-                StartTime = GetDateTime(s, "StartTime") ?? DateTime.UtcNow,
-                EndTime = GetDateTime(s, "EndTime"),
-                EnergyDelivered = energy,
-                Cost = fee,
+                Status = status,
+                IsActive = isActive,
+                StartTime = startTime,
+                EndTime = endTime,
+                MeterStart = meterStart,
+                MeterCurrent = meterCurrent,
+                EnergyDelivered = Math.Max(0, energy),
+                Cost = cost,
+                Tariff = tariff,
+                DurationMinutes = (int)elapsedMinutes,
                 LocationName = GetString(s, "ChargingHubName"),
+                LocationAddress = GetString(GetObj(s, "ChargingHub"), "AddressLine1"),
                 StationId = UnifiedId.Encode(ProviderType.Local, GetString(s, "ChargingStationId")),
+                StationName = GetString(s, "ChargingStationName"),
                 ConnectorId = UnifiedId.Encode(ProviderType.Local, GetString(s, "ChargingGunId")),
-                EnergyLimit = GetDouble(s, "EnergyLimit"),
-                CostLimit = GetDouble(s, "CostLimit"),
-                TimeLimit = GetInt(s, "TimeLimit"),
+                ConnectorName = GetString(s, "ConnectorName"),
+                EnergyLimit = energyLimit,
+                CostLimit = costLimit,
+                TimeLimit = timeLimit,
                 BatteryIncreaseLimit = GetDouble(s, "BatteryIncreaseLimit"),
-                BatteryStateOfCharge = (socStart.HasValue || socEnd.HasValue) ? new UnifiedBatteryStateOfChargeDto
+                LimitProgress = isActive ? new UnifiedLimitProgressDto
                 {
-                    StartSoC = socStart,
-                    EndSoC = socEnd,
+                    EnergyPct = energyLimit > 0 ? Math.Round(energy / energyLimit.Value * 100, 1) : (double?)null,
+                    CostPct = costLimit > 0 ? Math.Round((double)cost / costLimit.Value * 100, 1) : (double?)null,
+                    TimePct = timeLimit > 0 ? Math.Round(elapsedMinutes / timeLimit.Value * 100, 1) : (double?)null
+                } : null,
+                BatteryStateOfCharge = (socStart.HasValue || socLatest.HasValue) ? new UnifiedBatteryStateOfChargeDto
+                {
+                    StartSoC = RoundSoc(socStart),
+                    EndSoC = isActive ? null : RoundSoc(socLatest),
+                    CurrentSoC = RoundSoc(socLatest),
+                    SoCGain = (socStart.HasValue && socLatest.HasValue) ? RoundSoc(socLatest.Value - socStart.Value) : null,
                     LastUpdate = GetDateTime(s, "SoCLastUpdate"),
                     IsRealtime = false,
                     DataSource = "Database (Historical)"
                 } : null,
+                StopReason = stopReasonJson.ValueKind == JsonValueKind.Object ? (object)stopReasonJson : null,
                 Raw = s
             };
         }
+
+        private static double? ParseDouble(string value) =>
+            double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d)
+                ? d : (double?)null;
+
+        private static double? RoundSoc(double? value) => value.HasValue ? Math.Round(value.Value, 1) : (double?)null;
 
         // ── Mapping helpers — Partner ─────────────────────────────────────────
 
@@ -1515,27 +1582,41 @@ namespace OCPP.Core.Management.Controllers
         private static UnifiedSessionDto MapPartnerListItemToUnified(JsonElement s)
         {
             var status = GetString(s, "status");
+            bool isActive = string.Equals(status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
             var limitProgressJson = GetObj(s, "limitProgress");
+            var stopReasonJson = GetObj(s, "stopReason");
             double? startingSoC = GetDouble(s, "startingStateOfCharge");
             double? currentSoC = GetDouble(s, "currentStateOfCharge");
             double? socGain = (startingSoC.HasValue && currentSoC.HasValue)
                 ? currentSoC.Value - startingSoC.Value
                 : (double?)null;
+            int? evseDbId = GetInt(s, "evseDbId");
+            int? connectorDbId = GetInt(s, "connectorDbId");
 
             return new UnifiedSessionDto
             {
                 Id = UnifiedId.Encode(ProviderType.Partner, GetString(s, "sessionId")),
                 ProviderType = ProviderType.Partner,
-                Status = status,
-                IsActive = string.Equals(status, "ACTIVE", StringComparison.OrdinalIgnoreCase),
+                // OCPI statuses are upper-case (ACTIVE/COMPLETED/...); match Local's "Active"/"Completed"
+                Status = string.IsNullOrEmpty(status) ? status : char.ToUpperInvariant(status[0]) + status.Substring(1).ToLowerInvariant(),
+                IsActive = isActive,
                 StartTime = GetDateTime(s, "startDateTime") ?? DateTime.UtcNow,
                 EndTime = GetDateTime(s, "endDateTime"),
                 EnergyDelivered = GetDouble(s, "totalEnergyKwh") ?? 0,
-                Cost = (decimal)(GetDouble(s, "totalCost") ?? 0),
+                // What the user actually pays once invoiced; the partner's own running cost until then
+                Cost = (decimal)(GetDouble(s, "totalPayable") ?? GetDouble(s, "totalCost") ?? 0),
                 Currency = GetString(s, "currency") ?? "INR",
+                DurationMinutes = GetInt(s, "durationMinutes") ?? 0,
                 LocationName = GetString(s, "locationName"),
+                LocationAddress = GetString(s, "locationAddress"),
                 PartnerName = GetString(s, "partnerName"),
-                ConnectorId = GetString(s, "evseUid"),
+                // Composite ids must use our DB ids (as the location/connector endpoints do), not
+                // the raw OCPI evse_uid / connector_id strings — null when the EVSE is no longer synced
+                StationId = evseDbId.HasValue ? UnifiedId.Encode(ProviderType.Partner, evseDbId.Value.ToString()) : null,
+                StationName = GetString(s, "stationName"),
+                ConnectorId = connectorDbId.HasValue ? UnifiedId.Encode(ProviderType.Partner, connectorDbId.Value.ToString()) : null,
+                ConnectorName = GetString(s, "connectorStandard"),
+                StopReason = stopReasonJson.ValueKind == JsonValueKind.Object ? (object)stopReasonJson : null,
                 EnergyLimit = GetDouble(s, "energyLimit"),
                 CostLimit = GetDouble(s, "costLimit"),
                 TimeLimit = GetInt(s, "timeLimit"),
@@ -1548,9 +1629,10 @@ namespace OCPP.Core.Management.Controllers
                 } : null,
                 BatteryStateOfCharge = (startingSoC.HasValue || currentSoC.HasValue) ? new UnifiedBatteryStateOfChargeDto
                 {
-                    StartSoC = startingSoC,
-                    CurrentSoC = currentSoC,
-                    SoCGain = socGain,
+                    StartSoC = RoundSoc(startingSoC),
+                    EndSoC = isActive ? null : RoundSoc(currentSoC),
+                    CurrentSoC = RoundSoc(currentSoC),
+                    SoCGain = RoundSoc(socGain),
                     LastUpdate = GetDateTime(s, "stateOfChargeLastUpdate"),
                     IsRealtime = false,
                     DataSource = "Partner CPO Report"
