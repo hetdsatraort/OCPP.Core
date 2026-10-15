@@ -2483,13 +2483,14 @@ namespace OCPP.Core.Management.Controllers
                         .ToDictionary(g => g.Key, g => g.OrderByDescending(cs => cs.Active).First());
 
                     // Bulk load OCPI hosted sessions for the check
-                    var orphanTxnStationIds = orphanTxnStationsDict.Values.Select(s => s.RecId).ToList();
-                    var ocpiHostedSessionsDict = await _dbContext.OcpiHostedSessions
-                        .Where(s => orphanTxnStationIds.Contains(s.EvseUid) && s.Status == "ACTIVE")
-                        .ToListAsync()
-                        .ContinueWith(sessions => sessions.Result
-                            .GroupBy(s => $"{s.EvseUid}_{s.ConnectorId}")
-                            .ToDictionary(g => g.Key, g => g.First()));
+                    // Matched by TransactionId (or charge point + connector while the hosted session has no
+                    // TransactionId yet) — not by station RecId, which can differ when several station
+                    // rows share a ChargingPointId.
+                    var activeOcpiHostedSessions = await _dbContext.OcpiHostedSessions
+                        .AsNoTracking()
+                        .Where(s => s.Status == "ACTIVE" && orphanTxnChargePointIds.Contains(s.ChargePointId))
+                        .Select(s => new { s.SessionId, s.TransactionId, s.ChargePointId, s.ConnectorNumber })
+                        .ToListAsync();
 
                     foreach (var transaction in candidatesForTransactionCheck)
                     {
@@ -2498,26 +2499,19 @@ namespace OCPP.Core.Management.Controllers
                             if (!orphanTxnStationsDict.TryGetValue(transaction.ChargePointId, out var chargingStation))
                                 continue;
 
-                            // Check if there's a charging gun for this connector
-                            var matchingGun = gunsDict.Values.FirstOrDefault(g => 
-                                g.ChargingStationId == chargingStation.RecId && 
-                                g.ConnectorId == transaction.ConnectorId.ToString() &&
-                                g.Active == 1);
-
-                            if (matchingGun != null)
+                            // If an active OCPI hosted session owns this transaction, leave it running —
+                            // it was started by an external eMSP, not by one of our own app sessions.
+                            var ocpiOwner = activeOcpiHostedSessions.FirstOrDefault(s =>
+                                s.TransactionId == transaction.TransactionId ||
+                                (!s.TransactionId.HasValue &&
+                                 s.ChargePointId == transaction.ChargePointId &&
+                                 s.ConnectorNumber == transaction.ConnectorId));
+                            if (ocpiOwner != null)
                             {
-                                // If an active OCPI hosted session owns this EVSE/connector, leave the
-                                // OCPP transaction running — it was started by an external eMSP, not by
-                                // one of our own app sessions, so we must not auto-stop it here.
-                                string ocpiKey = $"{chargingStation.RecId}_{matchingGun.RecId}";
-                                if (ocpiHostedSessionsDict.ContainsKey(ocpiKey))
-                                {
-                                    _logger.LogInformation(
-                                        "Check 4: Skipping orphan transaction {TransactionId} — " +
-                                        "active OCPI hosted session found for EVSE {EvseUid} / connector {ConnectorId}",
-                                        transaction.TransactionId, chargingStation.RecId, matchingGun.RecId);
-                                    continue;
-                                }
+                                _logger.LogInformation(
+                                    "Check 4: Skipping orphan transaction {TransactionId} — owned by active OCPI hosted session {OcpiSessionId}",
+                                    transaction.TransactionId, ocpiOwner.SessionId);
+                                continue;
                             }
 
                             // A newer transaction already runs on this connector => this one is stale.

@@ -367,11 +367,32 @@ namespace OCPP.Core.Management.Controllers
                     .ToListAsync())
                 .ToDictionary(x => $"{x.ChargePointId}|{x.ConnectorId}", x => x.MaxId);
 
-            // OCPI-hosted (roaming) transactions legitimately have no app session
-            var ocpiActive = await _dbContext.OcpiHostedSessions.AsNoTracking()
-                .Where(s => s.Status == "ACTIVE" && cpIds.Contains(s.ChargePointId))
-                .Select(s => new { s.TransactionId, s.ChargePointId, s.ConnectorNumber })
+            // OCPI-hosted (roaming) transactions have no app ChargingSession; their owner is an
+            // OcpiHostedSession. Match by TransactionId in any status (completed sessions included);
+            // sessions whose TransactionId was never captured fall back to charge point + connector.
+            var earliestStart = transactions.Min(t => t.StartTime).AddMinutes(-5);
+            var ocpiSessions = await _dbContext.OcpiHostedSessions.AsNoTracking()
+                .Where(s => (s.TransactionId.HasValue && txIds.Contains(s.TransactionId.Value)) ||
+                            (!s.TransactionId.HasValue && cpIds.Contains(s.ChargePointId) && s.StartDateTime >= earliestStart))
+                .Select(s => new
+                {
+                    s.SessionId,
+                    s.TransactionId,
+                    s.ChargePointId,
+                    s.ConnectorNumber,
+                    s.Status,
+                    s.StartDateTime,
+                    s.EndDateTime,
+                    s.TokenUid,
+                    PartnerName = s.PartnerCredential != null ? s.PartnerCredential.BusinessName : null
+                })
                 .ToListAsync();
+
+            var ocpiByTxId = ocpiSessions
+                .Where(s => s.TransactionId.HasValue)
+                .GroupBy(s => s.TransactionId.Value)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(s => s.StartDateTime).First());
+            var ocpiWithoutTxId = ocpiSessions.Where(s => !s.TransactionId.HasValue).ToList();
 
             int staleMinutes = StaleThresholdMinutes;
             int graceMinutes = OrphanGraceMinutes;
@@ -385,6 +406,19 @@ namespace OCPP.Core.Management.Controllers
                 sessions.TryGetValue(t.TransactionId, out var session);
                 Database.EVCDTO.Users user = null;
                 if (session != null) users.TryGetValue(session.UserId, out user);
+
+                // Fallback window: the hosted session row is written after the transaction appears,
+                // so its StartDateTime is the transaction's start (or "now" if it was never found).
+                if (!ocpiByTxId.TryGetValue(t.TransactionId, out var ocpi))
+                {
+                    ocpi = ocpiWithoutTxId
+                        .Where(o => o.ChargePointId == t.ChargePointId &&
+                                    o.ConnectorNumber == t.ConnectorId &&
+                                    t.StartTime >= o.StartDateTime.AddMinutes(-5) &&
+                                    t.StartTime <= o.StartDateTime.AddMinutes(5))
+                        .OrderByDescending(o => o.StartDateTime)
+                        .FirstOrDefault();
+                }
 
                 bool isOpen = !t.StopTime.HasValue;
                 DateTime end = t.StopTime ?? now;
@@ -431,9 +465,15 @@ namespace OCPP.Core.Management.Controllers
                     UserId = session?.UserId,
                     UserName = user != null ? $"{user.FirstName} {user.LastName}".Trim() : null,
                     UserPhone = user?.PhoneNumber,
-                    IsOcpiSession = ocpiActive.Any(o => o.TransactionId == t.TransactionId ||
-                                                        (o.ChargePointId == t.ChargePointId && o.ConnectorNumber == t.ConnectorId))
+                    IsOcpiSession = ocpi != null,
+                    OcpiSessionId = ocpi?.SessionId,
+                    OcpiSessionStatus = ocpi?.Status,
+                    OcpiSessionEndTime = ocpi?.EndDateTime,
+                    OcpiPartnerName = ocpi?.PartnerName,
+                    OcpiTokenUid = ocpi?.TokenUid
                 };
+
+                bool ocpiActive = ocpi != null && string.Equals(ocpi.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
 
                 if (isOpen)
                 {
@@ -443,12 +483,17 @@ namespace OCPP.Core.Management.Controllers
                         item.StaleReasons.Add("Superseded");
                     }
 
-                    if (item.SessionEndTime.HasValue && item.SessionEndTime.Value <= now.AddMinutes(-1))
+                    // App session ended, or the OCPI session was completed/invalidated, while the
+                    // charger still has the transaction open
+                    bool appSessionEnded = item.SessionEndTime.HasValue && item.SessionEndTime.Value <= now.AddMinutes(-1);
+                    bool ocpiSessionEnded = ocpi != null && !ocpiActive &&
+                                            (ocpi.EndDateTime ?? now) <= now.AddMinutes(-1);
+                    if (appSessionEnded || ocpiSessionEnded)
                     {
                         item.StaleReasons.Add("SessionEnded");
                     }
 
-                    if (session == null && !item.IsOcpiSession && t.StartTime <= now.AddMinutes(-graceMinutes))
+                    if (session == null && ocpi == null && t.StartTime <= now.AddMinutes(-graceMinutes))
                     {
                         item.StaleReasons.Add("NoSession");
                     }

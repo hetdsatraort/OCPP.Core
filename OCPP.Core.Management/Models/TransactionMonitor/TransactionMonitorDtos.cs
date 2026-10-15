@@ -56,7 +56,14 @@ namespace OCPP.Core.Management.Models.TransactionMonitor
         public string UserName { get; set; }
         public string UserPhone { get; set; }
 
+        /// <summary>True when an OCPI hosted (roaming) session owns this transaction</summary>
         public bool IsOcpiSession { get; set; }
+        public string OcpiSessionId { get; set; }
+        /// <summary>ACTIVE | COMPLETED | INVALID ...</summary>
+        public string OcpiSessionStatus { get; set; }
+        public DateTime? OcpiSessionEndTime { get; set; }
+        public string OcpiPartnerName { get; set; }
+        public string OcpiTokenUid { get; set; }
         public int? SupersededByTransactionId { get; set; }
 
         public bool IsStale { get; set; }
