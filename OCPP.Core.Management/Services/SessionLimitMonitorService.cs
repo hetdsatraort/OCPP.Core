@@ -78,7 +78,8 @@ namespace OCPP.Core.Management.Services
 
                 var httpClient = _httpClientFactory.CreateClient("SessionLimitMonitor");
                 httpClient.BaseAddress = new Uri(baseUrl);
-                httpClient.Timeout = TimeSpan.FromSeconds(30);
+                // A single OCPP stop can wait up to 60s on a charger, so the check needs more than that
+                httpClient.Timeout = TimeSpan.FromSeconds(_configuration.GetValue<int>("SessionLimits:RequestTimeoutSeconds", 120));
 
                 // _logger.LogDebug("Checking session limits at {Url}", $"{baseUrl}{apiEndpoint}");
 

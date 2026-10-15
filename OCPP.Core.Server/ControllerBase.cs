@@ -235,6 +235,47 @@ namespace OCPP.Core.Server
         }
 
         /// <summary>
+        /// A connector can only run one transaction at a time. When a new transaction starts,
+        /// any older transaction on the same connector that is still open in the DB is stale
+        /// (the charger lost or never sent its stop). Close those records so they can't be
+        /// mistaken for the running transaction by stop/monitoring logic.
+        /// The new transaction's start meter is the best known stop meter for the stale one.
+        /// </summary>
+        protected void CloseSupersededTransactions(int connectorId, DateTime newStartTime, double newMeterStart, string excludeUid = null)
+        {
+            if (connectorId <= 0 || ChargePointStatus == null) return;
+
+            try
+            {
+                var staleTransactions = DbContext.Transactions
+                    .Where(t => t.ChargePointId == ChargePointStatus.Id &&
+                                t.ConnectorId == connectorId &&
+                                !t.StopTime.HasValue &&
+                                (excludeUid == null || t.Uid != excludeUid))
+                    .ToList();
+
+                foreach (Transaction stale in staleTransactions)
+                {
+                    stale.StopTime = newStartTime > stale.StartTime ? newStartTime : DateTime.UtcNow;
+                    stale.MeterStop = newMeterStart >= stale.MeterStart ? newMeterStart : stale.MeterStart;
+                    stale.StopReason = TransactionStopReasons.StaleSuperseded;
+                    Logger.LogWarning("CloseSupersededTransactions => Closing stale transaction {0} (started {1:u}) on ChargePoint={2} / Connector={3}: superseded by new transaction",
+                        stale.TransactionId, stale.StartTime, ChargePointStatus.Id, connectorId);
+                }
+
+                if (staleTransactions.Count > 0)
+                {
+                    DbContext.SaveChanges();
+                }
+            }
+            catch (Exception exp)
+            {
+                // Never block a new transaction because cleanup of an old one failed
+                Logger.LogError(exp, "CloseSupersededTransactions => Exception (ChargePoint={0} / Connector={1})", ChargePointStatus?.Id, connectorId);
+            }
+        }
+
+        /// <summary>
         /// Clean charge tag Id from possible suffix ("..._abc")
         /// </summary>
         protected static string CleanChargeTagId(string rawChargeTagId, ILogger logger)

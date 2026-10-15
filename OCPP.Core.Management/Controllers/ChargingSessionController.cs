@@ -17,6 +17,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Claims;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -29,6 +30,7 @@ namespace OCPP.Core.Management.Controllers
         private readonly ILogger<ChargingSessionController> _logger;
         private readonly IConfiguration _config;
         private readonly IGunStatusSyncService _gunStatusSyncService;
+        private static readonly SemaphoreSlim _sessionLimitCheckLock = new SemaphoreSlim(1, 1);
 
         public ChargingSessionController(
             OCPPCoreContext dbContext,
@@ -592,7 +594,8 @@ namespace OCPP.Core.Management.Controllers
                 // Call OCPP server to stop transaction
                 var ocppResult = await CallOCPPStopTransaction(
                     chargePoint.ChargePointId,
-                    connectorId);
+                    connectorId,
+                    session.TransactionId);
 
                 if (!ocppResult.Success)
                 {
@@ -1873,6 +1876,17 @@ namespace OCPP.Core.Management.Controllers
         [HttpGet("check-session-limits")]
         public async Task<IActionResult> CheckSessionLimits()
         {
+            // One run at a time: a slow charger (OCPP stop can wait up to 60s) must not cause
+            // overlapping runs that act on the same sessions/transactions twice.
+            if (!await _sessionLimitCheckLock.WaitAsync(0))
+            {
+                return Ok(new ChargingSessionResponseDto
+                {
+                    Success = true,
+                    Message = "Previous session limit check is still running; skipped."
+                });
+            }
+
             try
             {
                 // Load all active sessions ONCE
@@ -1978,7 +1992,7 @@ namespace OCPP.Core.Management.Controllers
                             if (!chargePointsDict.TryGetValue(chargingStation.ChargingPointId, out var chargePoint))
                                 continue;
 
-                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId, session.TransactionId);
 
                             if (ocppResult.Success)
                             {
@@ -2119,9 +2133,14 @@ namespace OCPP.Core.Management.Controllers
 
                 if (_config.GetValue<string>("SLMBFFlag", "1") == "1")
                 {
+                    // After this many minutes of failed stop attempts, a transaction the charger never closes
+                    // is closed in the DB so it stops being retried every cycle.
+                    int staleCloseMinutes = _config.GetValue<int>("SessionLimits:StaleTransactionCloseMinutes", 15);
+
                     // Check 1: Sessions that are stopped but whose OCPP transaction is still running (for >= 1 minute)
                     var stoppedSessionsWithRunningTxns = await _dbContext.ChargingSessions
-                        .Where(s => s.EndTime != DateTime.MinValue && s.TransactionId.HasValue && s.EndTime <= cutoffTime)
+                        .Where(s => s.EndTime != DateTime.MinValue && s.TransactionId.HasValue && s.EndTime <= cutoffTime &&
+                                    _dbContext.Transactions.Any(t => t.TransactionId == s.TransactionId && !t.StopTime.HasValue))
                         .ToListAsync();
 
                     // Bulk load transactions for stopped sessions
@@ -2144,6 +2163,18 @@ namespace OCPP.Core.Management.Controllers
                             if (transaction.StopTime.HasValue)
                                 continue;
 
+                            // A newer transaction already runs on this connector => this one is stale.
+                            // Close it in the DB only; never send a stop to the charger for it.
+                            var supersededBy = await FindSupersedingTransaction(transaction);
+                            if (supersededBy != null)
+                            {
+                                MarkTransactionStaleClosed(transaction, supersededBy.MeterStart, TransactionStopReasons.StaleSuperseded);
+                                orphanTransactionsStopped.Add(session.RecId);
+                                _logger.LogWarning("Closed stale OCPP transaction {TransactionId} for stopped session {SessionId}: superseded by transaction {NewTransactionId}",
+                                    transaction.TransactionId, session.RecId, supersededBy.TransactionId);
+                                continue;
+                            }
+
                             // Transaction is still running but the session was stopped >= 1 minute ago — force-stop the transaction
                             if (!stationsDict.TryGetValue(session.ChargingStationID, out var chargingStation))
                                 continue;
@@ -2152,7 +2183,18 @@ namespace OCPP.Core.Management.Controllers
                                 continue;
 
                             int connectorId = Convert.ToInt32(chargingGun.ConnectorId);
-                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+                            var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId, transaction.TransactionId);
+
+                            if (!ocppResult.Success && session.EndTime <= DateTime.UtcNow.AddMinutes(-staleCloseMinutes))
+                            {
+                                // Charger keeps failing to close it (offline / rejected / unknown txn) — stop retrying forever
+                                connectorStatusesDict.TryGetValue($"{chargingStation.ChargingPointId}_{connectorId}", out var staleConnector);
+                                MarkTransactionStaleClosed(transaction, staleConnector?.LastMeter, TransactionStopReasons.StaleAutoClosed);
+                                orphanTransactionsStopped.Add(session.RecId);
+                                _logger.LogWarning("Closed stale OCPP transaction {TransactionId} for session {SessionId} in DB after {Minutes} min of failed stops: {Message}",
+                                    transaction.TransactionId, session.RecId, staleCloseMinutes, ocppResult.Message);
+                                continue;
+                            }
 
                             if (ocppResult.Success)
                             {
@@ -2341,7 +2383,7 @@ namespace OCPP.Core.Management.Controllers
                                 if (meterDelta >= 0.001)
                                     continue;
 
-                                var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId);
+                                var ocppResult = await CallOCPPStopTransaction(chargingStation.ChargingPointId, connectorId, session.TransactionId);
 
                                 if (!ocppResult.Success)
                                 {
@@ -2416,9 +2458,14 @@ namespace OCPP.Core.Management.Controllers
                     }
 
                     // Check 4: Transactions that are active that do not have a session linked to them.
+                    // Grace period: StartChargingSession polls up to ~60s for the new transaction before it
+                    // creates and links the session, so a brand-new transaction must not be treated as orphan.
+                    int orphanGraceMinutes = _config.GetValue<int>("SessionLimits:OrphanTransactionGraceMinutes", 5);
+                    var orphanGraceCutoff = DateTime.UtcNow.AddMinutes(-orphanGraceMinutes);
                     var candidatesForTransactionCheck = await _dbContext.Transactions
-                        .Where(t => 
+                        .Where(t =>
                         (!t.StopTime.HasValue || t.StopTime == DateTime.MinValue || t.StopTime == null) &&
+                        t.StartTime <= orphanGraceCutoff &&
                         !_dbContext.ChargingSessions.Any(s => s.TransactionId == t.TransactionId))
                         .ToListAsync();
 
@@ -2427,9 +2474,13 @@ namespace OCPP.Core.Management.Controllers
                         .Select(t => t.ChargePointId)
                         .Distinct()
                         .ToList();
-                    var orphanTxnStationsDict = await _dbContext.ChargingStations
+                    // Several station rows can share a ChargingPointId (e.g. a deactivated old one) —
+                    // prefer the active one instead of letting ToDictionary throw and fail the whole check.
+                    var orphanTxnStationsDict = (await _dbContext.ChargingStations
                         .Where(cs => orphanTxnChargePointIds.Contains(cs.ChargingPointId))
-                        .ToDictionaryAsync(cs => cs.ChargingPointId, cs => cs);
+                        .ToListAsync())
+                        .GroupBy(cs => cs.ChargingPointId)
+                        .ToDictionary(g => g.Key, g => g.OrderByDescending(cs => cs.Active).First());
 
                     // Bulk load OCPI hosted sessions for the check
                     var orphanTxnStationIds = orphanTxnStationsDict.Values.Select(s => s.RecId).ToList();
@@ -2469,17 +2520,36 @@ namespace OCPP.Core.Management.Controllers
                                 }
                             }
 
-                            var ocppResult = await CallOCPPStopTransaction(transaction.ChargePointId, transaction.ConnectorId);
+                            // A newer transaction already runs on this connector => this one is stale.
+                            // Close it in the DB only; sending a stop would hit the running transaction.
+                            var supersededBy = await FindSupersedingTransaction(transaction);
+                            if (supersededBy != null)
+                            {
+                                MarkTransactionStaleClosed(transaction, supersededBy.MeterStart, TransactionStopReasons.StaleSuperseded);
+                                orphanTransactionsStopped.Add($"Stale Txn {transaction.TransactionId} at {transaction.ChargePointId} (superseded by {supersededBy.TransactionId})");
+                                _logger.LogWarning("Closed stale orphan OCPP transaction {TransactionId} at {ChargePointId}: superseded by transaction {NewTransactionId}",
+                                    transaction.TransactionId, transaction.ChargePointId, supersededBy.TransactionId);
+                                continue;
+                            }
+
+                            var ocppResult = await CallOCPPStopTransaction(transaction.ChargePointId, transaction.ConnectorId, transaction.TransactionId);
                             if (ocppResult.Success)
                             {
                                 orphanTransactionsStopped.Add($"Orphan Txn {transaction.TransactionId} at {chargingStation.ChargingPointId}");
                                 _logger.LogInformation("Stopped orphan OCPP transaction {TransactionId} with no linked session at {ChargePointId}",
                                     transaction.TransactionId, chargingStation.ChargingPointId);
                             }
+                            else if (ocppResult.Status == "Timeout" && transaction.StartTime > DateTime.UtcNow.AddMinutes(-staleCloseMinutes))
+                            {
+                                // Charger is online but slow — retry next cycle rather than closing a possibly running transaction
+                                _logger.LogWarning("Stop of orphan OCPP transaction {TransactionId} at {ChargePointId} timed out; will retry",
+                                    transaction.TransactionId, chargingStation.ChargingPointId);
+                            }
                             else
                             {
-                                transaction.StopTime = DateTime.UtcNow;
-                                _logger.LogWarning("Failed to stop orphan OCPP transaction {TransactionId} with no linked session at {ChargePointId}: {Message}",
+                                connectorStatusesDict.TryGetValue($"{transaction.ChargePointId}_{transaction.ConnectorId}", out var orphanConnector);
+                                MarkTransactionStaleClosed(transaction, orphanConnector?.LastMeter, TransactionStopReasons.StaleAutoClosed);
+                                _logger.LogWarning("Failed to stop orphan OCPP transaction {TransactionId} with no linked session at {ChargePointId}: {Message}. Closed in DB.",
                                     transaction.TransactionId, chargingStation.ChargingPointId, ocppResult.Message);
                             }
                         }
@@ -2517,6 +2587,10 @@ namespace OCPP.Core.Management.Controllers
                     Success = false,
                     Message = "An error occurred while checking session limits"
                 });
+            }
+            finally
+            {
+                _sessionLimitCheckLock.Release();
             }
         }
 
@@ -2910,76 +2984,41 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
-        private async Task<(bool Success, string Message)> CallOCPPStopTransaction(string chargePointId, int connectorId)
+        /// <summary>
+        /// Stops a transaction via the OCPP server. Pass transactionId whenever it is known so a
+        /// stale transaction can never cause a different (running) transaction to be stopped.
+        /// </summary>
+        private Task<OcppStopResult> CallOCPPStopTransaction(string chargePointId, int connectorId, int? transactionId = null, int timeoutSeconds = 60)
         {
-            string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
-            string apiKeyConfig = _config.GetValue<string>("ApiKey");
+            return OcppStopTransactionClient.StopAsync(_config, _logger, chargePointId, connectorId, transactionId, timeoutSeconds);
+        }
 
-            if (string.IsNullOrEmpty(serverApiUrl))
-            {
-                _logger.LogWarning("CallOCPPStopTransaction: ServerApiUrl not configured");
-                return (false, "OCPP server URL not configured");
-            }
+        /// <summary>
+        /// Returns the first transaction started on the same charge point/connector after the given one,
+        /// or null if the given transaction is still the latest on its connector.
+        /// </summary>
+        private Task<Database.Transaction> FindSupersedingTransaction(Database.Transaction transaction)
+        {
+            return _dbContext.Transactions
+                .AsNoTracking()
+                .Where(t => t.ChargePointId == transaction.ChargePointId &&
+                            t.ConnectorId == transaction.ConnectorId &&
+                            t.TransactionId > transaction.TransactionId)
+                .OrderBy(t => t.TransactionId)
+                .FirstOrDefaultAsync();
+        }
 
-            try
-            {
-                using (var httpClient = new HttpClient())
-                {
-                    if (!serverApiUrl.EndsWith('/'))
-                    {
-                        serverApiUrl += "/";
-                    }
-                    Uri uri = new Uri(serverApiUrl);
-                    uri = new Uri(uri, $"StopTransaction/{Uri.EscapeDataString(chargePointId)}/{connectorId}");
-                    httpClient.Timeout = new TimeSpan(0, 0, 60);
-
-                    if (!string.IsNullOrWhiteSpace(apiKeyConfig))
-                    {
-                        httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKeyConfig);
-                    }
-
-                    HttpResponseMessage response = await httpClient.GetAsync(uri);
-
-                    if (response.StatusCode == HttpStatusCode.OK)
-                    {
-                        string jsonResult = await response.Content.ReadAsStringAsync();
-                        if (!string.IsNullOrEmpty(jsonResult))
-                        {
-                            dynamic jsonObject = JsonConvert.DeserializeObject(jsonResult);
-                            string status = jsonObject.status;
-
-                            _logger.LogInformation($"OCPP StopTransaction result: {status}");
-
-                            switch (status)
-                            {
-                                case "Accepted":
-                                    return (true, "Stop transaction accepted by charge point");
-                                case "Rejected":
-                                    return (false, "Stop transaction rejected by charge point");
-                                case "Timeout":
-                                    return (false, "Charge point did not respond in time");
-                                default:
-                                    return (false, $"Unknown status: {status}");
-                            }
-                        }
-                        return (false, "Empty response from OCPP server");
-                    }
-                    else if (response.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        return (false, "Charge point is offline");
-                    }
-                    else
-                    {
-                        _logger.LogError($"OCPP API returned status: {response.StatusCode}");
-                        return (false, "OCPP server returned error");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error calling OCPP StopTransaction API");
-                return (false, $"Error communicating with OCPP server: {ex.Message}");
-            }
+        /// <summary>
+        /// Closes a transaction record that the charger will never close on its own
+        /// (charger offline/rejecting, or a newer transaction already runs on the connector).
+        /// </summary>
+        private static void MarkTransactionStaleClosed(Database.Transaction transaction, double? lastKnownMeter, string reason)
+        {
+            transaction.StopTime = DateTime.UtcNow;
+            transaction.MeterStop = lastKnownMeter.HasValue && lastKnownMeter.Value >= transaction.MeterStart
+                ? lastKnownMeter.Value
+                : transaction.MeterStart;
+            transaction.StopReason = reason;
         }
 
         private async Task<(bool Success, string Message)> CallOCPPUnlockConnector(string chargePointId, int connectorId)

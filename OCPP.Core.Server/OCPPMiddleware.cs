@@ -747,7 +747,19 @@ namespace OCPP.Core.Server
                                             .OrderByDescending(t => t.TransactionId)
                                             .FirstOrDefault();
 
-                                        if (transaction != null && !transaction.StopTime.HasValue)
+                                        // Optional /API/StopTransaction/{cp}/{connector}/{transactionId}:
+                                        // only stop that exact transaction. Without this, a caller trying to stop
+                                        // an old stale transaction would stop whatever is currently running.
+                                        if (!string.IsNullOrEmpty(urlParam) && int.TryParse(urlParam, out int requestedTxId) &&
+                                            transaction != null && transaction.TransactionId != requestedTxId)
+                                        {
+                                            _logger.LogWarning("OCPPMiddleware StopTransaction => transaction {0} is not the latest on {1}/{2} (latest={3}) => not sent to charger",
+                                                requestedTxId, urlChargePointId, urlConnectorId, transaction.TransactionId);
+                                            context.Response.StatusCode = (int)HttpStatusCode.OK;
+                                            context.Response.ContentType = "application/json";
+                                            await context.Response.WriteAsync("{\"status\": \"Superseded\"}");
+                                        }
+                                        else if (transaction != null && !transaction.StopTime.HasValue)
                                         {
                                             // Send message to chargepoint
                                             if (status.Protocol == Protocol_OCPP21)

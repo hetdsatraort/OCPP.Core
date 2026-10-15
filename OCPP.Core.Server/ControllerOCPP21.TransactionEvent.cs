@@ -152,6 +152,8 @@ namespace OCPP.Core.Server
                             {
                                 Logger.LogInformation("StartTransaction => Meter='{0}' (kWh)", meterKWH);
 
+                                CloseSupersededTransactions(connectorId, transactionEventRequest.Timestamp.UtcDateTime, meterKWH, transactionEventRequest.TransactionInfo.TransactionId);
+
                                 Transaction transaction = new Transaction();
                                 transaction.Uid = transactionEventRequest.TransactionInfo.TransactionId;
                                 transaction.ChargePointId = ChargePointStatus?.Id;

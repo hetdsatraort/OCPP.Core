@@ -60,6 +60,8 @@ namespace OCPP.Core.Server
                 {
                     try
                     {
+                        CloseSupersededTransactions(startTransactionRequest.ConnectorId, startTransactionRequest.Timestamp.UtcDateTime, (double)startTransactionRequest.MeterStart / 1000);
+
                         Transaction transaction = new Transaction();
                         transaction.ChargePointId = ChargePointStatus?.Id;
                         transaction.ConnectorId = startTransactionRequest.ConnectorId;

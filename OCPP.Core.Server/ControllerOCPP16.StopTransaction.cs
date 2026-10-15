@@ -95,11 +95,21 @@ namespace OCPP.Core.Server
                 {
                     try
                     {
+                        // A transaction the backend closed itself (stale/superseded) may still get its real
+                        // StopTransaction later (queued while the charger was offline) => accept the real data
+                        bool closedBySystem = transaction != null && transaction.StopTime.HasValue &&
+                            TransactionStopReasons.IsSystemClosed(transaction.StopReason);
+
                         if (transaction != null &&
                             transaction.ChargePointId == ChargePointStatus.Id &&
-                            !transaction.StopTime.HasValue)
+                            (!transaction.StopTime.HasValue || closedBySystem))
                         {
-                            if (transaction.ConnectorId > 0)
+                            if (closedBySystem)
+                            {
+                                Logger.LogInformation("StopTransaction => Late stop for transaction {0} previously closed as '{1}' => overwriting with charger data", transaction.TransactionId, transaction.StopReason);
+                            }
+
+                            if (transaction.ConnectorId > 0 && !closedBySystem)
                             {
                                 // Update meter value in db connector status 
                                 UpdateConnectorStatus(transaction.ConnectorId, null, null, (double)stopTransactionRequest.MeterStop / 1000, stopTransactionRequest.Timestamp);
