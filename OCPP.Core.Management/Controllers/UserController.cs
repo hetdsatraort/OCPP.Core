@@ -599,8 +599,6 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
                 if (!User.IsInRole("Administrator"))
                 {
                     return Ok(new AuthResponseDto
@@ -990,20 +988,41 @@ namespace OCPP.Core.Management.Controllers
         /// Get list of all users (Admin endpoint)
         /// </summary>
         [HttpGet("user-list")]
-        [Authorize]
-        public async Task<IActionResult> GetUserList([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        [Authorize(Policy = "AdminOnly")]
+        public async Task<IActionResult> GetUserList(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] string search = null,
+            [FromQuery] string role = null)
         {
             try
             {
-                // Optional: Add role check for admin
-                var users = await _dbContext.Users
-                    .Where(u => u.Active == 1)
+                pageNumber = Math.Max(1, pageNumber);
+                pageSize = Math.Clamp(pageSize, 1, 100);
+
+                var query = _dbContext.Users.Where(u => u.Active == 1);
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    var term = search.Trim();
+                    query = query.Where(u =>
+                        (u.FirstName + " " + u.LastName).Contains(term) ||
+                        u.EMailID.Contains(term) ||
+                        u.PhoneNumber.Contains(term));
+                }
+
+                if (string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase))
+                    query = query.Where(u => u.UserRole == "Administrator" || u.UserRole == "Admin");
+                else if (string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
+                    query = query.Where(u => u.UserRole != "Administrator" && u.UserRole != "Admin");
+
+                var totalCount = await query.CountAsync();
+
+                var users = await query
                     .OrderByDescending(u => u.CreatedOn)
                     .Skip((pageNumber - 1) * pageSize)
                     .Take(pageSize)
                     .ToListAsync();
-
-                var totalCount = await _dbContext.Users.CountAsync(u => u.Active == 1);
 
                 return Ok(new UserListResponseDto
                 {
@@ -1028,7 +1047,7 @@ namespace OCPP.Core.Management.Controllers
         /// Get user details with wallet and vehicles
         /// </summary>
         [HttpGet("user-details/{userId}")]
-        [Authorize]
+        [Authorize(Policy = "AdminOnly")]
         public async Task<IActionResult> GetUserDetails(string userId)
         {
             try
@@ -1168,7 +1187,7 @@ namespace OCPP.Core.Management.Controllers
         /// Admin: Get wallet details for any user (paginated)
         /// </summary>
         [HttpGet("admin-wallet-details/{userId}")]
-        [Authorize]
+        [Authorize(Policy = "AdminOnly")]
         public async Task<IActionResult> AdminGetWalletDetails(string userId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
             try
