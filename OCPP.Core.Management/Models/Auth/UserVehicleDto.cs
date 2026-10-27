@@ -12,6 +12,16 @@ namespace OCPP.Core.Management.Models.Auth
         public int DefaultConfig { get; set; }
         public DateTime CreatedOn { get; set; }
         public DateTime UpdatedOn { get; set; }
+
+        // Resolved master-data names; only populated by endpoints that look them up.
+        public string ManufacturerName { get; set; }
+        public string ManufacturerLogoImage { get; set; }
+        public string ModelName { get; set; }
+        public string Variant { get; set; }
+        public string CarModelImage { get; set; }
+        public string BatteryType { get; set; }
+        public string BatteryCapacity { get; set; }
+        public string ChargerType { get; set; }
     }
 
     public class SessionVehicleResponseDto

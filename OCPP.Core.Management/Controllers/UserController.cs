@@ -10,6 +10,7 @@ using OCPP.Core.Database.EVCDTO;
 using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Services;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -627,6 +628,14 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                // Read-balance-then-insert must be atomic per user. The no-op UPDATE takes a
+                // write lock on the user's row (SQL Server row lock / SQLite write lock), so a
+                // concurrent adjustment for the same user waits here until we commit instead of
+                // reading the same previous balance. Disposing without commit rolls back.
+                await using var dbTransaction = await _dbContext.Database.BeginTransactionAsync();
+                await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE Users SET UpdatedOn = UpdatedOn WHERE RecId = {request.UserId}");
+
                 // Get current balance
                 var lastTransaction = await _dbContext.WalletTransactionLogs
                     .Where(w => w.UserId == request.UserId)
@@ -677,6 +686,7 @@ namespace OCPP.Core.Management.Controllers
 
                 _dbContext.WalletTransactionLogs.Add(walletLog);
                 await _dbContext.SaveChangesAsync();
+                await dbTransaction.CommitAsync();
 
                 _logger.LogInformation($"Wallet credits added for user: {request.UserId}, Amount: {request.Amount}");
 
@@ -1100,7 +1110,7 @@ namespace OCPP.Core.Management.Controllers
                     Message = "User details retrieved successfully",
                     User = MapToUserDto(user),
                     Wallet = wallet,
-                    Vehicles = vehicles.Select(MapToUserVehicleDto).ToList()
+                    Vehicles = await MapToUserVehicleDtosWithDetailsAsync(vehicles)
                 });
             }
             catch (Exception ex)
@@ -1233,6 +1243,132 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "Error retrieving admin wallet details for user {UserId}", userId);
                 return Ok(new AuthResponseDto { Success = false, Message = "An error occurred while retrieving wallet details" });
+            }
+        }
+
+        /// <summary>
+        /// Admin: Update another user's profile details (not role — see admin-update-role)
+        /// </summary>
+        [HttpPut("admin-update-user/{userId}")]
+        [Authorize(Policy = "AdminOnly")]
+        public async Task<IActionResult> AdminUpdateUser(string userId, [FromBody] AdminUpdateUserRequestDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    var firstError = ModelState.Values.SelectMany(v => v.Errors).FirstOrDefault()?.ErrorMessage;
+                    return Ok(new AuthResponseDto { Success = false, Message = firstError ?? "Invalid request data" });
+                }
+
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                    return Ok(new AuthResponseDto { Success = false, Message = "User not found" });
+
+                static string Clean(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+                var email = Clean(request.EMailID);
+                var phone = Clean(request.PhoneNumber);
+
+                if (email == null && phone == null)
+                    return Ok(new AuthResponseDto { Success = false, Message = "A user needs at least an email or a phone number" });
+
+                // Email and phone are login identifiers, so they must stay unique
+                if (email != null && await _dbContext.Users.AnyAsync(u => u.RecId != userId && u.Active == 1 && u.EMailID == email))
+                    return Ok(new AuthResponseDto { Success = false, Message = "Another user already uses this email" });
+                if (phone != null && await _dbContext.Users.AnyAsync(u => u.RecId != userId && u.Active == 1 && u.PhoneNumber == phone))
+                    return Ok(new AuthResponseDto { Success = false, Message = "Another user already uses this phone number" });
+
+                user.FirstName = Clean(request.FirstName);
+                user.LastName = Clean(request.LastName);
+                user.EMailID = email;
+                user.PhoneNumber = phone;
+                user.CountryCode = Clean(request.CountryCode);
+                user.AddressLine1 = Clean(request.AddressLine1);
+                user.AddressLine2 = Clean(request.AddressLine2);
+                user.AddressLine3 = Clean(request.AddressLine3);
+                user.State = Clean(request.State);
+                user.City = Clean(request.City);
+                user.PinCode = Clean(request.PinCode);
+                user.UpdatedOn = DateTime.UtcNow;
+
+                await _dbContext.SaveChangesAsync();
+
+                var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                _logger.LogInformation("Admin {AdminId} updated profile of user {UserId}", adminId, userId);
+
+                return Ok(new AuthResponseDto
+                {
+                    Success = true,
+                    Message = "User updated successfully",
+                    User = MapToUserDto(user)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating user {UserId}", userId);
+                return Ok(new AuthResponseDto { Success = false, Message = "An error occurred while updating the user" });
+            }
+        }
+
+        /// <summary>
+        /// Admin: Change a user's role. Revokes the user's refresh tokens so the new role
+        /// takes effect at their next sign-in instead of lingering in an old session.
+        /// </summary>
+        [HttpPut("admin-update-role/{userId}")]
+        [Authorize(Policy = "AdminOnly")]
+        public async Task<IActionResult> AdminUpdateRole(string userId, [FromBody] AdminUpdateRoleRequestDto request)
+        {
+            try
+            {
+                var allowedRoles = new[] { "User", "Administrator" };
+                var role = allowedRoles.FirstOrDefault(r => r.Equals(request?.Role?.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (role == null)
+                    return Ok(new AuthResponseDto { Success = false, Message = "Role must be 'User' or 'Administrator'" });
+
+                var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (userId == adminId)
+                    return Ok(new AuthResponseDto { Success = false, Message = "You cannot change your own role" });
+
+                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                    return Ok(new AuthResponseDto { Success = false, Message = "User not found" });
+
+                var previousRole = user.UserRole;
+                var isSameRole = role == "Administrator"
+                    ? previousRole == "Administrator" || previousRole == "Admin"
+                    : previousRole != "Administrator" && previousRole != "Admin";
+                if (isSameRole)
+                    return Ok(new AuthResponseDto { Success = false, Message = $"User is already {(role == "Administrator" ? "an Administrator" : "a User")}" });
+
+                user.UserRole = role;
+                user.UpdatedOn = DateTime.UtcNow;
+
+                var activeTokens = await _dbContext.RefreshTokens
+                    .Where(t => t.UserId == userId && t.RevokedAt == null)
+                    .ToListAsync();
+                foreach (var token in activeTokens)
+                {
+                    token.RevokedAt = DateTime.UtcNow;
+                    token.RevokedByIp = GetIpAddress();
+                }
+
+                await _dbContext.SaveChangesAsync();
+
+                _logger.LogWarning("Admin {AdminId} changed role of user {UserId} from {PreviousRole} to {NewRole}",
+                    adminId, userId, previousRole, role);
+
+                return Ok(new AuthResponseDto
+                {
+                    Success = true,
+                    Message = $"Role changed to {role}",
+                    User = MapToUserDto(user)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error changing role for user {UserId}", userId);
+                return Ok(new AuthResponseDto { Success = false, Message = "An error occurred while changing the role" });
             }
         }
 
@@ -1922,6 +2058,73 @@ namespace OCPP.Core.Management.Controllers
                 CreatedOn = vehicle.CreatedOn,
                 UpdatedOn = vehicle.UpdatedOn
             };
+        }
+
+        /// <summary>
+        /// Maps vehicles and resolves manufacturer / model / battery / charger names from
+        /// master data, using one query per master table rather than one per vehicle.
+        /// </summary>
+        private async Task<List<UserVehicleDto>> MapToUserVehicleDtosWithDetailsAsync(List<UserVehicle> vehicles)
+        {
+            if (vehicles.Count == 0)
+                return new List<UserVehicleDto>();
+
+            var manufacturerIds = vehicles.Select(v => v.EVManufacturerID).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var modelIds = vehicles.Select(v => v.CarModelID).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+
+            var manufacturers = await _dbContext.CarManufacturerMasters
+                .Where(m => manufacturerIds.Contains(m.RecId))
+                .ToDictionaryAsync(m => m.RecId);
+            var models = await _dbContext.EVModelMasters
+                .Where(m => modelIds.Contains(m.RecId))
+                .ToDictionaryAsync(m => m.RecId);
+
+            // Battery details live on the vehicle, falling back to the model's defaults
+            string BatteryTypeIdOf(UserVehicle v) =>
+                !string.IsNullOrEmpty(v.BatteryTypeId) ? v.BatteryTypeId
+                : models.TryGetValue(v.CarModelID ?? "", out var m) ? m.BatterytypeId : null;
+            string BatteryCapacityIdOf(UserVehicle v) =>
+                !string.IsNullOrEmpty(v.BatteryCapacityId) ? v.BatteryCapacityId
+                : models.TryGetValue(v.CarModelID ?? "", out var m) ? m.BatteryCapacityId : null;
+
+            var batteryTypeIds = vehicles.Select(BatteryTypeIdOf).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var batteryCapacityIds = vehicles.Select(BatteryCapacityIdOf).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var chargerTypeIds = vehicles.Select(v => v.ChargerTypeId).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+
+            var batteryTypes = await _dbContext.BatteryTypeMasters
+                .Where(b => batteryTypeIds.Contains(b.RecId))
+                .ToDictionaryAsync(b => b.RecId);
+            var batteryCapacities = await _dbContext.BatteryCapacityMasters
+                .Where(b => batteryCapacityIds.Contains(b.RecId))
+                .ToDictionaryAsync(b => b.RecId);
+            var chargerTypes = await _dbContext.ChargerTypeMasters
+                .Where(c => chargerTypeIds.Contains(c.RecId))
+                .ToDictionaryAsync(c => c.RecId);
+
+            return vehicles.Select(v =>
+            {
+                var dto = MapToUserVehicleDto(v);
+
+                if (manufacturers.TryGetValue(v.EVManufacturerID ?? "", out var manufacturer))
+                {
+                    dto.ManufacturerName = manufacturer.ManufacturerName;
+                    dto.ManufacturerLogoImage = manufacturer.ManufacturerLogoImage;
+                }
+
+                models.TryGetValue(v.CarModelID ?? "", out var model);
+                dto.ModelName = model?.ModelName;
+                dto.CarModelImage = model?.CarModelImage;
+                dto.Variant = !string.IsNullOrEmpty(v.CarModelVariant) ? v.CarModelVariant : model?.Variant;
+
+                if (batteryTypes.TryGetValue(BatteryTypeIdOf(v) ?? "", out var batteryType))
+                    dto.BatteryType = batteryType.BatteryType;
+                if (batteryCapacities.TryGetValue(BatteryCapacityIdOf(v) ?? "", out var capacity))
+                    dto.BatteryCapacity = $"{capacity.BatteryCapcacity} {capacity.BatteryCapcacityUnit}".Trim();
+                if (chargerTypes.TryGetValue(v.ChargerTypeId ?? "", out var chargerType))
+                    dto.ChargerType = chargerType.ChargerType;
+
+                return dto;
+            }).ToList();
         }
 
         private WalletTransactionDto MapToWalletTransactionDto(WalletTransactionLog transaction)
