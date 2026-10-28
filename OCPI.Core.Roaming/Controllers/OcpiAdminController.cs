@@ -747,16 +747,86 @@ namespace OCPI.Core.Roaming.Controllers
             return Ok(new { success = true, data = result });
         }
 
-        /// <summary>List sessions our users did at partner CPO stations (eMSP role).</summary>
+        /// <summary>List sessions our users did at partner CPO stations (eMSP role), paginated.</summary>
         [HttpGet("partner-sessions")]
-        public async Task<IActionResult> GetPartnerSessions()
+        public async Task<IActionResult> GetPartnerSessions([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
         {
-            var sessions = await _dbContext.OcpiPartnerSessions
+            page     = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
+            var query = _dbContext.OcpiPartnerSessions.AsNoTracking();
+            var total = await query.CountAsync();
+
+            var sessions = await query
                 .OrderByDescending(s => s.LastUpdated)
-                .Take(200)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .ToListAsync();
 
-            return Ok(new { success = true, data = sessions });
+            return Ok(new { success = true, data = sessions, total, page, pageSize });
+        }
+
+        /// <summary>
+        /// List sessions we hosted at OUR stations for partner eMSPs (CPO role), all statuses, paginated.
+        /// Unlike <see cref="GetActiveSessions"/> this includes completed/invalid history and the partner name.
+        /// </summary>
+        [HttpGet("hosted-sessions")]
+        public async Task<IActionResult> GetHostedSessions([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+        {
+            page     = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
+            var query = _dbContext.OcpiHostedSessions.AsNoTracking();
+            var total = await query.CountAsync();
+
+            var sessions = await query
+                .Include(s => s.PartnerCredential)
+                .OrderByDescending(s => s.StartDateTime)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var stationIds = sessions.Select(s => s.EvseUid).Where(x => x != null).Distinct().ToList();
+            var stations = await _dbContext.ChargingStations
+                .Where(st => stationIds.Contains(st.RecId))
+                .ToListAsync();
+
+            var hubIds = stations.Select(st => st.ChargingHubId).Distinct().ToList();
+            var hubs = await _dbContext.ChargingHubs
+                .Where(h => hubIds.Contains(h.RecId))
+                .ToListAsync();
+
+            var data = sessions.Select(s =>
+            {
+                var station = stations.FirstOrDefault(st => st.RecId == s.EvseUid);
+                var hub     = hubs.FirstOrDefault(h => h.RecId == station?.ChargingHubId);
+                var partner = s.PartnerCredential;
+
+                return new
+                {
+                    id               = s.Id,
+                    sessionId        = s.SessionId,
+                    transactionId    = s.TransactionId,
+                    status           = s.Status,
+                    startDateTime    = s.StartDateTime,
+                    endDateTime      = s.EndDateTime,
+                    locationName     = hub?.ChargingHubName,
+                    chargePointId    = s.ChargePointId,
+                    evseName         = station?.ChargingPointId,
+                    connectorNumber  = s.ConnectorNumber,
+                    tokenUid         = s.TokenUid,
+                    partnerName      = partner?.BusinessName,
+                    partnerCountryCode = partner?.CountryCode,
+                    partnerPartyId   = partner?.PartyId,
+                    totalEnergy      = s.TotalEnergy,
+                    totalCost        = s.TotalCost,
+                    currency         = s.Currency,
+                    stopReason       = s.StopReason,
+                    lastUpdated      = s.LastUpdated
+                };
+            });
+
+            return Ok(new { success = true, data, total, page, pageSize });
         }
 
         /// <summary>Get a single hosted session (CPO role) with live meter reading</summary>
