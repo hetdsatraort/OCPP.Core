@@ -1189,9 +1189,13 @@ namespace OCPP.Core.Management.Controllers
                             chargerDtos.Add(chargerDto);
                             chargerDtos = chargerDtos.OrderBy(c => c.CreatedOn).ToList();
 
-                            // Count available based on ChargerStatus or LastStatus from connector
-                            if (charger.ChargerStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true ||
-                                chargerDto.LastStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true)
+                            // Count available based on ChargerStatus or LastStatus from connector.
+                            // "Offline" is set by GunStatusSyncService when the charge point is disconnected
+                            // and must win over a stale connector LastStatus.
+                            bool isOffline = charger.ChargerStatus?.Equals("Offline", StringComparison.OrdinalIgnoreCase) == true;
+                            if (!isOffline &&
+                                (charger.ChargerStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true ||
+                                 chargerDto.LastStatus?.Equals("Available", StringComparison.OrdinalIgnoreCase) == true))
                             {
                                 stationAvailable++;
                             }
