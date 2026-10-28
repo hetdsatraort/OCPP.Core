@@ -67,7 +67,8 @@ namespace OCPP.Core.Management
             {
                 options.AddPolicy("AllowAngularApp", builder =>
                 {
-                    builder.WithOrigins("http://localhost:4200", "https://evc-admin.ortdemo.com", "https://admin.hycharge.in", "https://charge.hycharge.in", "https://app.hycharge.in")
+                    builder.WithOrigins("http://localhost:4200", "https://evc-admin.ortdemo.com", "https://admin.hycharge.in", 
+                        "https://charge.hycharge.in", "https://app.hycharge.in", "https://admin-delta.hycharge.in")
                            .AllowCredentials()
                            .AllowAnyHeader()
                            .AllowAnyMethod()
