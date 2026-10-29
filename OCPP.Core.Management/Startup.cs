@@ -175,7 +175,7 @@ namespace OCPP.Core.Management
             // Add Session Limit Monitor Background Service
             services.AddHostedService<SessionLimitMonitorService>();
 
-            // Sync all gun statuses every 10 minutes (configurable via GunStatus:CheckIntervalMinutes)
+            // Sync all gun statuses periodically (configurable via GunStatus:CheckIntervalSeconds)
             services.AddHostedService<GunStatusService>();
             
             services.AddSwaggerGen(c =>

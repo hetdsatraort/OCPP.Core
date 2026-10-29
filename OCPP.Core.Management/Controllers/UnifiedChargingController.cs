@@ -1163,7 +1163,7 @@ namespace OCPP.Core.Management.Controllers
         /// <summary>
         /// ChargingHubController's availability counts trust ChargingGuns.ChargerStatus /
         /// ConnectorStatus.LastStatus, which are only corrected by the periodic GunStatusService
-        /// background sync (every ~10 minutes per GunStatus:CheckIntervalMinutes) — a charge point
+        /// background sync (periodic, per GunStatus:CheckIntervalSeconds) — a charge point
         /// that just went offline keeps showing its last-known "Available" status until that next
         /// tick. This does a live connectivity check (deduped per ChargePointId, same
         /// ConnectionStatus endpoint GunStatusSyncService uses) and zeroes out availability for any

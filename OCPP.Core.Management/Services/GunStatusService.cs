@@ -22,11 +22,11 @@ namespace OCPP.Core.Management.Services
             _logger = new PausableLogger<GunStatusService>(logger, configuration, "GunStatus:PauseLogging");
             _scopeFactory = scopeFactory;
 
-            var intervalMinutes = configuration.GetValue<int>("GunStatus:CheckIntervalMinutes", 1);
-            _checkInterval = TimeSpan.FromMinutes(intervalMinutes);
+            var intervalSeconds = configuration.GetValue<int>("GunStatus:CheckIntervalSeconds", 60);
+            _checkInterval = TimeSpan.FromSeconds(Math.Max(1, intervalSeconds));
 
             _logger.LogInformation(
-                "GunStatusService initialized — will sync every {Interval} minute(s)", intervalMinutes);
+                "GunStatusService initialized — will sync every {Interval} second(s)", intervalSeconds);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)

@@ -32,7 +32,7 @@ namespace OCPP.Core.Management.Services
         {
             _dbContext = dbContext;
             _config = config;
-            _logger = logger;
+            _logger = new PausableLogger<GunStatusSyncService>(logger, config, "GunStatus:PauseLogging");
             _httpClientFactory = httpClientFactory;
         }
 
