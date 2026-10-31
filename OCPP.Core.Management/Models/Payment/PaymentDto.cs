@@ -90,7 +90,7 @@ namespace OCPP.Core.Management.Models.Payment
         public bool AlreadyProcessed { get; set; }
     }
 
-    public class CreatePaymentLinkRequestDto
+    public class WalletTopUpRequestDto
     {
         public decimal Amount { get; set; }
         public string Currency { get; set; }
@@ -98,11 +98,14 @@ namespace OCPP.Core.Management.Models.Payment
         public string CallbackUrl { get; set; }
     }
 
-    /// <summary>Payment link as returned by the payment gateway</summary>
-    public class PaymentLinkDto
+    /// <summary>Hosted wallet top-up (Express payment link or Premier checkout session) as returned by the payment gateway</summary>
+    public class WalletTopUpDto
     {
         public string Id { get; set; }
+        /// <summary>Express Checkout: Razorpay payment link URL</summary>
         public string ShortUrl { get; set; }
+        /// <summary>Premier Checkout: branded checkout page URL</summary>
+        public string CheckoutUrl { get; set; }
         public string Status { get; set; }
         public decimal Amount { get; set; }
         public string Currency { get; set; }
@@ -113,14 +116,14 @@ namespace OCPP.Core.Management.Models.Payment
         public DateTime? PaidAt { get; set; }
     }
 
-    public class PaymentLinkStatusDto
+    public class WalletTopUpStatusDto
     {
         public string Id { get; set; }
-        /// <summary>Razorpay link status: created, paid, expired, cancelled</summary>
+        /// <summary>created, paid, expired, cancelled (or partially_paid for links)</summary>
         public string Status { get; set; }
         public decimal Amount { get; set; }
         public string Currency { get; set; }
-        /// <summary>True once the wallet has been credited for this link</summary>
+        /// <summary>True once the wallet has been credited for this top-up</summary>
         public bool Credited { get; set; }
         public decimal? NewBalance { get; set; }
     }

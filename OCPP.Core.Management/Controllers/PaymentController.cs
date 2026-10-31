@@ -696,6 +696,17 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
+        /// Events the payment gateway forwards to internal-webhook, and how each is recorded
+        /// </summary>
+        private static readonly Dictionary<string, (string HistoryMethod, string ValidationMethod, string Description)> InternalWebhookEvents = new()
+        {
+            ["payment.captured"] = ("Razorpay-LateCapture", null, "late capture via webhook"),
+            ["payment.authorized"] = ("Razorpay-LateCapture", null, "late capture via webhook"),
+            ["payment_link.paid"] = ("Razorpay-PaymentLink", "ExpressCheckout", "Express Checkout payment link"),
+            ["premier_checkout.paid"] = ("Razorpay-PremierCheckout", "PremierCheckout", "Premier Checkout"),
+        };
+
+        /// <summary>
         /// Internal webhook endpoint: called by the payment gateway (node-ort-rzp) for late-authorized payments.
         /// Secured via a shared secret in the X-Internal-Webhook-Secret header.
         /// </summary>
@@ -720,7 +731,7 @@ namespace OCPP.Core.Management.Controllers
                     return Unauthorized(new { error = "Invalid secret" });
                 }
 
-                if (payload == null || (payload.Event != "payment.captured" && payload.Event != "payment.authorized" && payload.Event != "payment_link.paid"))
+                if (payload == null || !InternalWebhookEvents.ContainsKey(payload.Event ?? string.Empty))
                     return Ok(new { status = "ignored", reason = "event not handled" });
 
                 if (string.IsNullOrEmpty(payload.OrderId) || string.IsNullOrEmpty(payload.UserId))
@@ -788,7 +799,7 @@ namespace OCPP.Core.Management.Controllers
                     TransactionType = "Credit_Add",
                     UserId = payload.UserId,
                     SessionDuration = TimeSpan.Zero,
-                    PaymentMethod = payload.Event == "payment_link.paid" ? "Razorpay-PaymentLink" : "Razorpay-LateCapture",
+                    PaymentMethod = InternalWebhookEvents[payload.Event].HistoryMethod,
                     OrderId = payload.OrderId,
                     PaymentId = payload.PaymentId,
                     AdditionalInfo1 = $"Amount: {payload.Amount}",
@@ -809,9 +820,7 @@ namespace OCPP.Core.Management.Controllers
                     TransactionType = "Credit",
                     PaymentRecId = paymentHistoryId,
                     AdditionalInfo1 = $"OrderId: {payload.OrderId}",
-                    AdditionalInfo2 = payload.Event == "payment_link.paid"
-                        ? $"PaymentId: {payload.PaymentId} (payment link)"
-                        : $"PaymentId: {payload.PaymentId} (late capture via webhook)",
+                    AdditionalInfo2 = $"PaymentId: {payload.PaymentId} ({InternalWebhookEvents[payload.Event].Description})",
                     AdditionalInfo3 = $"ValidationId: {validation.RecId}",
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
@@ -828,10 +837,8 @@ namespace OCPP.Core.Management.Controllers
                 validation.ProcessedAt = DateTime.UtcNow;
                 validation.PaymentHistoryId = paymentHistoryId;
                 validation.WalletTransactionId = walletTransactionId;
-                validation.PaymentMethod = payload.Event == "payment_link.paid" ? "PaymentLink" : validation.PaymentMethod;
-                validation.VerificationMessage = payload.Event == "payment_link.paid"
-                    ? "Processed via payment link (payment_link.paid)"
-                    : $"Processed via late-capture webhook ({payload.Event})";
+                validation.PaymentMethod = InternalWebhookEvents[payload.Event].ValidationMethod ?? validation.PaymentMethod;
+                validation.VerificationMessage = $"Processed via {InternalWebhookEvents[payload.Event].Description} ({payload.Event})";
                 validation.UpdatedOn = DateTime.UtcNow;
 
                 // Update user credit balance
@@ -854,12 +861,51 @@ namespace OCPP.Core.Management.Controllers
         }
 
         /// <summary>
-        /// Create a Razorpay-hosted payment link for a wallet top-up.
+        /// Express Checkout: create a Razorpay-hosted payment link for a wallet top-up.
         /// The wallet is credited by the payment gateway via internal-webhook once paid.
         /// </summary>
         [HttpPost("create-payment-link")]
         [Authorize]
-        public async Task<IActionResult> CreatePaymentLink([FromBody] CreatePaymentLinkRequestDto request)
+        public Task<IActionResult> CreatePaymentLink([FromBody] WalletTopUpRequestDto request)
+        {
+            return CreateWalletTopUp(request, "create-payment-link", "Payment link");
+        }
+
+        /// <summary>
+        /// Express Checkout: payment link status for the current user, including whether the wallet has been credited
+        /// </summary>
+        [HttpGet("payment-link/{paymentLinkId}")]
+        [Authorize]
+        public Task<IActionResult> GetPaymentLinkStatus(string paymentLinkId)
+        {
+            return GetWalletTopUpStatus(paymentLinkId, "api/payment-links", "Payment link");
+        }
+
+        /// <summary>
+        /// Premier Checkout: create a session for the HyCharge-branded checkout page hosted by the payment gateway.
+        /// The wallet is credited by the payment gateway via internal-webhook once paid.
+        /// </summary>
+        [HttpPost("create-checkout-session")]
+        [Authorize]
+        public Task<IActionResult> CreateCheckoutSession([FromBody] WalletTopUpRequestDto request)
+        {
+            return CreateWalletTopUp(request, "create-checkout-session", "Checkout session");
+        }
+
+        /// <summary>
+        /// Premier Checkout: checkout session status for the current user, including whether the wallet has been credited
+        /// </summary>
+        [HttpGet("checkout-session/{checkoutSessionId}")]
+        [Authorize]
+        public Task<IActionResult> GetCheckoutSessionStatus(string checkoutSessionId)
+        {
+            return GetWalletTopUpStatus(checkoutSessionId, "api/checkout-sessions", "Checkout session");
+        }
+
+        /// <summary>
+        /// Create a hosted wallet top-up (payment link or checkout session) on the payment gateway for the current user
+        /// </summary>
+        private async Task<IActionResult> CreateWalletTopUp(WalletTopUpRequestDto request, string gatewayPath, string label)
         {
             try
             {
@@ -922,48 +968,46 @@ namespace OCPP.Core.Management.Controllers
                     });
 
                     var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                    var response = await httpClient.PostAsync($"{_paymentGatewayUrl}/create-payment-link", content);
+                    var response = await httpClient.PostAsync($"{_paymentGatewayUrl}/{gatewayPath}", content);
                     var responseContent = await response.Content.ReadAsStringAsync();
 
                     if (response.IsSuccessStatusCode)
                     {
-                        var link = JsonConvert.DeserializeObject<PaymentLinkDto>(responseContent);
+                        var topUp = JsonConvert.DeserializeObject<WalletTopUpDto>(responseContent);
 
-                        _logger.LogInformation($"Payment link created: {link.Id}, UserId: {user.RecId}, Amount: ₹{request.Amount}");
+                        _logger.LogInformation($"{label} created: {topUp.Id}, UserId: {user.RecId}, Amount: ₹{request.Amount}");
 
                         return Ok(new PaymentResponseDto
                         {
                             Success = true,
-                            Message = "Payment link created successfully",
-                            Data = link
+                            Message = $"{label} created successfully",
+                            Data = topUp
                         });
                     }
 
-                    _logger.LogError($"Failed to create payment link. Status: {response.StatusCode}, Response: {responseContent}");
+                    _logger.LogError($"Failed to create {label.ToLower()}. Status: {response.StatusCode}, Response: {responseContent}");
                     return StatusCode((int)response.StatusCode, new PaymentResponseDto
                     {
                         Success = false,
-                        Message = "Failed to create payment link"
+                        Message = $"Failed to create {label.ToLower()}"
                     });
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating payment link");
+                _logger.LogError(ex, $"Error creating {label.ToLower()}");
                 return StatusCode(500, new PaymentResponseDto
                 {
                     Success = false,
-                    Message = "An error occurred while creating payment link"
+                    Message = $"An error occurred while creating {label.ToLower()}"
                 });
             }
         }
 
         /// <summary>
-        /// Get payment link status for the current user, including whether the wallet has been credited
+        /// Status of a hosted wallet top-up owned by the current user, including whether the wallet has been credited
         /// </summary>
-        [HttpGet("payment-link/{paymentLinkId}")]
-        [Authorize]
-        public async Task<IActionResult> GetPaymentLinkStatus(string paymentLinkId)
+        private async Task<IActionResult> GetWalletTopUpStatus(string topUpId, string gatewayPath, string label)
         {
             try
             {
@@ -976,12 +1020,12 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
-                if (string.IsNullOrEmpty(paymentLinkId))
+                if (string.IsNullOrEmpty(topUpId))
                 {
                     return BadRequest(new PaymentResponseDto
                     {
                         Success = false,
-                        Message = "Payment link ID is required"
+                        Message = $"{label} ID is required"
                     });
                 }
 
@@ -989,50 +1033,50 @@ namespace OCPP.Core.Management.Controllers
 
                 using (var httpClient = new HttpClient())
                 {
-                    var response = await httpClient.GetAsync($"{_paymentGatewayUrl}/api/payment-links/{Uri.EscapeDataString(paymentLinkId)}");
+                    var response = await httpClient.GetAsync($"{_paymentGatewayUrl}/{gatewayPath}/{Uri.EscapeDataString(topUpId)}");
 
                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         return NotFound(new PaymentResponseDto
                         {
                             Success = false,
-                            Message = "Payment link not found"
+                            Message = $"{label} not found"
                         });
                     }
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        _logger.LogError($"Failed to get payment link {paymentLinkId}. Status: {response.StatusCode}");
+                        _logger.LogError($"Failed to get {label.ToLower()} {topUpId}. Status: {response.StatusCode}");
                         return StatusCode((int)response.StatusCode, new PaymentResponseDto
                         {
                             Success = false,
-                            Message = "Failed to retrieve payment link"
+                            Message = $"Failed to retrieve {label.ToLower()}"
                         });
                     }
 
-                    var link = JsonConvert.DeserializeObject<PaymentLinkDto>(await response.Content.ReadAsStringAsync());
+                    var topUp = JsonConvert.DeserializeObject<WalletTopUpDto>(await response.Content.ReadAsStringAsync());
 
-                    if (link.UserId != userId)
+                    if (topUp.UserId != userId)
                     {
                         return NotFound(new PaymentResponseDto
                         {
                             Success = false,
-                            Message = "Payment link not found"
+                            Message = $"{label} not found"
                         });
                     }
 
-                    var status = new PaymentLinkStatusDto
+                    var status = new WalletTopUpStatusDto
                     {
-                        Id = link.Id,
-                        Status = link.Status,
-                        Amount = link.Amount,
-                        Currency = link.Currency
+                        Id = topUp.Id,
+                        Status = topUp.Status,
+                        Amount = topUp.Amount,
+                        Currency = topUp.Currency
                     };
 
-                    if (!string.IsNullOrEmpty(link.OrderId))
+                    if (!string.IsNullOrEmpty(topUp.OrderId))
                     {
                         var validation = await _dbContext.PaymentValidations
-                            .FirstOrDefaultAsync(pv => pv.OrderId == link.OrderId && pv.Status == "Processed");
+                            .FirstOrDefaultAsync(pv => pv.OrderId == topUp.OrderId && pv.Status == "Processed");
                         if (validation != null)
                         {
                             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId);
@@ -1045,18 +1089,18 @@ namespace OCPP.Core.Management.Controllers
                     return Ok(new PaymentResponseDto
                     {
                         Success = true,
-                        Message = status.Credited ? "Credits added to wallet" : $"Payment link is {link.Status}",
+                        Message = status.Credited ? "Credits added to wallet" : $"{label} is {topUp.Status}",
                         Data = status
                     });
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Error getting payment link status for {paymentLinkId}");
+                _logger.LogError(ex, $"Error getting {label.ToLower()} status for {topUpId}");
                 return StatusCode(500, new PaymentResponseDto
                 {
                     Success = false,
-                    Message = "An error occurred while retrieving payment link status"
+                    Message = $"An error occurred while retrieving {label.ToLower()} status"
                 });
             }
         }
