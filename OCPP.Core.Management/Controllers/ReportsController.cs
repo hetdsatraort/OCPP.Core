@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using OCPP.Core.Database.EVCDTO;
+using OCPP.Core.Database.OCPIDTO;
 using OCPP.Core.Management.Models.Reports;
 using System;
 using System.Collections.Generic;
@@ -22,6 +23,9 @@ namespace OCPP.Core.Management.Controllers
     {
         private readonly OCPPCoreContext _dbContext;
         private readonly ILogger<ReportsController> _logger;
+
+        /// <summary>A completed session that delivered less than this is counted as a zero-energy session.</summary>
+        private const double ZeroEnergyThresholdKwh = 0.01;
 
         public ReportsController(OCPPCoreContext dbContext, ILogger<ReportsController> logger)
         {
@@ -205,17 +209,23 @@ namespace OCPP.Core.Management.Controllers
                     .Select(g =>
                     {
                         double energy = 0, revenue = 0, durationMin = 0;
-                        int completed = 0;
+                        int completed = 0, zeroEnergy = 0;
 
                         foreach (var s in g)
                         {
-                            if (double.TryParse(s.EnergyTransmitted, out double e)) energy  += e;
+                            double.TryParse(s.EnergyTransmitted, out double e);
+                            energy += e;
                             if (double.TryParse(s.ChargingTotalFee,  out double r)) revenue += r;
 
                             bool isActive = s.EndTime == DateTime.MinValue;
                             var dur = isActive ? DateTime.UtcNow - s.StartTime : s.EndTime - s.StartTime;
                             if (dur.TotalSeconds > 0) durationMin += dur.TotalMinutes;
-                            if (!isActive) completed++;
+                            if (!isActive)
+                            {
+                                completed++;
+                                // Active sessions are excluded — they may simply not have delivered energy yet
+                                if (e < ZeroEnergyThresholdKwh) zeroEnergy++;
+                            }
                         }
 
                         int cnt       = g.Count();
@@ -232,7 +242,8 @@ namespace OCPP.Core.Management.Controllers
                             TotalRevenueInr    = Math.Round(revenue, 2),
                             AvgDurationMinutes = cnt > 0 ? Math.Round(durationMin / cnt, 1) : 0,
                             AvgEnergyKwh       = cnt > 0 ? Math.Round(energy / cnt, 3) : 0,
-                            AvgChargingSpeedKw = Math.Round(speed, 2)
+                            AvgChargingSpeedKw = Math.Round(speed, 2),
+                            ZeroEnergySessions = zeroEnergy
                         };
                     })
                     .ToList();
@@ -704,15 +715,7 @@ namespace OCPP.Core.Management.Controllers
                 var lookups  = await LoadEnrichmentLookupsAsync(sessions);
                 var rows     = sessions.Select(s => BuildReportRow(s, lookups, tzOffsetMinutes));
 
-                // UTF-8 BOM so Excel opens it correctly
-                var preamble = Encoding.UTF8.GetPreamble();
-                var csv      = Encoding.UTF8.GetBytes(BuildCsvContent(rows));
-                var bytes    = new byte[preamble.Length + csv.Length];
-                Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length);
-                Buffer.BlockCopy(csv, 0, bytes, preamble.Length, csv.Length);
-
-                string filename = $"charging-sessions-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv";
-                return File(bytes, "text/csv", filename);
+                return CsvFile(BuildCsvContent(rows), $"charging-sessions-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
             }
             catch (UnauthorizedAccessException)
             {
@@ -722,6 +725,198 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "Error exporting sessions to CSV");
                 return StatusCode(500, new ReportResponseDto { Success = false, Message = "Error exporting sessions to CSV" });
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 9. PARTNER SESSIONS  GET /api/Reports/partner-sessions
+        // ─────────────────────────────────────────────────────────────────────
+        /// <summary>
+        /// Sessions our app users ran at partner CPO stations via OCPI roaming (eMSP role).
+        /// Non-admins only see their own sessions.
+        /// </summary>
+        [HttpGet("partner-sessions")]
+        public async Task<IActionResult> GetPartnerSessions(
+            [FromQuery] string userId = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
+            [FromQuery] string status = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            [FromQuery] int tzOffsetMinutes = 330)
+        {
+            try
+            {
+                EnforceUserScope(ref userId);
+
+                var query = BuildPartnerSessionQuery(userId, from, to, status, tzOffsetMinutes);
+
+                var stats = await query
+                    .Select(s => new { s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId })
+                    .ToListAsync();
+                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)));
+
+                var sessions = await query
+                    .OrderByDescending(s => s.StartDateTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+                var rows = await BuildPartnerRowsAsync(sessions, tzOffsetMinutes);
+
+                return Ok(new ReportResponseDto
+                {
+                    Success = true,
+                    Message = "Partner sessions retrieved successfully",
+                    Data = new
+                    {
+                        TotalRecords = summary.TotalSessions,
+                        Page         = page,
+                        PageSize     = pageSize,
+                        TotalPages   = (int)Math.Ceiling((double)summary.TotalSessions / pageSize),
+                        Summary      = summary,
+                        Sessions     = rows
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving partner sessions report");
+                return StatusCode(500, new ReportResponseDto { Success = false, Message = "Error retrieving partner sessions report" });
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 10. HOSTED SESSIONS  GET /api/Reports/hosted-sessions  [Admin only]
+        // ─────────────────────────────────────────────────────────────────────
+        /// <summary>
+        /// Sessions partner eMSP drivers ran at OUR stations via OCPI roaming (CPO role).
+        /// Honours the hub / station / gun filters.
+        /// </summary>
+        [HttpGet("hosted-sessions")]
+        public async Task<IActionResult> GetHostedSessions(
+            [FromQuery] string hubId = null,
+            [FromQuery] string stationId = null,
+            [FromQuery] string gunId = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
+            [FromQuery] string status = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            [FromQuery] int tzOffsetMinutes = 330)
+        {
+            try
+            {
+                EnforceAdminOnly();
+
+                var query = BuildHostedSessionQuery(hubId, stationId, gunId, from, to, status, tzOffsetMinutes);
+
+                var stats = await query
+                    .Select(s => new { s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId })
+                    .ToListAsync();
+                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)));
+
+                var sessions = await query
+                    .OrderByDescending(s => s.StartDateTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+                var rows = await BuildHostedRowsAsync(sessions, tzOffsetMinutes);
+
+                return Ok(new ReportResponseDto
+                {
+                    Success = true,
+                    Message = "Hosted sessions retrieved successfully",
+                    Data = new
+                    {
+                        TotalRecords = summary.TotalSessions,
+                        Page         = page,
+                        PageSize     = pageSize,
+                        TotalPages   = (int)Math.Ceiling((double)summary.TotalSessions / pageSize),
+                        Summary      = summary,
+                        Sessions     = rows
+                    }
+                });
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving hosted sessions report");
+                return StatusCode(500, new ReportResponseDto { Success = false, Message = "Error retrieving hosted sessions report" });
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 11. PARTNER SESSIONS CSV  GET /api/Reports/export/partner-sessions
+        // ─────────────────────────────────────────────────────────────────────
+        /// <summary>
+        /// Download all filtered partner (eMSP roaming) sessions as CSV. Non-admins only get their own.
+        /// </summary>
+        [HttpGet("export/partner-sessions")]
+        public async Task<IActionResult> ExportPartnerSessionsCsv(
+            [FromQuery] string userId = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
+            [FromQuery] string status = null,
+            [FromQuery] int tzOffsetMinutes = 330)
+        {
+            try
+            {
+                EnforceUserScope(ref userId);
+
+                var sessions = await BuildPartnerSessionQuery(userId, from, to, status, tzOffsetMinutes)
+                    .OrderByDescending(s => s.StartDateTime)
+                    .ToListAsync();
+                var rows = await BuildPartnerRowsAsync(sessions, tzOffsetMinutes);
+
+                return CsvFile(BuildRoamingCsvContent(rows, isPartner: true),
+                    $"partner-sessions-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error exporting partner sessions to CSV");
+                return StatusCode(500, new ReportResponseDto { Success = false, Message = "Error exporting partner sessions to CSV" });
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 12. HOSTED SESSIONS CSV  GET /api/Reports/export/hosted-sessions  [Admin only]
+        // ─────────────────────────────────────────────────────────────────────
+        /// <summary>
+        /// Download all filtered hosted (CPO roaming) sessions as CSV.
+        /// </summary>
+        [HttpGet("export/hosted-sessions")]
+        public async Task<IActionResult> ExportHostedSessionsCsv(
+            [FromQuery] string hubId = null,
+            [FromQuery] string stationId = null,
+            [FromQuery] string gunId = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
+            [FromQuery] string status = null,
+            [FromQuery] int tzOffsetMinutes = 330)
+        {
+            try
+            {
+                EnforceAdminOnly();
+
+                var sessions = await BuildHostedSessionQuery(hubId, stationId, gunId, from, to, status, tzOffsetMinutes)
+                    .OrderByDescending(s => s.StartDateTime)
+                    .ToListAsync();
+                var rows = await BuildHostedRowsAsync(sessions, tzOffsetMinutes);
+
+                return CsvFile(BuildRoamingCsvContent(rows, isPartner: false),
+                    $"hosted-sessions-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error exporting hosted sessions to CSV");
+                return StatusCode(500, new ReportResponseDto { Success = false, Message = "Error exporting hosted sessions to CSV" });
             }
         }
 
@@ -946,6 +1141,205 @@ namespace OCPP.Core.Management.Controllers
             avgSoCGain = socSessions > 0 ? totalSoCGain / socSessions : 0;
         }
 
+        private static bool IsStatus(string status, string expected)
+            => !string.IsNullOrEmpty(status) && status.Equals(expected, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Filtered partner (eMSP roaming) sessions. from/to are local dates, as for the other reports.</summary>
+        private IQueryable<OcpiPartnerSession> BuildPartnerSessionQuery(
+            string userId, DateTime? from, DateTime? to, string status, int tzOffsetMinutes)
+        {
+            var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+            var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+
+            var query = _dbContext.OcpiPartnerSessions.AsQueryable();
+            if (!string.IsNullOrEmpty(userId))      query = query.Where(s => s.UserId == userId);
+            if (fromUtc.HasValue)                   query = query.Where(s => s.StartDateTime >= fromUtc.Value);
+            if (toUtcExclusive.HasValue)            query = query.Where(s => s.StartDateTime < toUtcExclusive.Value);
+            if (IsStatus(status, "active"))         query = query.Where(s => s.Status == "ACTIVE");
+            else if (IsStatus(status, "completed")) query = query.Where(s => s.Status != "ACTIVE");
+            return query;
+        }
+
+        /// <summary>Filtered hosted (CPO roaming) sessions. Hub / station / gun map to LocationId / EvseUid / ConnectorId.</summary>
+        private IQueryable<OcpiHostedSession> BuildHostedSessionQuery(
+            string hubId, string stationId, string gunId, DateTime? from, DateTime? to, string status, int tzOffsetMinutes)
+        {
+            var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
+            var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
+
+            var query = _dbContext.OcpiHostedSessions.AsQueryable();
+            if (!string.IsNullOrEmpty(hubId))       query = query.Where(s => s.LocationId == hubId);
+            if (!string.IsNullOrEmpty(stationId))   query = query.Where(s => s.EvseUid == stationId);
+            if (!string.IsNullOrEmpty(gunId))       query = query.Where(s => s.ConnectorId == gunId);
+            if (fromUtc.HasValue)                   query = query.Where(s => s.StartDateTime >= fromUtc.Value);
+            if (toUtcExclusive.HasValue)            query = query.Where(s => s.StartDateTime < toUtcExclusive.Value);
+            if (IsStatus(status, "active"))         query = query.Where(s => s.Status == "ACTIVE");
+            else if (IsStatus(status, "completed")) query = query.Where(s => s.Status != "ACTIVE");
+            return query;
+        }
+
+        /// <summary>Enriches partner sessions with partner, partner location and app user (bulk lookups, no N+1).</summary>
+        private async Task<List<RoamingSessionRowDto>> BuildPartnerRowsAsync(List<OcpiPartnerSession> sessions, int tzOffsetMinutes)
+        {
+            var partners = await _dbContext.OcpiPartnerCredentials.ToListAsync();
+
+            var locationIds = sessions.Select(s => s.LocationId).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var locations   = (await _dbContext.OcpiPartnerLocations
+                                    .Where(l => locationIds.Contains(l.LocationId))
+                                    .ToListAsync())
+                              .GroupBy(l => (l.CountryCode, l.PartyId, l.LocationId))
+                              .ToDictionary(g => g.Key, g => g.First());
+
+            var userIds = sessions.Select(s => s.UserId).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var users   = await _dbContext.Users
+                              .Where(u => userIds.Contains(u.RecId))
+                              .ToDictionaryAsync(u => u.RecId);
+
+            return sessions.Select(s =>
+            {
+                var partner = FindPartner(partners, s.PartnerCredentialId, s.CountryCode, s.PartyId);
+                locations.TryGetValue((s.CountryCode, s.PartyId, s.LocationId), out var loc);
+                Users user = null;
+                if (!string.IsNullOrEmpty(s.UserId)) users.TryGetValue(s.UserId, out user);
+
+                var row = BuildRoamingRow(s.Id, s.SessionId, s.Status, s.StartDateTime, s.EndDateTime,
+                    s.TotalEnergy, s.TotalCost, s.StartingStateOfCharge, s.CurrentStateOfCharge, tzOffsetMinutes);
+
+                row.PartnerCredentialId = partner?.Id ?? s.PartnerCredentialId;
+                row.PartnerName         = partner?.BusinessName;
+                row.PartnerParty        = $"{s.CountryCode}*{s.PartyId}";
+                row.LocationId          = s.LocationId;
+                row.LocationName        = loc?.Name;
+                row.LocationCity        = loc?.City;
+                row.ChargePointId       = s.EvseUid;
+                row.ConnectorId         = s.ConnectorId;
+                row.UserId              = s.UserId;
+                row.UserName            = user != null ? $"{user.FirstName} {user.LastName}".Trim() : null;
+                row.UserPhone           = user?.PhoneNumber;
+                row.TokenUid            = s.TokenUid;
+                row.TotalPayable        = s.TotalPayable.HasValue ? Math.Round((double)s.TotalPayable.Value, 2) : (double?)null;
+                row.Currency            = s.Currency;
+                row.StopReason          = s.StopReason;
+                return row;
+            }).ToList();
+        }
+
+        /// <summary>Enriches hosted sessions with partner, our hub and our gun (bulk lookups, no N+1).</summary>
+        private async Task<List<RoamingSessionRowDto>> BuildHostedRowsAsync(List<OcpiHostedSession> sessions, int tzOffsetMinutes)
+        {
+            var partners = await _dbContext.OcpiPartnerCredentials.ToListAsync();
+
+            var hubIds = sessions.Select(s => s.LocationId).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var hubs   = await _dbContext.ChargingHubs
+                             .Where(h => hubIds.Contains(h.RecId))
+                             .ToDictionaryAsync(h => h.RecId);
+
+            var gunIds = sessions.Select(s => s.ConnectorId).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+            var guns   = await _dbContext.ChargingGuns
+                             .Where(g => gunIds.Contains(g.RecId))
+                             .ToDictionaryAsync(g => g.RecId);
+
+            return sessions.Select(s =>
+            {
+                var partner = FindPartner(partners, s.PartnerCredentialId, null, null);
+                hubs.TryGetValue(s.LocationId ?? "", out var hub);
+                guns.TryGetValue(s.ConnectorId ?? "", out var gun);
+
+                var row = BuildRoamingRow(s.Id, s.SessionId, s.Status, s.StartDateTime, s.EndDateTime,
+                    s.TotalEnergy, s.TotalCost, s.StartingStateOfCharge, s.CurrentStateOfCharge, tzOffsetMinutes);
+
+                row.PartnerCredentialId = s.PartnerCredentialId;
+                row.PartnerName         = partner?.BusinessName ?? (s.PartnerCredentialId.HasValue ? null : "Local (admin)");
+                row.PartnerParty        = partner != null ? $"{partner.CountryCode}*{partner.PartyId}" : null;
+                row.LocationId          = s.LocationId;
+                row.LocationName        = hub?.ChargingHubName;
+                row.LocationCity        = hub?.City;
+                row.ChargePointId       = s.ChargePointId;
+                row.ConnectorId         = gun?.ConnectorId ?? s.ConnectorNumber.ToString();
+                row.TokenUid            = s.TokenUid;
+                row.Currency            = s.Currency;
+                row.StopReason          = s.StopReason;
+                return row;
+            }).ToList();
+        }
+
+        /// <summary>Resolves the partner by credential id, falling back to country code + party id.</summary>
+        private static OcpiPartnerCredential FindPartner(
+            List<OcpiPartnerCredential> partners, int? credentialId, string countryCode, string partyId)
+        {
+            if (credentialId.HasValue)
+            {
+                var byId = partners.FirstOrDefault(p => p.Id == credentialId.Value);
+                if (byId != null) return byId;
+            }
+            if (string.IsNullOrEmpty(countryCode) || string.IsNullOrEmpty(partyId)) return null;
+            return partners
+                .Where(p => p.CountryCode == countryCode && p.PartyId == partyId)
+                .OrderByDescending(p => p.IsActive)
+                .FirstOrDefault();
+        }
+
+        /// <summary>Common fields of a partner / hosted OCPI session row.</summary>
+        private static RoamingSessionRowDto BuildRoamingRow(
+            int id, string sessionId, string status, DateTime startUtc, DateTime? endUtc,
+            decimal? totalEnergy, decimal? totalCost, decimal? socStart, decimal? socEnd, int tzOffsetMinutes)
+        {
+            bool isActive = string.Equals(status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+            var duration  = endUtc.HasValue ? endUtc.Value - startUtc
+                          : isActive        ? DateTime.UtcNow - startUtc
+                          : TimeSpan.Zero;
+            if (duration.TotalSeconds < 0) duration = TimeSpan.Zero;
+
+            double energy = (double)(totalEnergy ?? 0);
+
+            return new RoamingSessionRowDto
+            {
+                Id              = id,
+                SessionId       = sessionId,
+                StartTime       = UtcToLocal(startUtc, tzOffsetMinutes),
+                EndTime         = endUtc.HasValue ? UtcToLocal(endUtc.Value, tzOffsetMinutes) : (DateTime?)null,
+                DurationMinutes = Math.Round(duration.TotalMinutes, 1),
+                EnergyKwh       = Math.Round(energy, 3),
+                TotalCost       = totalCost.HasValue ? Math.Round((double)totalCost.Value, 2) : (double?)null,
+                SoCStartPct     = socStart.HasValue ? Math.Round((double)socStart.Value, 1) : (double?)null,
+                SoCEndPct       = socEnd.HasValue   ? Math.Round((double)socEnd.Value, 1)   : (double?)null,
+                Status          = status,
+                IsZeroEnergy    = !isActive && energy < ZeroEnergyThresholdKwh
+            };
+        }
+
+        private static RoamingSessionsSummaryDto BuildRoamingSummary(
+            IEnumerable<(string Status, decimal? Energy, decimal? Cost, int? PartnerId)> sessions)
+        {
+            var summary  = new RoamingSessionsSummaryDto();
+            var partners = new HashSet<int>();
+            double energy = 0, cost = 0;
+
+            foreach (var s in sessions)
+            {
+                summary.TotalSessions++;
+                double e = (double)(s.Energy ?? 0);
+                energy += e;
+                cost   += (double)(s.Cost ?? 0);
+                if (s.PartnerId.HasValue) partners.Add(s.PartnerId.Value);
+
+                if (string.Equals(s.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.ActiveSessions++;
+                }
+                else
+                {
+                    summary.CompletedSessions++;
+                    if (e < ZeroEnergyThresholdKwh) summary.ZeroEnergySessions++;
+                }
+            }
+
+            summary.TotalEnergyKwh = Math.Round(energy, 3);
+            summary.TotalCost      = Math.Round(cost, 2);
+            summary.PartnerCount   = partners.Count;
+            return summary;
+        }
+
         private static (string Label, DateTime Start) GetTrendPeriodKey(DateTime dt, string granularity)
         {
             return granularity?.ToLowerInvariant() switch
@@ -1008,6 +1402,76 @@ namespace OCPP.Core.Management.Controllers
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// CSV for partner or hosted roaming sessions. Partner exports carry our app user and the amount
+        /// debited from their wallet; hosted exports have neither (the driver belongs to the partner eMSP).
+        /// </summary>
+        private static string BuildRoamingCsvContent(IEnumerable<RoamingSessionRowDto> rows, bool isPartner)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(
+                "Session ID,Partner,Partner Party,Location,City," +
+                (isPartner ? "EVSE UID,Connector,User Name,Phone," : "Charge Point,Connector,") +
+                "Token UID,Start Time,End Time,Duration (min)," +
+                "Energy (kWh),Zero Energy,Cost,Currency," +
+                (isPartner ? "Total Payable (INR)," : "") +
+                "SoC Start (%),SoC End (%),Status,Stop Reason");
+
+            foreach (var r in rows)
+            {
+                var cells = new List<string>
+                {
+                    CsvEscape(r.SessionId),
+                    CsvEscape(r.PartnerName),
+                    CsvEscape(r.PartnerParty),
+                    CsvEscape(r.LocationName ?? r.LocationId),
+                    CsvEscape(r.LocationCity),
+                    CsvEscape(r.ChargePointId),
+                    CsvEscape(r.ConnectorId)
+                };
+                if (isPartner)
+                {
+                    cells.Add(CsvEscape(r.UserName));
+                    cells.Add(CsvEscape(r.UserPhone));
+                }
+                cells.AddRange(new[]
+                {
+                    CsvEscape(r.TokenUid),
+                    r.StartTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    r.EndTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                    r.DurationMinutes.ToString("F1"),
+                    r.EnergyKwh.ToString("F3"),
+                    r.IsZeroEnergy ? "Yes" : "No",
+                    r.TotalCost?.ToString("F2") ?? "",
+                    CsvEscape(r.Currency)
+                });
+                if (isPartner)
+                    cells.Add(r.TotalPayable?.ToString("F2") ?? "");
+                cells.AddRange(new[]
+                {
+                    r.SoCStartPct?.ToString("F1") ?? "",
+                    r.SoCEndPct?.ToString("F1")   ?? "",
+                    CsvEscape(r.Status),
+                    CsvEscape(r.StopReason)
+                });
+
+                sb.AppendLine(string.Join(",", cells));
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>Wraps CSV text as a download, with a UTF-8 BOM so Excel opens it correctly.</summary>
+        private FileContentResult CsvFile(string content, string filename)
+        {
+            var preamble = Encoding.UTF8.GetPreamble();
+            var csv      = Encoding.UTF8.GetBytes(content);
+            var bytes    = new byte[preamble.Length + csv.Length];
+            Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length);
+            Buffer.BlockCopy(csv, 0, bytes, preamble.Length, csv.Length);
+            return File(bytes, "text/csv", filename);
         }
 
         /// <summary>RFC 4180 quoting with CSV injection prevention.</summary>

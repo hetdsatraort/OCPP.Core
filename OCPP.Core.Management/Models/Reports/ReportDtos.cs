@@ -110,6 +110,64 @@ namespace OCPP.Core.Management.Models.Reports
         public double AvgDurationMinutes { get; set; }
         public double AvgEnergyKwh { get; set; }
         public double AvgChargingSpeedKw { get; set; }
+        /// <summary>Completed sessions in this bucket that delivered (effectively) no energy.</summary>
+        public int ZeroEnergySessions { get; set; }
+    }
+
+    // ── OCPI roaming session row (partner + hosted) ───────────────────────────
+    public class RoamingSessionRowDto
+    {
+        public int Id { get; set; }
+        public string SessionId { get; set; }
+
+        // Partner
+        public int? PartnerCredentialId { get; set; }
+        public string PartnerName { get; set; }
+        public string PartnerParty { get; set; }      // e.g. "IN*ABC"
+
+        // Location
+        public string LocationId { get; set; }
+        public string LocationName { get; set; }
+        public string LocationCity { get; set; }
+        public string ChargePointId { get; set; }     // our charge point (hosted) / partner EVSE UID (partner)
+        public string ConnectorId { get; set; }
+
+        // Driver
+        public string UserId { get; set; }            // partner sessions only — our app user
+        public string UserName { get; set; }
+        public string UserPhone { get; set; }
+        public string TokenUid { get; set; }
+
+        // Timing
+        public DateTime StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
+        public double DurationMinutes { get; set; }
+
+        // Energy / cost
+        public double EnergyKwh { get; set; }
+        public double? TotalCost { get; set; }
+        public double? TotalPayable { get; set; }     // partner sessions only — what the user was debited
+        public string Currency { get; set; }
+
+        // Battery / SoC
+        public double? SoCStartPct { get; set; }
+        public double? SoCEndPct { get; set; }
+
+        // Meta
+        public string Status { get; set; }
+        public string StopReason { get; set; }
+        public bool IsZeroEnergy { get; set; }
+    }
+
+    public class RoamingSessionsSummaryDto
+    {
+        public int TotalSessions { get; set; }
+        public int ActiveSessions { get; set; }
+        public int CompletedSessions { get; set; }
+        public int ZeroEnergySessions { get; set; }
+        public double TotalEnergyKwh { get; set; }
+        public double TotalCost { get; set; }
+        public int PartnerCount { get; set; }
     }
 
     // ── Per-hub performance ───────────────────────────────────────────────────
