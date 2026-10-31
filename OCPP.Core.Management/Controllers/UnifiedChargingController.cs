@@ -1275,6 +1275,7 @@ namespace OCPP.Core.Management.Controllers
             Id = UnifiedId.Encode(ProviderType.Local, st.RecId),
             ProviderType = ProviderType.Local,
             Name = st.ChargePointName ?? st.ChargingPointId,
+            ChargePointId = st.ChargingPointId,
             TotalConnectors = st.TotalChargers,
             AvailableConnectors = st.AvailableChargers,
             Connectors = st.Chargers?.Select(MapLocalChargerToUnified).ToList() ?? new List<UnifiedConnectorDto>()
@@ -1333,8 +1334,14 @@ namespace OCPP.Core.Management.Controllers
                 CostLimit = GetDouble(sessionJson, "CostLimit"),
                 TimeLimit = GetInt(sessionJson, "TimeLimit"),
                 BatteryIncreaseLimit = GetDouble(sessionJson, "BatteryIncreaseLimit"),
+                LocationName = GetString(sessionJson, "ChargingHubName"),
                 StationId = UnifiedId.Encode(ProviderType.Local, GetString(sessionJson, "ChargingStationId")),
+                StationName = GetString(sessionJson, "ChargingStationName"),
                 ConnectorId = UnifiedId.Encode(ProviderType.Local, GetString(sessionJson, "ChargingGunId")),
+                ConnectorName = GetString(sessionJson, "ConnectorName"),
+                // ChargingSessionDto.ChargingStationName carries the station's ChargingPointId
+                ChargePointId = GetString(sessionJson, "ChargingStationName"),
+                ConnectorNumber = GetString(GetObj(sessionJson, "ChargingGun"), "ConnectorId"),
                 BatteryStateOfCharge = MapBatterySoc(GetObj(json, "BatteryStateOfCharge")),
                 Raw = data
             };
@@ -1414,7 +1421,10 @@ namespace OCPP.Core.Management.Controllers
                 StationName = GetString(sessionJson, "ChargingStationName"),
                 ConnectorId = UnifiedId.Encode(ProviderType.Local, GetString(sessionJson, "ChargingGunId")),
                 ConnectorName = GetString(sessionJson, "ConnectorName"),
-                StopReason = GetObj(sessionJson, "StopReason").ValueKind == JsonValueKind.Object ? (object)GetObj(sessionJson, "StopReason") : null,
+                // ChargingSessionDto.ChargingStationName carries the station's ChargingPointId
+                ChargePointId = GetString(sessionJson, "ChargingStationName"),
+                ConnectorNumber = GetString(GetObj(sessionJson, "ChargingGun"), "ConnectorId"),
+                StopReason =GetObj(sessionJson, "StopReason").ValueKind == JsonValueKind.Object ? (object)GetObj(sessionJson, "StopReason") : null,
                 EnergyLimit = energyLimit,
                 CostLimit = costLimit,
                 TimeLimit = timeLimit,
@@ -1494,6 +1504,9 @@ namespace OCPP.Core.Management.Controllers
                 StationName = GetString(s, "ChargingStationName"),
                 ConnectorId = UnifiedId.Encode(ProviderType.Local, GetString(s, "ChargingGunId")),
                 ConnectorName = GetString(s, "ConnectorName"),
+                // ChargingSessionDto.ChargingStationName carries the station's ChargingPointId
+                ChargePointId = GetString(s, "ChargingStationName"),
+                ConnectorNumber = GetString(gunJson, "ConnectorId"),
                 EnergyLimit = energyLimit,
                 CostLimit = costLimit,
                 TimeLimit = timeLimit,

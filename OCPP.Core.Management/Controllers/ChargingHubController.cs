@@ -1339,12 +1339,38 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                if (!await _dbContext.ChargingHubs.AnyAsync(h => h.RecId == request.ChargingHubId))
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "Charging hub not found"
+                    });
+                }
+
+                // Optional station must exist and belong to this hub (FK_ChargingHubReview_ChargingStation)
+                string stationId = null;
+                if (!string.IsNullOrEmpty(request.ChargingStationId))
+                {
+                    var stationInHub = await _dbContext.ChargingStations
+                        .AnyAsync(s => s.RecId == request.ChargingStationId && s.ChargingHubId == request.ChargingHubId);
+                    if (!stationInHub)
+                    {
+                        return Ok(new ReviewResponseDto
+                        {
+                            Success = false,
+                            Message = "Charging station not found in this hub"
+                        });
+                    }
+                    stationId = request.ChargingStationId;
+                }
+
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
                     ChargingHubId = request.ChargingHubId,
-                    ChargingStationId = request.ChargingStationId,
+                    ChargingStationId = stationId,
                     Rating = request.Rating,
                     Description = request.Description,
                     ReviewTime = DateTime.UtcNow,
@@ -1418,12 +1444,27 @@ namespace OCPP.Core.Management.Controllers
                     });
                 }
 
+                var station = await _dbContext.ChargingStations.FirstOrDefaultAsync(s => s.RecId == request.ChargingStationId);
+                if (station == null)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "Charging station not found"
+                    });
+                }
+
+                // Take the hub from the station rather than the request: clients send blank or stale
+                // hub ids, which violate FK_ChargingHubReview_ChargingHub
+                var hubExists = !string.IsNullOrEmpty(station.ChargingHubId)
+                    && await _dbContext.ChargingHubs.AnyAsync(h => h.RecId == station.ChargingHubId);
+
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
                     RecId = Guid.NewGuid().ToString(),
                     UserId = userId,
-                    ChargingHubId = request.ChargingHubId,
-                    ChargingStationId = request.ChargingStationId,
+                    ChargingHubId = hubExists ? station.ChargingHubId : null,
+                    ChargingStationId = station.RecId,
                     Rating = request.Rating,
                     Description = request.Description,
                     ReviewTime = DateTime.UtcNow,
@@ -1549,7 +1590,7 @@ namespace OCPP.Core.Management.Controllers
             try
             {
                 // Get UserId from JWT token
-                var userId = User.FindFirst("UserId")?.Value;
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (string.IsNullOrEmpty(userId))
                 {
                     return Ok(new ReviewResponseDto
@@ -1612,27 +1653,7 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var reviews = await _dbContext.ChargingHubReviews
-                    .Where(r => r.ChargingHubId == hubId && r.Active == 1)
-                    .OrderByDescending(r => r.ReviewTime)
-                    .ToListAsync();
-
-                var reviewDtos = new List<ReviewDto>();
-                foreach (var r in reviews)
-                {
-                    var rdto = await MapToReviewDto(r);
-                    reviewDtos.Add(rdto);
-                };
-                double avgRating = reviews.Any() ? reviews.Average(r => r.Rating) : 0;
-
-                return Ok(new ReviewListResponseDto
-                {
-                    Success = true,
-                    Message = "Reviews retrieved successfully",
-                    Reviews = reviewDtos,
-                    TotalCount = reviewDtos.Count,
-                    AverageRating = avgRating
-                });
+                return Ok(await BuildHubReviewListAsync(hubId));
             }
             catch (Exception ex)
             {
@@ -1654,43 +1675,7 @@ namespace OCPP.Core.Management.Controllers
         {
             try
             {
-                var stations = await _dbContext.ChargingStations
-                    .Where(s => s.ChargingHubId == hubId)
-                    .ToListAsync();
-                var stationIds = stations.Select(s => s.RecId).ToList();
-
-                var chargePointIds = stations.Select(s => s.ChargingPointId).ToList();
-                var chargePointNames = await _dbContext.ChargePoints
-                    .Where(cp => chargePointIds.Contains(cp.ChargePointId))
-                    .ToDictionaryAsync(cp => cp.ChargePointId, cp => cp.Name);
-
-                // Station reviews may not carry the hub id, so match on station as well
-                var reviews = await _dbContext.ChargingHubReviews
-                    .Where(r => r.Active == 1 && (r.ChargingHubId == hubId || stationIds.Contains(r.ChargingStationId)))
-                    .OrderByDescending(r => r.ReviewTime)
-                    .ToListAsync();
-
-                var reviewDtos = new List<ReviewDto>();
-                foreach (var r in reviews)
-                {
-                    var rdto = await MapToReviewDto(r);
-                    var station = stations.FirstOrDefault(s => s.RecId == r.ChargingStationId);
-                    if (station != null)
-                    {
-                        rdto.ChargePointId = station.ChargingPointId;
-                        rdto.ChargingStationName = chargePointNames.GetValueOrDefault(station.ChargingPointId) ?? station.ChargingPointId;
-                    }
-                    reviewDtos.Add(rdto);
-                }
-
-                return Ok(new ReviewListResponseDto
-                {
-                    Success = true,
-                    Message = "Reviews retrieved successfully",
-                    Reviews = reviewDtos,
-                    TotalCount = reviewDtos.Count,
-                    AverageRating = reviews.Any() ? Math.Round(reviews.Average(r => r.Rating), 1) : 0
-                });
+                return Ok(await BuildHubReviewListAsync(hubId));
             }
             catch (Exception ex)
             {
@@ -1927,6 +1912,50 @@ namespace OCPP.Core.Management.Controllers
                 // Related info
                 ChargePointName = chargePoint?.Name,
                 ChargingHubName = hub?.ChargingHubName
+            };
+        }
+
+        /// <summary>
+        /// Active reviews for a hub and all of its stations, newest first, with station names filled in
+        /// </summary>
+        private async Task<ReviewListResponseDto> BuildHubReviewListAsync(string hubId)
+        {
+            var stations = await _dbContext.ChargingStations
+                .Where(s => s.ChargingHubId == hubId)
+                .ToListAsync();
+            var stationIds = stations.Select(s => s.RecId).ToList();
+
+            var chargePointIds = stations.Select(s => s.ChargingPointId).ToList();
+            var chargePointNames = await _dbContext.ChargePoints
+                .Where(cp => chargePointIds.Contains(cp.ChargePointId))
+                .ToDictionaryAsync(cp => cp.ChargePointId, cp => cp.Name);
+
+            // Older station reviews were saved without the hub id, so match on station as well
+            var reviews = await _dbContext.ChargingHubReviews
+                .Where(r => r.Active == 1 && (r.ChargingHubId == hubId || stationIds.Contains(r.ChargingStationId)))
+                .OrderByDescending(r => r.ReviewTime)
+                .ToListAsync();
+
+            var reviewDtos = new List<ReviewDto>();
+            foreach (var r in reviews)
+            {
+                var rdto = await MapToReviewDto(r);
+                var station = stations.FirstOrDefault(s => s.RecId == r.ChargingStationId);
+                if (station != null)
+                {
+                    rdto.ChargePointId = station.ChargingPointId;
+                    rdto.ChargingStationName = chargePointNames.GetValueOrDefault(station.ChargingPointId) ?? station.ChargingPointId;
+                }
+                reviewDtos.Add(rdto);
+            }
+
+            return new ReviewListResponseDto
+            {
+                Success = true,
+                Message = "Reviews retrieved successfully",
+                Reviews = reviewDtos,
+                TotalCount = reviewDtos.Count,
+                AverageRating = reviews.Any() ? Math.Round(reviews.Average(r => r.Rating), 1) : 0
             };
         }
 

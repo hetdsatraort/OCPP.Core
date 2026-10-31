@@ -32,6 +32,8 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string Id { get; set; }
         public ProviderType ProviderType { get; set; }
         public string Name { get; set; }
+        /// <summary>OCPP charge point identity the charger connects with; Local only.</summary>
+        public string ChargePointId { get; set; }
         public int TotalConnectors { get; set; }
         public int AvailableConnectors { get; set; }
         public List<UnifiedConnectorDto> Connectors { get; set; } = new List<UnifiedConnectorDto>();
@@ -112,6 +114,10 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string StationName { get; set; }
         public string ConnectorId { get; set; }
         public string ConnectorName { get; set; }
+        /// <summary>OCPP charge point identity of the station; Local only.</summary>
+        public string ChargePointId { get; set; }
+        /// <summary>OCPP connector number on the charge point (1, 2, …); Local only.</summary>
+        public string ConnectorNumber { get; set; }
         /// <summary>Why the session ended (SessionStopReasonDto shape); null while active.</summary>
         public object StopReason { get; set; }
 
