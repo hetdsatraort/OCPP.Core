@@ -1294,6 +1294,7 @@ namespace OCPP.Core.Management.Controllers
             Longitude = hub.Longitude,
             DistanceKm = hub.DistanceKm,
             AverageRating = hub.AverageRating,
+            TotalReviews = hub.TotalReviews,
             TotalStations = hub.TotalStations,
             AvailableStations = hub.Stations?.Count(s => s.AvailableChargers > 0) ?? 0,
             TotalConnectors = hub.TotalChargers,

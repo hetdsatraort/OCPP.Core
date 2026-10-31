@@ -1226,9 +1226,10 @@ namespace OCPP.Core.Management.Controllers
                         }
                     }
 
-                    // Get reviews for rating
+                    // Get reviews for rating; older station reviews lack the hub id, so match on station too
+                    var hubStationIds = stations.Select(s => s.RecId).ToList();
                     var reviews = await _dbContext.ChargingHubReviews
-                        .Where(r => r.ChargingHubId == hub.RecId && r.Active == 1)
+                        .Where(r => r.Active == 1 && (r.ChargingHubId == hub.RecId || hubStationIds.Contains(r.ChargingStationId)))
                         .ToListAsync();
 
                     var avgRating = reviews.Any() ? reviews.Average(r => r.Rating) : 0;

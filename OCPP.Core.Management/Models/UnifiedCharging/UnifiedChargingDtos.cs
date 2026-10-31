@@ -52,6 +52,8 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string Longitude { get; set; }
         public double? DistanceKm { get; set; }
         public double? AverageRating { get; set; }
+        /// <summary>Number of reviews behind AverageRating; Local only.</summary>
+        public int? TotalReviews { get; set; }
         public int TotalStations { get; set; }
         public int AvailableStations { get; set; }
         public int TotalConnectors { get; set; }
