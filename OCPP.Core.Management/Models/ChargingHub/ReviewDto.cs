@@ -21,5 +21,9 @@ namespace OCPP.Core.Management.Models.ChargingHub
         // User info (if needed)
         public string UserName { get; set; }
         public string UserProfileImage { get; set; }
+
+        // Station info (filled by the admin list for station-level reviews)
+        public string ChargePointId { get; set; }
+        public string ChargingStationName { get; set; }
     }
 }

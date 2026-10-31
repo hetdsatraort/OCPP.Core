@@ -1645,6 +1645,166 @@ namespace OCPP.Core.Management.Controllers
             }
         }
 
+        /// <summary>
+        /// Admin: all reviews for a hub, including reviews left on any of its stations
+        /// </summary>
+        [HttpGet("admin-review-list/{hubId}")]
+        [Authorize(Roles = "Administrator,Admin")]
+        public async Task<IActionResult> AdminGetHubReviewList(string hubId)
+        {
+            try
+            {
+                var stations = await _dbContext.ChargingStations
+                    .Where(s => s.ChargingHubId == hubId)
+                    .ToListAsync();
+                var stationIds = stations.Select(s => s.RecId).ToList();
+
+                var chargePointIds = stations.Select(s => s.ChargingPointId).ToList();
+                var chargePointNames = await _dbContext.ChargePoints
+                    .Where(cp => chargePointIds.Contains(cp.ChargePointId))
+                    .ToDictionaryAsync(cp => cp.ChargePointId, cp => cp.Name);
+
+                // Station reviews may not carry the hub id, so match on station as well
+                var reviews = await _dbContext.ChargingHubReviews
+                    .Where(r => r.Active == 1 && (r.ChargingHubId == hubId || stationIds.Contains(r.ChargingStationId)))
+                    .OrderByDescending(r => r.ReviewTime)
+                    .ToListAsync();
+
+                var reviewDtos = new List<ReviewDto>();
+                foreach (var r in reviews)
+                {
+                    var rdto = await MapToReviewDto(r);
+                    var station = stations.FirstOrDefault(s => s.RecId == r.ChargingStationId);
+                    if (station != null)
+                    {
+                        rdto.ChargePointId = station.ChargingPointId;
+                        rdto.ChargingStationName = chargePointNames.GetValueOrDefault(station.ChargingPointId) ?? station.ChargingPointId;
+                    }
+                    reviewDtos.Add(rdto);
+                }
+
+                return Ok(new ReviewListResponseDto
+                {
+                    Success = true,
+                    Message = "Reviews retrieved successfully",
+                    Reviews = reviewDtos,
+                    TotalCount = reviewDtos.Count,
+                    AverageRating = reviews.Any() ? Math.Round(reviews.Average(r => r.Rating), 1) : 0
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving reviews for admin");
+                return Ok(new ReviewListResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving reviews"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Admin: update any review (moderation - rating, text, images)
+        /// </summary>
+        [HttpPut("admin-review-update")]
+        [Authorize(Roles = "Administrator,Admin")]
+        public async Task<IActionResult> AdminUpdateReview([FromBody] ReviewUpdateDto request)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid request data"
+                    });
+                }
+
+                var review = await _dbContext.ChargingHubReviews.FirstOrDefaultAsync(r => r.RecId == request.RecId && r.Active == 1);
+                if (review == null)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "Review not found"
+                    });
+                }
+
+                review.Rating = request.Rating;
+                review.Description = request.Description;
+                review.ReviewImage1 = request.ReviewImage1;
+                review.ReviewImage2 = request.ReviewImage2;
+                review.ReviewImage3 = request.ReviewImage3;
+                review.ReviewImage4 = request.ReviewImage4;
+                review.UpdatedOn = DateTime.UtcNow;
+
+                await _dbContext.SaveChangesAsync();
+
+                var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                _logger.LogInformation($"Review updated by admin: {review.RecId} by User: {adminId}");
+
+                return Ok(new ReviewResponseDto
+                {
+                    Success = true,
+                    Message = "Review updated successfully",
+                    Review = await MapToReviewDto(review)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating review as admin");
+                return Ok(new ReviewResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while updating review"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Admin: delete any review (soft delete)
+        /// </summary>
+        [HttpDelete("admin-review-delete/{reviewId}")]
+        [Authorize(Roles = "Administrator,Admin")]
+        public async Task<IActionResult> AdminDeleteReview(string reviewId)
+        {
+            try
+            {
+                var review = await _dbContext.ChargingHubReviews.FirstOrDefaultAsync(r => r.RecId == reviewId && r.Active == 1);
+                if (review == null)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "Review not found"
+                    });
+                }
+
+                review.Active = 0;
+                review.UpdatedOn = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                var adminId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                _logger.LogInformation($"Review deleted by admin: {reviewId} by User: {adminId}");
+
+                return Ok(new ReviewResponseDto
+                {
+                    Success = true,
+                    Message = "Review deleted successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting review as admin");
+                return Ok(new ReviewResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while deleting review"
+                });
+            }
+        }
+
         #endregion
 
         #region Helper Methods
@@ -1777,8 +1937,8 @@ namespace OCPP.Core.Management.Controllers
             {
                 RecId = review.RecId,
                 UserId = review.UserId,
-                UserName = user.FirstName + " " + user.LastName,
-                UserProfileImage = user.ProfileImageID,
+                UserName = user != null ? $"{user.FirstName} {user.LastName}".Trim() : null,
+                UserProfileImage = user?.ProfileImageID,
                 ChargingHubId = review.ChargingHubId,
                 ChargingStationId = review.ChargingStationId,
                 Rating = review.Rating,
