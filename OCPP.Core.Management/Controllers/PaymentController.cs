@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -719,7 +720,7 @@ namespace OCPP.Core.Management.Controllers
                     return Unauthorized(new { error = "Invalid secret" });
                 }
 
-                if (payload == null || (payload.Event != "payment.captured" && payload.Event != "payment.authorized"))
+                if (payload == null || (payload.Event != "payment.captured" && payload.Event != "payment.authorized" && payload.Event != "payment_link.paid"))
                     return Ok(new { status = "ignored", reason = "event not handled" });
 
                 if (string.IsNullOrEmpty(payload.OrderId) || string.IsNullOrEmpty(payload.UserId))
@@ -787,7 +788,7 @@ namespace OCPP.Core.Management.Controllers
                     TransactionType = "Credit_Add",
                     UserId = payload.UserId,
                     SessionDuration = TimeSpan.Zero,
-                    PaymentMethod = "Razorpay-LateCapture",
+                    PaymentMethod = payload.Event == "payment_link.paid" ? "Razorpay-PaymentLink" : "Razorpay-LateCapture",
                     OrderId = payload.OrderId,
                     PaymentId = payload.PaymentId,
                     AdditionalInfo1 = $"Amount: {payload.Amount}",
@@ -808,7 +809,9 @@ namespace OCPP.Core.Management.Controllers
                     TransactionType = "Credit",
                     PaymentRecId = paymentHistoryId,
                     AdditionalInfo1 = $"OrderId: {payload.OrderId}",
-                    AdditionalInfo2 = $"PaymentId: {payload.PaymentId} (late capture via webhook)",
+                    AdditionalInfo2 = payload.Event == "payment_link.paid"
+                        ? $"PaymentId: {payload.PaymentId} (payment link)"
+                        : $"PaymentId: {payload.PaymentId} (late capture via webhook)",
                     AdditionalInfo3 = $"ValidationId: {validation.RecId}",
                     Active = 1,
                     CreatedOn = DateTime.UtcNow,
@@ -825,7 +828,10 @@ namespace OCPP.Core.Management.Controllers
                 validation.ProcessedAt = DateTime.UtcNow;
                 validation.PaymentHistoryId = paymentHistoryId;
                 validation.WalletTransactionId = walletTransactionId;
-                validation.VerificationMessage = $"Processed via late-capture webhook ({payload.Event})";
+                validation.PaymentMethod = payload.Event == "payment_link.paid" ? "PaymentLink" : validation.PaymentMethod;
+                validation.VerificationMessage = payload.Event == "payment_link.paid"
+                    ? "Processed via payment link (payment_link.paid)"
+                    : $"Processed via late-capture webhook ({payload.Event})";
                 validation.UpdatedOn = DateTime.UtcNow;
 
                 // Update user credit balance
@@ -844,6 +850,214 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "Error processing internal webhook for OrderId: {OrderId}", payload?.OrderId);
                 return StatusCode(500, new { error = "An error occurred while processing the webhook" });
+            }
+        }
+
+        /// <summary>
+        /// Create a Razorpay-hosted payment link for a wallet top-up.
+        /// The wallet is credited by the payment gateway via internal-webhook once paid.
+        /// </summary>
+        [HttpPost("create-payment-link")]
+        [Authorize]
+        public async Task<IActionResult> CreatePaymentLink([FromBody] CreatePaymentLinkRequestDto request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_paymentGatewayUrl))
+                {
+                    return StatusCode(500, new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Payment gateway URL not configured"
+                    });
+                }
+
+                if (request == null || request.Amount < 10 || request.Amount > 50000)
+                {
+                    return BadRequest(new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Amount must be between ₹10 and ₹50,000"
+                    });
+                }
+
+                if (!string.IsNullOrEmpty(request.CallbackUrl) &&
+                    (!Uri.TryCreate(request.CallbackUrl, UriKind.Absolute, out var callbackUri) ||
+                     (callbackUri.Scheme != Uri.UriSchemeHttps && callbackUri.Scheme != Uri.UriSchemeHttp)))
+                {
+                    return BadRequest(new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Invalid callback URL"
+                    });
+                }
+
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var user = string.IsNullOrEmpty(userId)
+                    ? null
+                    : await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId && u.Active == 1);
+                if (user == null)
+                {
+                    return NotFound(new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "User not found"
+                    });
+                }
+
+                using (var httpClient = new HttpClient())
+                {
+                    var jsonContent = JsonConvert.SerializeObject(new
+                    {
+                        amount = request.Amount,
+                        currency = request.Currency ?? "INR",
+                        userId = user.RecId,
+                        callback_url = request.CallbackUrl,
+                        customer = new
+                        {
+                            name = $"{user.FirstName} {user.LastName}".Trim(),
+                            email = user.EMailID,
+                            contact = user.PhoneNumber
+                        }
+                    });
+
+                    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                    var response = await httpClient.PostAsync($"{_paymentGatewayUrl}/create-payment-link", content);
+                    var responseContent = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var link = JsonConvert.DeserializeObject<PaymentLinkDto>(responseContent);
+
+                        _logger.LogInformation($"Payment link created: {link.Id}, UserId: {user.RecId}, Amount: ₹{request.Amount}");
+
+                        return Ok(new PaymentResponseDto
+                        {
+                            Success = true,
+                            Message = "Payment link created successfully",
+                            Data = link
+                        });
+                    }
+
+                    _logger.LogError($"Failed to create payment link. Status: {response.StatusCode}, Response: {responseContent}");
+                    return StatusCode((int)response.StatusCode, new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Failed to create payment link"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating payment link");
+                return StatusCode(500, new PaymentResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while creating payment link"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Get payment link status for the current user, including whether the wallet has been credited
+        /// </summary>
+        [HttpGet("payment-link/{paymentLinkId}")]
+        [Authorize]
+        public async Task<IActionResult> GetPaymentLinkStatus(string paymentLinkId)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_paymentGatewayUrl))
+                {
+                    return StatusCode(500, new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Payment gateway URL not configured"
+                    });
+                }
+
+                if (string.IsNullOrEmpty(paymentLinkId))
+                {
+                    return BadRequest(new PaymentResponseDto
+                    {
+                        Success = false,
+                        Message = "Payment link ID is required"
+                    });
+                }
+
+                var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+                using (var httpClient = new HttpClient())
+                {
+                    var response = await httpClient.GetAsync($"{_paymentGatewayUrl}/api/payment-links/{Uri.EscapeDataString(paymentLinkId)}");
+
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        return NotFound(new PaymentResponseDto
+                        {
+                            Success = false,
+                            Message = "Payment link not found"
+                        });
+                    }
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        _logger.LogError($"Failed to get payment link {paymentLinkId}. Status: {response.StatusCode}");
+                        return StatusCode((int)response.StatusCode, new PaymentResponseDto
+                        {
+                            Success = false,
+                            Message = "Failed to retrieve payment link"
+                        });
+                    }
+
+                    var link = JsonConvert.DeserializeObject<PaymentLinkDto>(await response.Content.ReadAsStringAsync());
+
+                    if (link.UserId != userId)
+                    {
+                        return NotFound(new PaymentResponseDto
+                        {
+                            Success = false,
+                            Message = "Payment link not found"
+                        });
+                    }
+
+                    var status = new PaymentLinkStatusDto
+                    {
+                        Id = link.Id,
+                        Status = link.Status,
+                        Amount = link.Amount,
+                        Currency = link.Currency
+                    };
+
+                    if (!string.IsNullOrEmpty(link.OrderId))
+                    {
+                        var validation = await _dbContext.PaymentValidations
+                            .FirstOrDefaultAsync(pv => pv.OrderId == link.OrderId && pv.Status == "Processed");
+                        if (validation != null)
+                        {
+                            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.RecId == userId);
+                            decimal.TryParse(user?.CreditBalance, out var balance);
+                            status.Credited = true;
+                            status.NewBalance = balance;
+                        }
+                    }
+
+                    return Ok(new PaymentResponseDto
+                    {
+                        Success = true,
+                        Message = status.Credited ? "Credits added to wallet" : $"Payment link is {link.Status}",
+                        Data = status
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error getting payment link status for {paymentLinkId}");
+                return StatusCode(500, new PaymentResponseDto
+                {
+                    Success = false,
+                    Message = "An error occurred while retrieving payment link status"
+                });
             }
         }
 

@@ -90,6 +90,41 @@ namespace OCPP.Core.Management.Models.Payment
         public bool AlreadyProcessed { get; set; }
     }
 
+    public class CreatePaymentLinkRequestDto
+    {
+        public decimal Amount { get; set; }
+        public string Currency { get; set; }
+        /// <summary>Where Razorpay redirects the user after payment</summary>
+        public string CallbackUrl { get; set; }
+    }
+
+    /// <summary>Payment link as returned by the payment gateway</summary>
+    public class PaymentLinkDto
+    {
+        public string Id { get; set; }
+        public string ShortUrl { get; set; }
+        public string Status { get; set; }
+        public decimal Amount { get; set; }
+        public string Currency { get; set; }
+        public string UserId { get; set; }
+        public string OrderId { get; set; }
+        public string PaymentId { get; set; }
+        public DateTime? ExpireBy { get; set; }
+        public DateTime? PaidAt { get; set; }
+    }
+
+    public class PaymentLinkStatusDto
+    {
+        public string Id { get; set; }
+        /// <summary>Razorpay link status: created, paid, expired, cancelled</summary>
+        public string Status { get; set; }
+        public decimal Amount { get; set; }
+        public string Currency { get; set; }
+        /// <summary>True once the wallet has been credited for this link</summary>
+        public bool Credited { get; set; }
+        public decimal? NewBalance { get; set; }
+    }
+
     public class InternalWebhookPayloadDto
     {
         public string Event { get; set; }
