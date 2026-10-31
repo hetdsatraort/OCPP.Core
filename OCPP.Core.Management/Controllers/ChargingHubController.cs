@@ -1366,6 +1366,20 @@ namespace OCPP.Core.Management.Controllers
                     stationId = request.ChargingStationId;
                 }
 
+                // One review per user per hub (and per station) - further changes go through update
+                var existing = await FindUserReviewAsync(userId, request.ChargingHubId, stationId);
+                if (existing != null)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = stationId != null
+                            ? "You have already reviewed this station. Edit your existing review instead."
+                            : "You have already reviewed this location. Edit your existing review instead.",
+                        Review = await MapToReviewDto(existing)
+                    });
+                }
+
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
                     RecId = Guid.NewGuid().ToString(),
@@ -1459,6 +1473,18 @@ namespace OCPP.Core.Management.Controllers
                 // hub ids, which violate FK_ChargingHubReview_ChargingHub
                 var hubExists = !string.IsNullOrEmpty(station.ChargingHubId)
                     && await _dbContext.ChargingHubs.AnyAsync(h => h.RecId == station.ChargingHubId);
+
+                // One review per user per station - further changes go through update
+                var existing = await FindUserReviewAsync(userId, station.ChargingHubId, station.RecId);
+                if (existing != null)
+                {
+                    return Ok(new ReviewResponseDto
+                    {
+                        Success = false,
+                        Message = "You have already reviewed this station. Edit your existing review instead.",
+                        Review = await MapToReviewDto(existing)
+                    });
+                }
 
                 var review = new Database.EVCDTO.ChargingHubReview
                 {
@@ -1914,6 +1940,18 @@ namespace OCPP.Core.Management.Controllers
                 ChargePointName = chargePoint?.Name,
                 ChargingHubName = hub?.ChargingHubName
             };
+        }
+
+        /// <summary>
+        /// The user's active review of a station, or of the hub itself (no station) when stationId is null
+        /// </summary>
+        private Task<Database.EVCDTO.ChargingHubReview> FindUserReviewAsync(string userId, string hubId, string stationId)
+        {
+            var query = _dbContext.ChargingHubReviews.Where(r => r.UserId == userId && r.Active == 1);
+            query = string.IsNullOrEmpty(stationId)
+                ? query.Where(r => r.ChargingHubId == hubId && (r.ChargingStationId == null || r.ChargingStationId == ""))
+                : query.Where(r => r.ChargingStationId == stationId);
+            return query.FirstOrDefaultAsync();
         }
 
         /// <summary>
