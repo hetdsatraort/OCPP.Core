@@ -77,5 +77,30 @@ namespace OCPP.Core.Server
                 msgOut.TaskCompletionSource?.SetResult("{\"status\": \"Error\"}");
             }
         }
+
+        public void HandleTriggerMessage(OCPPMessage msgIn, OCPPMessage msgOut)
+        {
+            Logger.LogInformation("TriggerMessage answer: ChargePointId={0} / MsgType={1} / ErrCode={2}", ChargePointStatus.Id, msgIn.MessageType, msgIn.ErrorCode);
+
+            try
+            {
+                TriggerMessageResponse triggerMessageResponse = DeserializeMessage<TriggerMessageResponse>(msgIn);
+                Logger.LogInformation("HandleTriggerMessage => Answer status: {0}", triggerMessageResponse?.Status);
+                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, triggerMessageResponse?.Status.ToString(), msgIn.ErrorCode);
+
+                if (msgOut.TaskCompletionSource != null)
+                {
+                    string apiResult = "{\"status\": " + JsonConvert.ToString(triggerMessageResponse.Status.ToString()) + "}";
+                    Logger.LogTrace("HandleTriggerMessage => API response: {0}", apiResult);
+
+                    msgOut.TaskCompletionSource.SetResult(apiResult);
+                }
+            }
+            catch (Exception exp)
+            {
+                Logger.LogError(exp, "HandleTriggerMessage => Exception: {0}", exp.Message);
+                msgOut.TaskCompletionSource?.SetResult("{\"status\": \"Error\"}");
+            }
+        }
     }
 }

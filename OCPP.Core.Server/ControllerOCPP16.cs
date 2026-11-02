@@ -130,6 +130,9 @@ namespace OCPP.Core.Server
                 case "ChangeConfiguration":
                     HandleChangeConfiguration(msgIn, msgOut);
                     break;
+                case "TriggerMessage":
+                    HandleTriggerMessage(msgIn, msgOut);
+                    break;
                 case "RemoteStartTransaction":
                     HandleRemoteStartTransaction(msgIn, msgOut);
                     break;

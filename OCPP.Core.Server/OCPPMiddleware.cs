@@ -668,6 +668,57 @@ namespace OCPP.Core.Server
                             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
                         }
                     }
+                    else if (cmd == "TriggerMessage")
+                    {
+                        // format: /API/TriggerMessage/<chargePointId>/<requestedMessage>[/<connectorId>]
+                        // <requestedMessage> is one of BootNotification, DiagnosticsStatusNotification,
+                        // FirmwareStatusNotification, Heartbeat, MeterValues, StatusNotification.
+                        if (!string.IsNullOrEmpty(urlChargePointId))
+                        {
+                            if (!string.IsNullOrEmpty(urlConnectorId) &&
+                                Enum.TryParse(urlConnectorId, true, out Messages_OCPP16.TriggerMessageRequestRequestedMessage requestedMessage) &&
+                                Enum.IsDefined(typeof(Messages_OCPP16.TriggerMessageRequestRequestedMessage), requestedMessage))
+                            {
+                                try
+                                {
+                                    ChargePointStatus status = null;
+                                    if (_chargePointStatusDict.TryGetValue(urlChargePointId, out status))
+                                    {
+                                        if (status.Protocol == Protocol_OCPP16)
+                                        {
+                                            await TriggerMessage16(status, context, dbContext, requestedMessage, urlParam);
+                                        }
+                                        else
+                                        {
+                                            _logger.LogError("OCPPMiddleware TriggerMessage => Not supported for protocol: {0}", status.Protocol);
+                                            context.Response.StatusCode = (int)HttpStatusCode.NotImplemented;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Chargepoint offline
+                                        _logger.LogError("OCPPMiddleware TriggerMessage => Chargepoint offline: {0}", urlChargePointId);
+                                        context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+                                    }
+                                }
+                                catch (Exception exp)
+                                {
+                                    _logger.LogError(exp, "OCPPMiddleware TriggerMessage => Error: {0}", exp.Message);
+                                    context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogError("OCPPMiddleware TriggerMessage => Missing or invalid requested message: {0}", urlConnectorId);
+                                context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogError("OCPPMiddleware TriggerMessage => Missing chargepoint ID");
+                            context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
+                        }
+                    }
                     else if (cmd == "StartTransaction")
                     {
                         if (!string.IsNullOrEmpty(urlChargePointId))

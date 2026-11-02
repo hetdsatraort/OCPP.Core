@@ -588,5 +588,79 @@ namespace OCPP.Core.Management.Controllers
             public string Key { get; set; }
             public string Value { get; set; }
         }
+
+        // ── TriggerMessage (e.g. ask the chargepoint to send a Heartbeat) ───────
+
+        /// <summary>
+        /// Proxies to OCPP.Core.Server's TriggerMessage command. A central system can't send a
+        /// Heartbeat itself — it asks the chargepoint to send one. Returns
+        /// {status: Accepted|Rejected|NotImplemented|Timeout|Error}.
+        /// </summary>
+        [HttpPost("{chargePointId}/trigger-message")]
+        [Authorize]
+        public async Task<IActionResult> TriggerMessage(string chargePointId, [FromBody] TriggerMessageRequestDto request)
+        {
+            if (!IsAdmin())
+                return StatusCode((int)HttpStatusCode.Unauthorized);
+
+            if (request == null || string.IsNullOrWhiteSpace(request.RequestedMessage))
+                return Ok(new { success = false, message = "Requested message is required" });
+
+            var chargePoint = await _dbContext.ChargePoints.FindAsync(chargePointId);
+            if (chargePoint == null)
+                return Ok(new { success = false, message = "Chargepoint not found" });
+
+            // See GetOnlineStatus — the OCPP server's connection dictionary is case-sensitive.
+            chargePointId = chargePoint.ChargePointId;
+
+            string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+            if (string.IsNullOrEmpty(serverApiUrl))
+                return Ok(new { success = false, message = "OCPP server API is not configured (ServerApiUrl missing)" });
+
+            try
+            {
+                if (!serverApiUrl.EndsWith('/'))
+                    serverApiUrl += "/";
+
+                string path = $"TriggerMessage/{Uri.EscapeDataString(chargePointId)}/{Uri.EscapeDataString(request.RequestedMessage)}";
+                if (request.ConnectorId.HasValue)
+                    path += $"/{request.ConnectorId.Value}";
+                var uri = new Uri(new Uri(serverApiUrl), path);
+
+                using var httpClient = _httpClientFactory.CreateClient();
+                httpClient.Timeout = TimeSpan.FromSeconds(70); // see GetConfiguration for why
+
+                string apiKeyConfig = _config.GetValue<string>("ApiKey");
+                if (!string.IsNullOrWhiteSpace(apiKeyConfig))
+                    httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKeyConfig);
+
+                var response = await httpClient.GetAsync(uri);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    return Ok(new { success = false, message = "Chargepoint is offline" });
+
+                if (response.StatusCode == HttpStatusCode.NotImplemented)
+                    return Ok(new { success = false, message = "TriggerMessage is only supported for OCPP 1.6 chargepoints" });
+
+                if (response.StatusCode != HttpStatusCode.OK)
+                {
+                    _logger.LogError("TriggerMessage: API request for '{ChargePointId}' => httpStatus={StatusCode}", chargePointId, response.StatusCode);
+                    return Ok(new { success = false, message = "Error sending trigger message to chargepoint" });
+                }
+
+                var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+                return Ok(new { success = true, data = json });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "TriggerMessage: Error for chargepoint '{ChargePointId}' message '{RequestedMessage}'", chargePointId, request.RequestedMessage);
+                return Ok(new { success = false, message = "Error triggering message" });
+            }
+        }
+
+        public class TriggerMessageRequestDto
+        {
+            public string RequestedMessage { get; set; }
+            public int? ConnectorId { get; set; }
+        }
     }
 }

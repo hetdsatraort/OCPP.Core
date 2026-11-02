@@ -469,6 +469,55 @@ namespace OCPP.Core.Server
         }
 
         /// <summary>
+        /// Sends a TriggerMessage-Request to the chargepoint, asking it to send the requested
+        /// message (e.g. a Heartbeat) on its own. urlConnectorId is optional.
+        /// </summary>
+        private async Task TriggerMessage16(ChargePointStatus chargePointStatus, HttpContext apiCallerContext, OCPPCoreContext dbContext, Messages_OCPP16.TriggerMessageRequestRequestedMessage requestedMessage, string urlConnectorId)
+        {
+            ILogger logger = _logFactory.CreateLogger("OCPPMiddleware.OCPP16");
+            ControllerOCPP16 controller16 = new ControllerOCPP16(_configuration, _logFactory, chargePointStatus, dbContext);
+
+            Messages_OCPP16.TriggerMessageRequest triggerMessageRequest = new Messages_OCPP16.TriggerMessageRequest();
+            triggerMessageRequest.RequestedMessage = requestedMessage;
+            if (int.TryParse(urlConnectorId, out int connectorId))
+            {
+                triggerMessageRequest.ConnectorId = connectorId;
+            }
+
+            logger.LogInformation("OCPPMiddleware.OCPP16 => TriggerMessage16: ChargePoint='{0}' / RequestedMessage='{1}' / Connector='{2}'", chargePointStatus.Id, requestedMessage, urlConnectorId);
+
+            string jsonRequest = JsonConvert.SerializeObject(triggerMessageRequest);
+
+            OCPPMessage msgOut = new OCPPMessage();
+            msgOut.MessageType = "2";
+            msgOut.Action = "TriggerMessage";
+            msgOut.UniqueId = Guid.NewGuid().ToString("N");
+            msgOut.JsonPayload = jsonRequest;
+            msgOut.TaskCompletionSource = new TaskCompletionSource<string>();
+
+            // store HttpContext with MsgId for later answer processing (=> send anwer to API caller)
+            _requestQueue.Add(msgOut.UniqueId, msgOut);
+
+            // Send OCPP message with optional logging/dump
+            await SendOcpp16Message(msgOut, logger, chargePointStatus);
+
+            // Wait for asynchronous chargepoint response and processing
+            string apiResult = "{\"status\": \"Timeout\"}";
+            if (msgOut.TaskCompletionSource.Task.Wait(TimoutWaitForCharger))
+            {
+                apiResult = msgOut.TaskCompletionSource.Task.Result;
+            }
+            else
+            {
+                logger.LogInformation("OCPPMiddleware.OCPP16 => TriggerMessage16: Timeout (ChargePoint='{0}' / RequestedMessage='{1}')", chargePointStatus.Id, requestedMessage);
+            }
+
+            apiCallerContext.Response.StatusCode = 200;
+            apiCallerContext.Response.ContentType = "application/json";
+            await apiCallerContext.Response.WriteAsync(apiResult);
+        }
+
+        /// <summary>
         /// Send a RemoteStartTransaction-Request to the chargepoint
         /// </summary>
         private async Task RemoteStartTransaction16(ChargePointStatus chargePointStatus, HttpContext apiCallerContext, OCPPCoreContext dbContext, string urlConnectorId, string idTag)
