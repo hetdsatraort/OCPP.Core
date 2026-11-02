@@ -1,3 +1,4 @@
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using OCPP.Core.Database;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -200,6 +202,7 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] List<string> messages = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
+            [FromQuery] int? hours = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50)
         {
@@ -212,12 +215,7 @@ namespace OCPP.Core.Management.Controllers
                 if (chargePoint == null)
                     return Ok(new { success = false, message = "Chargepoint not found" });
 
-                var query = _dbContext.MessageLogs.Where(m => m.ChargePointId == chargePointId);
-
-                if (connectorId.HasValue)
-                    query = query.Where(m => m.ConnectorId == connectorId.Value);
-                if (messages != null && messages.Count > 0)
-                    query = query.Where(m => messages.Contains(m.Message));
+                var query = FilterLogs(chargePointId, connectorId, messages, hours);
                 if (from.HasValue)
                     query = query.Where(m => m.LogTime >= from.Value);
                 if (to.HasValue)
@@ -260,6 +258,169 @@ namespace OCPP.Core.Management.Controllers
                 return Ok(new { success = false, message = "Error retrieving message logs" });
             }
         }
+
+        /// <summary>Longest window the log export accepts — 30 days.</summary>
+        private const int MaxExportHours = 24 * 30;
+
+        /// <summary>
+        /// Row cap for one export. A chatty charger (MeterValues every few seconds across several
+        /// connectors) can log a lot in 30 days; past this, the newest rows are kept and the Info
+        /// sheet says the export was truncated.
+        /// </summary>
+        private const int MaxExportRows = 200_000;
+
+        /// <summary>
+        /// Excel (.xlsx) export of the message log for the last <paramref name="hours"/> hours
+        /// (1..720), honouring the same connector / message-type filters as <see cref="GetLogs"/>.
+        /// The window is computed here against UTC — LogTime is written with DateTime.UtcNow by
+        /// OCPP.Core.Server — so the client's clock and timezone don't affect which rows are
+        /// included. <paramref name="tzOffsetMinutes"/> (minutes east of UTC, same convention as
+        /// ReportsController) only drives the local-time column in the sheet.
+        /// </summary>
+        [HttpGet("{chargePointId}/logs/export")]
+        [Authorize]
+        public async Task<IActionResult> ExportLogs(
+            string chargePointId,
+            [FromQuery] int hours = 24,
+            [FromQuery] int? connectorId = null,
+            [FromQuery] List<string> messages = null,
+            [FromQuery] int tzOffsetMinutes = 330)
+        {
+            if (!IsAdmin())
+                return StatusCode((int)HttpStatusCode.Unauthorized);
+
+            if (hours < 1 || hours > MaxExportHours)
+                return BadRequest(new { success = false, message = $"hours must be between 1 and {MaxExportHours}" });
+            if (Math.Abs(tzOffsetMinutes) > 14 * 60)
+                return BadRequest(new { success = false, message = "tzOffsetMinutes is out of range" });
+
+            try
+            {
+                var chargePoint = await _dbContext.ChargePoints.FindAsync(chargePointId);
+                if (chargePoint == null)
+                    return NotFound(new { success = false, message = "Chargepoint not found" });
+
+                var nowUtc = DateTime.UtcNow;
+                var fromUtc = nowUtc.AddHours(-hours);
+
+                var query = FilterLogs(chargePoint.ChargePointId, connectorId, messages, hours);
+                var totalCount = await query.CountAsync();
+                var logs = await query
+                    .OrderByDescending(m => m.LogTime)
+                    .Take(MaxExportRows)
+                    .Select(m => new { m.LogTime, m.ConnectorId, m.Message, m.Result, m.ErrorCode })
+                    .ToListAsync();
+
+                using var workbook = new XLWorkbook();
+
+                // ── Logs sheet ──
+                var ws = workbook.Worksheets.Add("Logs");
+                string[] headers = { $"Time ({FormatOffset(tzOffsetMinutes)})", "Time (UTC)", "Connector", "Message", "Result", "Error Code" };
+                for (int c = 0; c < headers.Length; c++)
+                    ws.Cell(1, c + 1).Value = headers[c];
+
+                int row = 2;
+                foreach (var log in logs)
+                {
+                    ws.Cell(row, 1).Value = log.LogTime.AddMinutes(tzOffsetMinutes);
+                    ws.Cell(row, 2).Value = log.LogTime;
+                    if (log.ConnectorId.HasValue)
+                        ws.Cell(row, 3).Value = log.ConnectorId.Value;
+                    ws.Cell(row, 4).Value = log.Message ?? string.Empty;
+                    ws.Cell(row, 5).Value = log.Result ?? string.Empty;
+                    ws.Cell(row, 6).Value = log.ErrorCode ?? string.Empty;
+                    row++;
+                }
+
+                var header = ws.Range(1, 1, 1, headers.Length);
+                header.Style.Font.Bold = true;
+                header.Style.Font.FontColor = XLColor.White;
+                header.Style.Fill.BackgroundColor = XLColor.FromHtml("#4F46E5");
+                ws.Range(1, 1, Math.Max(row - 1, 1), headers.Length).SetAutoFilter();
+                ws.SheetView.FreezeRows(1);
+                ws.Column(1).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                ws.Column(2).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                // Fixed widths rather than AdjustToContents(), which is slow on 100k+ rows.
+                ws.Column(1).Width = 21;
+                ws.Column(2).Width = 21;
+                ws.Column(3).Width = 11;
+                ws.Column(4).Width = 28;
+                ws.Column(5).Width = 60;
+                ws.Column(6).Width = 22;
+                ws.Column(5).Style.Alignment.WrapText = false;
+
+                // ── Info sheet ──
+                var info = workbook.Worksheets.Add("Info");
+                var infoRows = new List<(string Label, XLCellValue Value)>
+                {
+                    ("Chargepoint ID", chargePoint.ChargePointId),
+                    ("Name", chargePoint.Name ?? string.Empty),
+                    ("Range", DescribeHours(hours)),
+                    ($"From ({FormatOffset(tzOffsetMinutes)})", fromUtc.AddMinutes(tzOffsetMinutes)),
+                    ($"To ({FormatOffset(tzOffsetMinutes)})", nowUtc.AddMinutes(tzOffsetMinutes)),
+                    ("Connector filter", connectorId.HasValue ? connectorId.Value.ToString() : "All"),
+                    ("Message filter", messages != null && messages.Count > 0 ? string.Join(", ", messages) : "All"),
+                    ("Rows exported", logs.Count),
+                    ("Rows matching", totalCount),
+                };
+                if (totalCount > logs.Count)
+                    infoRows.Add(("Note", $"Truncated to the newest {MaxExportRows:N0} rows — narrow the range or filters for a complete export."));
+
+                for (int i = 0; i < infoRows.Count; i++)
+                {
+                    info.Cell(i + 1, 1).Value = infoRows[i].Label;
+                    info.Cell(i + 1, 2).Value = infoRows[i].Value;
+                    info.Cell(i + 1, 1).Style.Font.Bold = true;
+                }
+                info.Range(4, 2, 5, 2).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                info.Column(1).Width = 22;
+                info.Column(2).Width = 60;
+
+                using var stream = new MemoryStream();
+                workbook.SaveAs(stream);
+
+                string safeId = string.Concat(chargePoint.ChargePointId.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+                string fileName = $"logs-{safeId}-{DescribeHours(hours).Replace(' ', '-').ToLowerInvariant()}-{nowUtc.AddMinutes(tzOffsetMinutes):yyyyMMdd-HHmm}.xlsx";
+
+                return File(stream.ToArray(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ExportLogs: Error exporting message logs for '{ChargePointId}'", chargePointId);
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { success = false, message = "Error exporting message logs" });
+            }
+        }
+
+        /// <summary>Shared connector / message-type / last-N-hours filtering for <see cref="GetLogs"/> and <see cref="ExportLogs"/>.</summary>
+        private IQueryable<MessageLog> FilterLogs(string chargePointId, int? connectorId, List<string> messages, int? hours)
+        {
+            var query = _dbContext.MessageLogs.Where(m => m.ChargePointId == chargePointId);
+
+            if (connectorId.HasValue)
+                query = query.Where(m => m.ConnectorId == connectorId.Value);
+            if (messages != null && messages.Count > 0)
+                query = query.Where(m => messages.Contains(m.Message));
+            if (hours.HasValue && hours.Value > 0)
+            {
+                var sinceUtc = DateTime.UtcNow.AddHours(-hours.Value);
+                query = query.Where(m => m.LogTime >= sinceUtc);
+            }
+
+            return query;
+        }
+
+        private static string FormatOffset(int tzOffsetMinutes)
+        {
+            var span = TimeSpan.FromMinutes(Math.Abs(tzOffsetMinutes));
+            return $"UTC{(tzOffsetMinutes < 0 ? "-" : "+")}{span:hh\\:mm}";
+        }
+
+        private static string DescribeHours(int hours) => hours switch
+        {
+            _ when hours % (24 * 7) == 0 => $"{hours / (24 * 7)} week{(hours / (24 * 7) == 1 ? "" : "s")}",
+            _ when hours % 24 == 0 => $"{hours / 24} day{(hours / 24 == 1 ? "" : "s")}",
+            _ => $"{hours} hour{(hours == 1 ? "" : "s")}",
+        };
 
         /// <summary>
         /// Distinct OCPP action names (Heartbeat, MeterValues, StatusNotification, ...) actually
