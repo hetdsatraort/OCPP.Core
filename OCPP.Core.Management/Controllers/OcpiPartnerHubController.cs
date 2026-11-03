@@ -980,7 +980,8 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string? userId = null,
             [FromQuery] int? partnerCredentialId = null,
             [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 20)
+            [FromQuery] int pageSize = 20,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
@@ -990,6 +991,8 @@ namespace OCPP.Core.Management.Controllers
 
                 var query = _dbContext.OcpiPartnerSessions.AsQueryable();
 
+                if (excludeZeroEnergy)
+                    query = query.ExcludeZeroEnergy();
                 if (!string.IsNullOrEmpty(status))
                     query = query.Where(s => s.Status == status.ToUpperInvariant());
                 if (!string.IsNullOrEmpty(effectiveUserId))
@@ -1271,6 +1274,306 @@ namespace OCPP.Core.Management.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving admin partner session details for {SessionId}", sessionId);
+                return Ok(new { success = false, message = "Error retrieving session details" });
+            }
+        }
+
+        // ── Admin: Hosted Session Listing / Detail ───────────────────────────
+
+        /// <summary>
+        /// Paginated listing of sessions partner eMSP drivers ran at OUR stations (CPO role). Admin only.
+        /// These never get a ChargingSession row, so this is the admin's only per-session view of them
+        /// outside Reports. Same summary shape as <see cref="GetAdminPartnerSessions"/>; the "fee" is
+        /// what we bill the eMSP (TotalCost, excl. VAT). zeroEnergySessions is always counted over the
+        /// unfiltered-by-energy set, so the UI can say how many are hidden.
+        /// </summary>
+        [HttpGet("admin/hosted-sessions")]
+        [Authorize]
+        public async Task<IActionResult> GetAdminHostedSessions(
+            [FromQuery] string? status = null,
+            [FromQuery] int? partnerCredentialId = null,
+            [FromQuery] string? search = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] bool excludeZeroEnergy = false)
+        {
+            try
+            {
+                if (!User.IsInRole("Administrator"))
+                    return Forbid();
+
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, 100);
+
+                var query = _dbContext.OcpiHostedSessions.AsNoTracking();
+
+                if (!string.IsNullOrEmpty(status))
+                    query = query.Where(s => s.Status == status.ToUpperInvariant());
+                if (partnerCredentialId.HasValue)
+                    query = query.Where(s => s.PartnerCredentialId == partnerCredentialId.Value);
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    var term = search.Trim();
+                    query = query.Where(s => s.ChargePointId.Contains(term)
+                                          || s.TokenUid.Contains(term)
+                                          || s.SessionId.Contains(term));
+                }
+
+                var summaryRows = await query
+                    .Select(s => new { s.TotalEnergy, s.TotalCost, s.Status, s.StartDateTime, s.EndDateTime, s.PartnerCredentialId })
+                    .ToListAsync();
+                var zeroEnergySessions = summaryRows.Count(r => ZeroEnergyFilter.IsZeroEnergy(r.Status, r.TotalEnergy));
+                if (excludeZeroEnergy)
+                {
+                    summaryRows = summaryRows.Where(r => !ZeroEnergyFilter.IsZeroEnergy(r.Status, r.TotalEnergy)).ToList();
+                    query = query.ExcludeZeroEnergy();
+                }
+
+                var totalCount = await query.CountAsync();
+
+                var nowUtc = DateTime.UtcNow;
+                var totalEnergy = summaryRows.Sum(r => (double)(r.TotalEnergy ?? 0));
+                var totalFee = summaryRows.Sum(r => r.TotalCost ?? 0);
+                var totalChargingTime = TimeSpan.FromTicks(summaryRows.Sum(r =>
+                    Math.Max(0, ((r.EndDateTime ?? nowUtc) - r.StartDateTime).Ticks)));
+                var activeSessions = summaryRows.Count(r => r.Status == "ACTIVE");
+                var completedSessions = summaryRows.Count(r => r.Status != "ACTIVE");
+                var partnerCount = summaryRows.Where(r => r.PartnerCredentialId.HasValue)
+                    .Select(r => r.PartnerCredentialId!.Value).Distinct().Count();
+
+                var sessions = await query
+                    .OrderByDescending(s => s.StartDateTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var stationIds = sessions.Select(s => s.EvseUid).Where(x => x != null).Distinct().ToList();
+                var stations = await _dbContext.ChargingStations
+                    .Where(st => stationIds.Contains(st.RecId))
+                    .ToDictionaryAsync(st => st.RecId);
+
+                // Hub from the station first; LocationId is normally the hub RecId too, kept as a fallback
+                var hubIds = stations.Values.Select(st => st.ChargingHubId)
+                    .Union(sessions.Select(s => s.LocationId))
+                    .Where(x => x != null).Distinct().ToList();
+                var hubs = await _dbContext.ChargingHubs
+                    .Where(h => hubIds.Contains(h.RecId))
+                    .ToDictionaryAsync(h => h.RecId);
+
+                var gunIds = sessions.Select(s => s.ConnectorId).Where(x => x != null).Distinct().ToList();
+                var guns = await _dbContext.ChargingGuns
+                    .Where(g => gunIds.Contains(g.RecId))
+                    .ToDictionaryAsync(g => g.RecId);
+
+                // Partners for the rows on this page, plus every partner that has ever hosted a
+                // session here so the UI's partner filter can be populated from this one call.
+                var partnerIds = await _dbContext.OcpiHostedSessions
+                    .Where(s => s.PartnerCredentialId != null)
+                    .Select(s => s.PartnerCredentialId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+                var partners = await _dbContext.OcpiPartnerCredentials
+                    .Where(p => partnerIds.Contains(p.Id))
+                    .ToDictionaryAsync(p => p.Id);
+
+                var sessionIds = sessions.Select(s => s.SessionId).ToList();
+                var cdrIds = await _dbContext.OcpiCdrs
+                    .Where(c => sessionIds.Contains(c.LocalSessionId))
+                    .Select(c => new { c.LocalSessionId, c.CdrId })
+                    .ToListAsync();
+
+                var result = sessions.Select(s =>
+                {
+                    var station = s.EvseUid != null && stations.TryGetValue(s.EvseUid, out var st) ? st : null;
+                    var hubId = station?.ChargingHubId ?? s.LocationId;
+                    var hub = hubId != null && hubs.TryGetValue(hubId, out var h) ? h : null;
+                    var gun = s.ConnectorId != null && guns.TryGetValue(s.ConnectorId, out var g) ? g : null;
+                    var partner = s.PartnerCredentialId.HasValue && partners.TryGetValue(s.PartnerCredentialId.Value, out var p) ? p : null;
+                    var elapsed = (s.EndDateTime ?? DateTime.UtcNow) - s.StartDateTime;
+                    bool isActive = s.Status == "ACTIVE";
+
+                    return new
+                    {
+                        sessionId = s.SessionId,
+                        transactionId = s.TransactionId,
+                        status = s.Status,
+                        startDateTime = s.StartDateTime,
+                        endDateTime = s.EndDateTime,
+                        totalEnergyKwh = s.TotalEnergy,
+                        totalCost = s.TotalCost,
+                        currency = s.Currency ?? "INR",
+                        durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
+                        isZeroEnergy = ZeroEnergyFilter.IsZeroEnergy(s.Status, s.TotalEnergy),
+                        hubId,
+                        locationName = hub?.ChargingHubName,
+                        locationCity = hub?.City,
+                        chargePointId = s.ChargePointId,
+                        connectorNumber = s.ConnectorNumber,
+                        connectorName = gun?.ConnectorId,
+                        partnerCredentialId = s.PartnerCredentialId,
+                        // No partner = started from the admin console, not by a roaming eMSP
+                        partnerName = partner?.BusinessName ?? (s.PartnerCredentialId.HasValue ? null : "Local (admin)"),
+                        partnerParty = partner != null ? $"{partner.CountryCode}*{partner.PartyId}" : null,
+                        tokenUid = s.TokenUid,
+                        cdrId = cdrIds.FirstOrDefault(c => c.LocalSessionId == s.SessionId)?.CdrId,
+                        soCStart = (double?)s.StartingStateOfCharge,
+                        soCEnd = isActive ? null : (double?)s.CurrentStateOfCharge,
+                        soCCurrent = (double?)s.CurrentStateOfCharge,
+                        stopReason = SessionStopReasonMapper.Build(s.StopReason, s.StopReasonDetail),
+                    };
+                });
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        totalCount,
+                        page,
+                        pageSize,
+                        totalPages = (int)Math.Ceiling((double)totalCount / pageSize),
+                        sessions = result,
+                        partners = partners.Values
+                            .OrderBy(p => p.BusinessName)
+                            .Select(p => new { id = p.Id, name = p.BusinessName ?? $"{p.CountryCode}*{p.PartyId}" }),
+                        summary = new
+                        {
+                            totalEnergyTransmitted = Math.Round(totalEnergy, 3),
+                            totalEnergyUnit = "kWh",
+                            totalChargingTotalFee = Math.Round(totalFee, 2),
+                            totalFeeUnit = "₹",
+                            totalChargingTime = new
+                            {
+                                totalHours = Math.Round(totalChargingTime.TotalHours, 2),
+                                totalMinutes = Math.Round(totalChargingTime.TotalMinutes, 0),
+                                formattedDuration = totalChargingTime.Days > 0
+                                    ? $"{totalChargingTime.Days}d {totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                    : totalChargingTime.Hours > 0
+                                        ? $"{totalChargingTime.Hours}h {totalChargingTime.Minutes}m"
+                                        : $"{totalChargingTime.Minutes}m"
+                            },
+                            activeSessions,
+                            completedSessions,
+                            zeroEnergySessions,
+                            partnerCount
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving admin hosted sessions");
+                return Ok(new { success = false, message = "Error retrieving hosted sessions" });
+            }
+        }
+
+        /// <summary>
+        /// Single hosted session (CPO role) for the admin Hosted Sessions view: partner, our
+        /// hub/station/gun, the underlying OCPP transaction (meter readings, so energy can be
+        /// checked against the charger) and the CDR we issued to the eMSP. Admin only.
+        /// </summary>
+        [HttpGet("admin/hosted-sessions/{sessionId}")]
+        [Authorize]
+        public async Task<IActionResult> GetAdminHostedSessionDetails(string sessionId)
+        {
+            try
+            {
+                if (!User.IsInRole("Administrator"))
+                    return Forbid();
+
+                var session = await _dbContext.OcpiHostedSessions
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s => s.SessionId == sessionId);
+                if (session == null)
+                    return Ok(new { success = false, message = "Hosted session not found" });
+
+                var station = session.EvseUid != null
+                    ? await _dbContext.ChargingStations.FirstOrDefaultAsync(st => st.RecId == session.EvseUid)
+                    : null;
+                var hubId = station?.ChargingHubId ?? session.LocationId;
+                var hub = hubId != null
+                    ? await _dbContext.ChargingHubs.FirstOrDefaultAsync(h => h.RecId == hubId)
+                    : null;
+                var gun = session.ConnectorId != null
+                    ? await _dbContext.ChargingGuns.FirstOrDefaultAsync(g => g.RecId == session.ConnectorId)
+                    : null;
+                var partner = session.PartnerCredentialId.HasValue
+                    ? await _dbContext.OcpiPartnerCredentials.FirstOrDefaultAsync(p => p.Id == session.PartnerCredentialId.Value)
+                    : null;
+                var transaction = session.TransactionId.HasValue
+                    ? await _dbContext.Transactions.AsNoTracking().FirstOrDefaultAsync(t => t.TransactionId == session.TransactionId.Value)
+                    : null;
+                var cdr = await _dbContext.OcpiCdrs.AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.LocalSessionId == session.SessionId);
+
+                var elapsed = (session.EndDateTime ?? DateTime.UtcNow) - session.StartDateTime;
+                bool isActive = string.Equals(session.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        sessionId = session.SessionId,
+                        status = session.Status,
+                        isActive,
+                        isZeroEnergy = ZeroEnergyFilter.IsZeroEnergy(session.Status, session.TotalEnergy),
+                        startDateTime = session.StartDateTime,
+                        endDateTime = session.EndDateTime,
+                        durationMinutes = (int)Math.Max(0, elapsed.TotalMinutes),
+                        totalEnergyKwh = session.TotalEnergy,
+                        totalCost = session.TotalCost,
+                        currency = session.Currency ?? "INR",
+                        startingStateOfCharge = session.StartingStateOfCharge,
+                        currentStateOfCharge = session.CurrentStateOfCharge,
+                        stateOfChargeLastUpdate = session.StateOfChargeLastUpdate,
+                        tokenUid = session.TokenUid,
+                        authorizationReference = session.AuthorizationReference,
+                        lastUpdated = session.LastUpdated,
+                        partner = partner != null ? new
+                        {
+                            partnerCredentialId = partner.Id,
+                            businessName = partner.BusinessName,
+                            countryCode = partner.CountryCode,
+                            partyId = partner.PartyId
+                        } : null,
+                        location = new
+                        {
+                            hubId,
+                            name = hub?.ChargingHubName,
+                            address = hub?.AddressLine1,
+                            city = hub?.City
+                        },
+                        chargePointId = session.ChargePointId,
+                        connectorNumber = session.ConnectorNumber,
+                        connectorName = gun?.ConnectorId,
+                        powerOutput = gun?.PowerOutput,
+                        tariffPerKwh = gun?.ChargerTariff,
+                        transaction = transaction != null ? new
+                        {
+                            transactionId = transaction.TransactionId,
+                            meterStart = transaction.MeterStart,
+                            meterStop = transaction.MeterStop,
+                            startTime = transaction.StartTime,
+                            stopTime = transaction.StopTime,
+                            stopReason = transaction.StopReason
+                        } : null,
+                        cdr = cdr != null ? new
+                        {
+                            cdrId = cdr.CdrId,
+                            totalEnergy = cdr.TotalEnergy,
+                            totalCostExclVat = cdr.TotalCostExclVat,
+                            totalCostInclVat = cdr.TotalCostInclVat,
+                            currency = cdr.Currency,
+                            createdOn = cdr.CreatedOn
+                        } : null,
+                        stopReason = SessionStopReasonMapper.Build(session.StopReason, session.StopReasonDetail)
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving admin hosted session details for {SessionId}", sessionId);
                 return Ok(new { success = false, message = "Error retrieving session details" });
             }
         }

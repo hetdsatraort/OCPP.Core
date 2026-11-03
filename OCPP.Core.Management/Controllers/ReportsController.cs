@@ -6,6 +6,7 @@ using OCPP.Core.Database;
 using OCPP.Core.Database.EVCDTO;
 using OCPP.Core.Database.OCPIDTO;
 using OCPP.Core.Management.Models.Reports;
+using OCPP.Core.Management.Services;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -25,7 +26,7 @@ namespace OCPP.Core.Management.Controllers
         private readonly ILogger<ReportsController> _logger;
 
         /// <summary>A completed session that delivered less than this is counted as a zero-energy session.</summary>
-        private const double ZeroEnergyThresholdKwh = 0.01;
+        private const double ZeroEnergyThresholdKwh = ZeroEnergyFilter.ThresholdKwh;
 
         public ReportsController(OCPPCoreContext dbContext, ILogger<ReportsController> logger)
         {
@@ -126,7 +127,8 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string status = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
@@ -135,6 +137,7 @@ namespace OCPP.Core.Management.Controllers
                 var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
                 var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var query = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, status);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
                 int totalRecords = await query.CountAsync();
 
                 var sessions = await query
@@ -702,7 +705,8 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
             [FromQuery] string status = null,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
@@ -711,6 +715,7 @@ namespace OCPP.Core.Management.Controllers
                 var fromUtc = from.HasValue ? LocalToUtc(from.Value, tzOffsetMinutes) : (DateTime?)null;
                 var toUtcExclusive = to.HasValue ? (DateTime?)LocalToUtc(to.Value.Date.AddDays(1), tzOffsetMinutes) : null;
                 var query    = await BuildBaseQueryAsync(hubId, stationId, gunId, userId, fromUtc, toUtcExclusive, status);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
                 var sessions = await query.OrderByDescending(s => s.StartTime).ToListAsync();
                 var lookups  = await LoadEnrichmentLookupsAsync(sessions);
                 var rows     = sessions.Select(s => BuildReportRow(s, lookups, tzOffsetMinutes));
@@ -743,7 +748,8 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string status = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
@@ -754,7 +760,8 @@ namespace OCPP.Core.Management.Controllers
                 var stats = await query
                     .Select(s => new { s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId })
                     .ToListAsync();
-                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)));
+                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)), excludeZeroEnergy);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
 
                 var sessions = await query
                     .OrderByDescending(s => s.StartDateTime)
@@ -802,7 +809,8 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string status = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
@@ -813,7 +821,8 @@ namespace OCPP.Core.Management.Controllers
                 var stats = await query
                     .Select(s => new { s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId })
                     .ToListAsync();
-                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)));
+                var summary = BuildRoamingSummary(stats.Select(s => (s.Status, s.TotalEnergy, s.TotalCost, s.PartnerCredentialId)), excludeZeroEnergy);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
 
                 var sessions = await query
                     .OrderByDescending(s => s.StartDateTime)
@@ -860,13 +869,16 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
             [FromQuery] string status = null,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
                 EnforceUserScope(ref userId);
 
-                var sessions = await BuildPartnerSessionQuery(userId, from, to, status, tzOffsetMinutes)
+                var query = BuildPartnerSessionQuery(userId, from, to, status, tzOffsetMinutes);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
+                var sessions = await query
                     .OrderByDescending(s => s.StartDateTime)
                     .ToListAsync();
                 var rows = await BuildPartnerRowsAsync(sessions, tzOffsetMinutes);
@@ -895,13 +907,16 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
             [FromQuery] string status = null,
-            [FromQuery] int tzOffsetMinutes = 330)
+            [FromQuery] int tzOffsetMinutes = 330,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
                 EnforceAdminOnly();
 
-                var sessions = await BuildHostedSessionQuery(hubId, stationId, gunId, from, to, status, tzOffsetMinutes)
+                var query = BuildHostedSessionQuery(hubId, stationId, gunId, from, to, status, tzOffsetMinutes);
+                if (excludeZeroEnergy) query = query.ExcludeZeroEnergy();
+                var sessions = await query
                     .OrderByDescending(s => s.StartDateTime)
                     .ToListAsync();
                 var rows = await BuildHostedRowsAsync(sessions, tzOffsetMinutes);
@@ -1308,8 +1323,13 @@ namespace OCPP.Core.Management.Controllers
             };
         }
 
+        /// <summary>
+        /// With excludeZeroEnergy, zero-energy sessions are left out of every total (so TotalSessions
+        /// matches the filtered table) but still counted in ZeroEnergySessions, so the UI can say how
+        /// many are hidden.
+        /// </summary>
         private static RoamingSessionsSummaryDto BuildRoamingSummary(
-            IEnumerable<(string Status, decimal? Energy, decimal? Cost, int? PartnerId)> sessions)
+            IEnumerable<(string Status, decimal? Energy, decimal? Cost, int? PartnerId)> sessions, bool excludeZeroEnergy = false)
         {
             var summary  = new RoamingSessionsSummaryDto();
             var partners = new HashSet<int>();
@@ -1317,6 +1337,12 @@ namespace OCPP.Core.Management.Controllers
 
             foreach (var s in sessions)
             {
+                if (ZeroEnergyFilter.IsZeroEnergy(s.Status, s.Energy))
+                {
+                    summary.ZeroEnergySessions++;
+                    if (excludeZeroEnergy) continue;
+                }
+
                 summary.TotalSessions++;
                 double e = (double)(s.Energy ?? 0);
                 energy += e;
@@ -1330,7 +1356,6 @@ namespace OCPP.Core.Management.Controllers
                 else
                 {
                     summary.CompletedSessions++;
-                    if (e < ZeroEnergyThresholdKwh) summary.ZeroEnergySessions++;
                 }
             }
 

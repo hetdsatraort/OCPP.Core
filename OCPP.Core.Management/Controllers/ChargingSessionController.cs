@@ -1620,12 +1620,17 @@ namespace OCPP.Core.Management.Controllers
             [FromQuery] string stationId = null,
             [FromQuery] string status = null,
             [FromQuery] int pageSize = 50,
-            [FromQuery] int page = 1)
+            [FromQuery] int page = 1,
+            [FromQuery] bool excludeZeroEnergy = false)
         {
             try
             {
                 var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var query = _dbContext.ChargingSessions.Where(s => s.Active == 1);
+                if (excludeZeroEnergy)
+                {
+                    query = query.ExcludeZeroEnergy();
+                }
                 if (!(User.IsInRole("Administrator")))
                 {
                     query = query.Where(s => s.UserId == userId);
