@@ -53,7 +53,10 @@ namespace OCPP.Core.Server
                 errorCode = ErrorCodes.FormationViolation;
             }
 
-            WriteMessageLog(ChargePointStatus?.Id, null,msgIn.Action, $"'{idTag}'=>{authorizeResponse.IdTagInfo?.Status}", errorCode);
+            // No leading quote: Excel treats it as a text prefix and drops it in the export
+            WriteMessageLog(ChargePointStatus?.Id, null, msgIn.Action,
+                JoinLogParts(LogPart("IdTag", idTag), LogPart("Status", authorizeResponse.IdTagInfo?.Status)),
+                errorCode);
             return errorCode;
         }
 

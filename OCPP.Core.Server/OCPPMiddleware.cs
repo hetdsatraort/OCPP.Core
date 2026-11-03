@@ -79,6 +79,66 @@ namespace OCPP.Core.Server
             LoadExtensions();
         }
 
+        /// <summary>
+        /// Parses a CALLERROR frame [4, "uniqueId", "errorCode", "errorDescription", {details}].
+        /// MessageRegExp can't match it (two strings before the payload), so these answers were dropped.
+        /// </summary>
+        private static bool TryParseCallError(string ocppMessage, out OCPPMessage callError)
+        {
+            callError = null;
+            try
+            {
+                Newtonsoft.Json.Linq.JArray frame = Newtonsoft.Json.Linq.JArray.Parse(ocppMessage);
+                if (frame.Count >= 4 && frame[0].ToString() == "4")
+                {
+                    callError = new OCPPMessage("4", frame[1].ToString(), null, frame.Count > 4 ? frame[4].ToString(Formatting.None) : "{}");
+                    callError.ErrorCode = frame[2].ToString();
+                    callError.ErrorDescription = frame[3].ToString();
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // not a valid JSON array => no CALLERROR
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Remote address of the charge point (incl. X-Forwarded-For when running behind a proxy)
+        /// </summary>
+        private static string GetRemoteAddress(HttpContext context)
+        {
+            string remoteIp = context?.Connection?.RemoteIpAddress?.ToString();
+            string forwardedFor = context?.Request?.Headers["X-Forwarded-For"].ToString();
+            return string.IsNullOrWhiteSpace(forwardedFor) ? remoteIp : $"{forwardedFor} (via {remoteIp})";
+        }
+
+        /// <summary>
+        /// Writes a "ConnectionRejected" entry for a known charge point whose websocket connection was refused.
+        /// Without it a charger that keeps failing to connect only shows up as a silent gap in the message log.
+        /// </summary>
+        private void WriteConnectionRejectedLog(OCPPCoreContext dbContext, HttpContext context, string chargePointId, string reason)
+        {
+            try
+            {
+                if (_configuration.GetValue<int>("DbMessageLog", 0) > 0 && !string.IsNullOrWhiteSpace(chargePointId))
+                {
+                    MessageLog msgLog = new MessageLog();
+                    msgLog.ChargePointId = chargePointId;
+                    msgLog.LogTime = DateTime.UtcNow;
+                    msgLog.Message = "ConnectionRejected";
+                    msgLog.Result = $"Reason={reason} / RemoteAddress={GetRemoteAddress(context)}";
+                    dbContext.MessageLogs.Add(msgLog);
+                    dbContext.SaveChanges();
+                }
+            }
+            catch (Exception exp)
+            {
+                _logger.LogError(exp, "OCPPMiddleware => Error writing ConnectionRejected log for '{0}'", chargePointId);
+            }
+        }
+
         public async Task Invoke(HttpContext context, OCPPCoreContext dbContext)
         {
             _logger.LogTrace("OCPPMiddleware => Websocket request: Path='{0}'", context.Request.Path);
@@ -137,6 +197,8 @@ namespace OCPP.Core.Server
                             }
                             if (basicAuthSuccess == false)
                             {
+                                WriteConnectionRejectedLog(dbContext, context, chargePoint.ChargePointId,
+                                    string.IsNullOrEmpty(authHeader) ? "Basic auth header missing" : "Basic auth credentials do not match");
                                 context.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"OCPP.Core\"");
                                 context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
                                 return;
@@ -165,6 +227,8 @@ namespace OCPP.Core.Server
                             }
                             if (certAuthSuccess == false)
                             {
+                                WriteConnectionRejectedLog(dbContext, context, chargePoint.ChargePointId,
+                                    clientCert == null ? "Client certificate missing" : "Client certificate does not match");
                                 context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
                                 return;
                             }
@@ -207,6 +271,7 @@ namespace OCPP.Core.Server
                                 protocols += p;
                             }
                             _logger.LogWarning("OCPPMiddleware => No supported sub-protocol in '{0}' from charge station '{1}'", protocols, chargepointIdentifier);
+                            WriteConnectionRejectedLog(dbContext, context, chargePointStatus.Id, $"No supported sub-protocol in '{protocols}'");
                             context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
                         }
                         else
@@ -236,6 +301,8 @@ namespace OCPP.Core.Server
                             catch (Exception exp)
                             {
                                 _logger.LogError(exp, "OCPPMiddleware => Error storing status object in dictionary => refuse connection");
+                                // Typically the charger reconnects (e.g. after a reboot) while its previous socket still looks open
+                                WriteConnectionRejectedLog(dbContext, context, chargePointStatus.Id, exp.Message);
                                 context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
                             }
 

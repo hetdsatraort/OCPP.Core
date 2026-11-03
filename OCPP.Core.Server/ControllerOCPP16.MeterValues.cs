@@ -79,10 +79,19 @@ namespace OCPP.Core.Server
                     double meterKWH = -1;
                     DateTimeOffset meterTime = DateTime.UtcNow;
                     double stateOfCharge = -1;
+                    DateTimeOffset? lastSampleTime = null;
+                    List<string> otherValues = new List<string>();
+                    HashSet<string> contexts = new HashSet<string>();
                     foreach (MeterValue meterValue in meterValueRequest.MeterValue)
                     {
+                        lastSampleTime = meterValue.Timestamp;
                         foreach (SampledValue sampleValue in meterValue.SampledValue)
                         {
+                            if (sampleValue.Context.HasValue && sampleValue.Context != SampledValueContext.Sample_Periodic)
+                            {
+                                contexts.Add(OcppEnumName(sampleValue.Context.Value));
+                            }
+
                             Logger.LogTrace("MeterValues => Context={0} / Format={1} / Value={2} / Unit={3} / Location={4} / Measurand={5} / Phase={6}",
                                 sampleValue.Context, sampleValue.Format, sampleValue.Value, sampleValue.Unit, sampleValue.Location, sampleValue.Measurand, sampleValue.Phase);
 
@@ -160,14 +169,33 @@ namespace OCPP.Core.Server
                                     Logger.LogError("MeterValues => invalid value '{0}' (SoC)", sampleValue.Value);
                                 }
                             }
+                            else
+                            {
+                                // Not processed (voltage, current, temperature, ...) but kept in the message log
+                                otherValues.Add(FormatSampledValue(sampleValue));
+                            }
                         }
                     }
+
+                    // Values that weren't reported are left out instead of showing up as "-1"
+                    List<string> logParts = new List<string>();
+                    if (meterKWH >= 0) logParts.Add($"Meter (kWh): {FormatLogNumber(meterKWH)}");
+                    if (currentChargeKW >= 0) logParts.Add($"Charge (kW): {FormatLogNumber(currentChargeKW)}");
+                    if (stateOfCharge >= 0) logParts.Add($"SoC (%): {FormatLogNumber(stateOfCharge)}");
+                    logParts.AddRange(otherValues);
+                    if (meterValueRequest.TransactionId > 0) logParts.Add($"TransactionId: {meterValueRequest.TransactionId}");
+                    if (contexts.Count > 0) logParts.Add($"Context: {string.Join(",", contexts)}");
+                    if (meterValueRequest.MeterValue.Count > 1) logParts.Add($"Samples: {meterValueRequest.MeterValue.Count}");
+                    if (lastSampleTime.HasValue && Math.Abs((DateTimeOffset.UtcNow - lastSampleTime.Value).TotalMinutes) > 2)
+                    {
+                        // Sampled while offline (or charger clock is off) => delivered late
+                        logParts.Add($"Sampled: {lastSampleTime.Value.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z");
+                    }
+                    msgMeterValue = string.Join(" | ", logParts);
 
                     // write charging/meter data in chargepoint status
                     if (connectorId > 0)
                     {
-                        msgMeterValue = $"Meter (kWh): {meterKWH} | Charge (kW): {currentChargeKW} | SoC (%): {stateOfCharge}";
-
                         if (meterKWH >= 0)
                         {
                             UpdateConnectorStatus(connectorId, null, null, meterKWH, meterTime);
@@ -204,8 +232,25 @@ namespace OCPP.Core.Server
                 errorCode = ErrorCodes.InternalError;
             }
 
-            WriteMessageLog(ChargePointStatus.Id, connectorId, msgIn.Action, msgMeterValue, errorCode);
+            WriteMessageLog(ChargePointStatus.Id, connectorId >= 0 ? connectorId : (int?)null, msgIn.Action, msgMeterValue, errorCode);
             return errorCode;
+        }
+
+        /// <summary>
+        /// "Voltage L1-N: 230.4 V" style text for one sampled value
+        /// </summary>
+        private static string FormatSampledValue(SampledValue sampleValue)
+        {
+            string name = sampleValue.Measurand.HasValue ? OcppEnumName(sampleValue.Measurand.Value) : "Value";
+            if (sampleValue.Phase.HasValue) name += " " + OcppEnumName(sampleValue.Phase.Value);
+            // Outlet is the default location => only mention the others (EV, Body, Cable, Inlet)
+            if (sampleValue.Location.HasValue && sampleValue.Location != SampledValueLocation.Outlet) name += " @" + OcppEnumName(sampleValue.Location.Value);
+
+            string value = double.TryParse(sampleValue.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double d)
+                ? FormatLogNumber(d)
+                : sampleValue.Value;
+            string unit = sampleValue.Unit.HasValue ? " " + OcppEnumName(sampleValue.Unit.Value) : string.Empty;
+            return $"{name}: {value}{unit}";
         }
     }
 }

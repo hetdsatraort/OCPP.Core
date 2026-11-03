@@ -1,4 +1,4 @@
-/*
+﻿/*
  * OCPP.Core - https://github.com/dallmann-consulting/OCPP.Core
  * Copyright (C) 2020-2025 dallmann consulting GmbH.
  * All Rights Reserved.
@@ -61,7 +61,7 @@ namespace OCPP.Core.Server
             {
                 ChangeConfigurationResponse changeConfigurationResponse = DeserializeMessage<ChangeConfigurationResponse>(msgIn);
                 Logger.LogInformation("HandleChangeConfiguration => Answer status: {0}", changeConfigurationResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, changeConfigurationResponse?.Status.ToString(), msgIn.ErrorCode);
+                WriteMessageLog(ChargePointStatus?.Id, GetRequestConnectorId(msgOut), msgOut.Action, JoinLogParts(LogPart("Status", changeConfigurationResponse?.Status), RequestSummary(msgOut)), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {
@@ -86,7 +86,7 @@ namespace OCPP.Core.Server
             {
                 TriggerMessageResponse triggerMessageResponse = DeserializeMessage<TriggerMessageResponse>(msgIn);
                 Logger.LogInformation("HandleTriggerMessage => Answer status: {0}", triggerMessageResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, triggerMessageResponse?.Status.ToString(), msgIn.ErrorCode);
+                WriteMessageLog(ChargePointStatus?.Id, GetRequestConnectorId(msgOut), msgOut.Action, JoinLogParts(LogPart("Status", triggerMessageResponse?.Status), RequestSummary(msgOut)), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

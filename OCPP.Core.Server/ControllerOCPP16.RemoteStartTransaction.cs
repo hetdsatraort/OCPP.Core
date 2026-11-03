@@ -39,9 +39,11 @@ namespace OCPP.Core.Server
             {
                 RemoteStartTransactionResponse remoteStartTransactionResponse = DeserializeMessage<RemoteStartTransactionResponse>(msgIn);
                 Logger.LogInformation("HandleRemoteStartTransaction => Answer status: {0}", remoteStartTransactionResponse?.Status);
-                int? remoteStartConnectorId = null;
-                try { remoteStartConnectorId = Newtonsoft.Json.JsonConvert.DeserializeObject<RemoteStartTransactionRequest>(msgOut.JsonPayload)?.ConnectorId; } catch { }
-                WriteMessageLog(ChargePointStatus?.Id, remoteStartConnectorId, msgOut.Action, remoteStartTransactionResponse?.Status.ToString(), msgIn.ErrorCode);
+                int? remoteStartConnectorId = GetRequestConnectorId(msgOut);
+                // OCPP 1.6 gives no reject reason => the connector state (e.g. no cable plugged in) is the best hint
+                WriteMessageLog(ChargePointStatus?.Id, remoteStartConnectorId, msgOut.Action,
+                    JoinLogParts(LogPart("Status", remoteStartTransactionResponse?.Status), RequestSummary(msgOut), LogPart("ConnectorState", KnownConnectorState(remoteStartConnectorId))),
+                    msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

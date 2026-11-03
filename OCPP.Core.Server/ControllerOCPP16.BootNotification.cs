@@ -34,12 +34,25 @@ namespace OCPP.Core.Server
         public string HandleBootNotification(OCPPMessage msgIn, OCPPMessage msgOut)
         {
             string errorCode = null;
+            string logText = null;
 
             try
             {
                 Logger.LogTrace("Processing boot notification...");
                 BootNotificationRequest bootNotificationRequest = DeserializeMessage<BootNotificationRequest>(msgIn);
                 Logger.LogTrace("BootNotification => Message deserialized");
+
+                // Hardware identity: lets a firmware update or swapped controller board show up in the log
+                logText = JoinLogParts(
+                    LogPart("Vendor", bootNotificationRequest.ChargePointVendor),
+                    LogPart("Model", bootNotificationRequest.ChargePointModel),
+                    LogPart("Serial", bootNotificationRequest.ChargePointSerialNumber),
+                    LogPart("BoxSerial", bootNotificationRequest.ChargeBoxSerialNumber),
+                    LogPart("Firmware", bootNotificationRequest.FirmwareVersion),
+                    LogPart("MeterType", bootNotificationRequest.MeterType),
+                    LogPart("MeterSerial", bootNotificationRequest.MeterSerialNumber),
+                    LogPart("ICCID", bootNotificationRequest.Iccid),
+                    LogPart("IMSI", bootNotificationRequest.Imsi));
 
                 BootNotificationResponse bootNotificationResponse = new BootNotificationResponse();
                 bootNotificationResponse.CurrentTime = DateTimeOffset.UtcNow;
@@ -58,14 +71,17 @@ namespace OCPP.Core.Server
 
                 msgOut.JsonPayload = JsonConvert.SerializeObject(bootNotificationResponse);
                 Logger.LogTrace("BootNotification => Response serialized");
+
+                logText = JoinLogParts($"Status={bootNotificationResponse.Status}", logText);
             }
             catch (Exception exp)
             {
                 Logger.LogError(exp, "BootNotification => Exception: {0}", exp.Message);
                 errorCode = ErrorCodes.FormationViolation;
+                logText = msgIn.JsonPayload;
             }
 
-            WriteMessageLog(ChargePointStatus.Id, null, msgIn.Action, null, errorCode);
+            WriteMessageLog(ChargePointStatus.Id, null, msgIn.Action, logText, errorCode);
             return errorCode;
         }
     }

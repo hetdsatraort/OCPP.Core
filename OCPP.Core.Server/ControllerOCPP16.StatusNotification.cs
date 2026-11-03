@@ -46,7 +46,16 @@ namespace OCPP.Core.Server
                 connectorId = statusNotificationRequest.ConnectorId;
 
                 // Write raw status in DB
-                WriteMessageLog(ChargePointStatus.Id, connectorId, msgIn.Action, string.Format("Info={0} / Status={1} / ", statusNotificationRequest.Info, statusNotificationRequest.Status), statusNotificationRequest.ErrorCode.ToString());
+                // Vendor codes carry the detail the 50-char Info often truncates; the charger timestamp
+                // reveals notifications that were queued while offline and delivered late
+                WriteMessageLog(ChargePointStatus.Id, connectorId, msgIn.Action,
+                    JoinLogParts(
+                        $"Status={statusNotificationRequest.Status}",
+                        LogPart("Info", statusNotificationRequest.Info),
+                        LogPart("VendorErrorCode", statusNotificationRequest.VendorErrorCode),
+                        LogPart("VendorId", statusNotificationRequest.VendorId),
+                        LogPart("Timestamp", statusNotificationRequest.Timestamp?.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'Z'"))),
+                    statusNotificationRequest.ErrorCode.ToString());
 
                 ConnectorStatusEnum newStatus = ConnectorStatusEnum.Undefined;
 

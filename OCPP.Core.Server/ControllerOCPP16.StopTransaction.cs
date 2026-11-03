@@ -34,6 +34,7 @@ namespace OCPP.Core.Server
             StopTransactionResponse stopTransactionResponse = new StopTransactionResponse();
             stopTransactionResponse.IdTagInfo = new IdTagInfo();
             Transaction transaction = null;
+            string logDetails = null;
 
             try
             {
@@ -51,6 +52,19 @@ namespace OCPP.Core.Server
                     Logger.LogError(exp, "StopTransaction => Exception reading transaction: transactionId={0} / chargepoint={1}", stopTransactionRequest.TransactionId, ChargePointStatus?.Id);
                     errorCode = ErrorCodes.InternalError;
                 }
+
+                // Captured before processing: a late stop for a system-closed transaction would otherwise
+                // be indistinguishable from a normal one in the log
+                double meterStopKWh = (double)stopTransactionRequest.MeterStop / 1000;
+                logDetails = JoinLogParts(
+                    $"TransactionId={stopTransactionRequest.TransactionId}",
+                    LogPart("Reason", stopTransactionRequest.Reason?.ToString() ?? TransactionStopReasons.NotReported),
+                    LogPart("IdTag", idTag),
+                    LogPart("MeterStop (kWh)", meterStopKWh),
+                    transaction != null ? LogPart("Energy (kWh)", meterStopKWh - transaction.MeterStart) : null,
+                    transaction != null ? LogPart("Duration", (stopTransactionRequest.Timestamp.UtcDateTime - transaction.StartTime).ToString(@"d\.hh\:mm\:ss")) : null,
+                    LogPart("Timestamp", stopTransactionRequest.Timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'Z'")),
+                    transaction?.StopTime.HasValue == true ? LogPart("PreviouslyClosedAs", transaction.StopReason) : null);
 
                 if (transaction != null)
                 {
@@ -176,7 +190,8 @@ namespace OCPP.Core.Server
                 errorCode = ErrorCodes.FormationViolation;
             }
 
-            WriteMessageLog(ChargePointStatus?.Id, transaction?.ConnectorId, msgIn.Action, stopTransactionResponse.IdTagInfo?.Status.ToString(), errorCode);
+            WriteMessageLog(ChargePointStatus?.Id, transaction?.ConnectorId, msgIn.Action,
+                JoinLogParts(LogPart("Status", stopTransactionResponse.IdTagInfo?.Status), logDetails ?? msgIn.JsonPayload), errorCode);
             return errorCode;
         }
     }

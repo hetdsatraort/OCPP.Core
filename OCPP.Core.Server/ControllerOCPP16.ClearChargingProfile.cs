@@ -39,7 +39,7 @@ namespace OCPP.Core.Server
             {
                 ClearChargingProfileResponse clearChargingProfileResponse = DeserializeMessage<ClearChargingProfileResponse>(msgIn);
                 Logger.LogInformation("HandleClearChargingProfile => Answer status: {0}", clearChargingProfileResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, clearChargingProfileResponse?.Status.ToString(), msgIn.ErrorCode);
+                WriteMessageLog(ChargePointStatus?.Id, GetRequestConnectorId(msgOut), msgOut.Action, JoinLogParts(LogPart("Status", clearChargingProfileResponse?.Status), RequestSummary(msgOut)), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

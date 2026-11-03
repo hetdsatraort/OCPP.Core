@@ -36,6 +36,7 @@ namespace OCPP.Core.Server
             StartTransactionResponse startTransactionResponse = new StartTransactionResponse();
 
             int connectorId = -1;
+            string logDetails = null;
             bool denyConcurrentTx = Configuration.GetValue<bool>("DenyConcurrentTx", false);
 
             try
@@ -84,14 +85,23 @@ namespace OCPP.Core.Server
 
                 msgOut.JsonPayload = JsonConvert.SerializeObject(startTransactionResponse);
                 Logger.LogTrace("StartTransaction => Response serialized");
+
+                logDetails = JoinLogParts(
+                    startTransactionResponse.TransactionId > 0 ? $"TransactionId={startTransactionResponse.TransactionId}" : null,
+                    LogPart("IdTag", idTag),
+                    LogPart("MeterStart (kWh)", (double)startTransactionRequest.MeterStart / 1000),
+                    startTransactionRequest.ReservationId > 0 ? $"ReservationId={startTransactionRequest.ReservationId}" : null,
+                    LogPart("Timestamp", startTransactionRequest.Timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'Z'")));
             }
             catch (Exception exp)
             {
                 Logger.LogError(exp, "StartTransaction => Exception: {0}", exp.Message);
                 errorCode = ErrorCodes.FormationViolation;
+                logDetails = msgIn.JsonPayload;
             }
 
-            WriteMessageLog(ChargePointStatus?.Id, connectorId, msgIn.Action, startTransactionResponse.IdTagInfo?.Status.ToString(), errorCode);
+            WriteMessageLog(ChargePointStatus?.Id, connectorId >= 0 ? connectorId : (int?)null, msgIn.Action,
+                JoinLogParts(LogPart("Status", startTransactionResponse.IdTagInfo?.Status), logDetails), errorCode);
             return errorCode;
         }
     }

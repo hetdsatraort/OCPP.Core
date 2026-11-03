@@ -39,7 +39,7 @@ namespace OCPP.Core.Server
             {
                 SetChargingProfileResponse setChargingProfileResponse = DeserializeMessage<SetChargingProfileResponse>(msgIn);
                 Logger.LogInformation("HandleSetChargingProfile => Answer status: {0}", setChargingProfileResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, setChargingProfileResponse?.Status.ToString(), msgIn.ErrorCode);
+                WriteMessageLog(ChargePointStatus?.Id, GetRequestConnectorId(msgOut), msgOut.Action, JoinLogParts(LogPart("Status", setChargingProfileResponse?.Status), RequestSummary(msgOut)), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {

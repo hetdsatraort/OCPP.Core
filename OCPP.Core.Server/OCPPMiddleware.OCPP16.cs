@@ -50,6 +50,11 @@ namespace OCPP.Core.Server
             byte[] buffer = new byte[1024 * 4];
             MemoryStream memStream = new MemoryStream(buffer.Length);
 
+            // Connection lifecycle in the message log: explains gaps (offline vs. idle) and reboots
+            DateTime connectedAtUtc = DateTime.UtcNow;
+            string disconnectError = null;
+            controller16.WriteConnectionLog("Connected", $"Protocol={chargePointStatus.Protocol} / RemoteAddress={GetRemoteAddress(context)}", null);
+
             try
             {
                 while (chargePointStatus.WebSocket.State == WebSocketState.Open)
@@ -119,6 +124,20 @@ namespace OCPP.Core.Server
                                         logger.LogError("OCPPMiddleware.Receive16 => Unknown message type: {0} / Msg: {1}", msgIn.MessageType, ocppMessage);
                                     }
                                 }
+                                else if (TryParseCallError(ocppMessage, out OCPPMessage callError))
+                                {
+                                    // CALLERROR answer from chargepoint to one of our requests
+                                    logger.LogInformation("OCPPMiddleware.Receive16 => OCPP-Message: Type=4 / ID={0} / ErrorCode={1}", callError.UniqueId, callError.ErrorCode);
+                                    if (_requestQueue.ContainsKey(callError.UniqueId))
+                                    {
+                                        controller16.ProcessCallError(callError, _requestQueue[callError.UniqueId]);
+                                        _requestQueue.Remove(callError.UniqueId);
+                                    }
+                                    else
+                                    {
+                                        logger.LogError("OCPPMiddleware.Receive16 => HttpContext from caller not found / Msg: {0}", ocppMessage);
+                                    }
+                                }
                                 else
                                 {
                                     logger.LogWarning("OCPPMiddleware.Receive16 => Error in RegEx-Matching: Msg={0})", ocppMessage);
@@ -139,10 +158,29 @@ namespace OCPP.Core.Server
                     }
                 }
             }
+            catch (Exception exp)
+            {
+                // Connection dropped without a close handshake (network loss, power cut, ...)
+                disconnectError = $"{exp.GetType().Name}: {exp.Message}";
+                throw;
+            }
             finally
             {
                 logger.LogInformation("OCPPMiddleware.Receive16 => Websocket closed: State={0} / CloseStatus={1}", chargePointStatus.WebSocket.State, chargePointStatus.WebSocket.CloseStatus);
                 _chargePointStatusDict.TryRemove(chargePointStatus.Id, out _);
+
+                TimeSpan connectedFor = DateTime.UtcNow - connectedAtUtc;
+                string disconnectInfo = $"State={chargePointStatus.WebSocket.State} / CloseStatus={chargePointStatus.WebSocket.CloseStatus?.ToString() ?? "None"}";
+                if (!string.IsNullOrWhiteSpace(chargePointStatus.WebSocket.CloseStatusDescription))
+                {
+                    disconnectInfo += $" / CloseDescription={chargePointStatus.WebSocket.CloseStatusDescription}";
+                }
+                disconnectInfo += " / ConnectedFor=" + connectedFor.ToString(@"d\.hh\:mm\:ss");
+                if (disconnectError != null)
+                {
+                    disconnectInfo += $" / Error={disconnectError}";
+                }
+                controller16.WriteConnectionLog("Disconnected", disconnectInfo, disconnectError != null ? "ConnectionLost" : null);
             }
         }
 

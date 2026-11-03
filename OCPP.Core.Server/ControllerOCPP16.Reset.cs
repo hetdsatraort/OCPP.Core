@@ -39,7 +39,7 @@ namespace OCPP.Core.Server
             {
                 ResetResponse resetResponse = DeserializeMessage<ResetResponse>(msgIn);
                 Logger.LogInformation("Reset => Answer status: {0}", resetResponse?.Status);
-                WriteMessageLog(ChargePointStatus?.Id, null, msgOut.Action, resetResponse?.Status.ToString(), msgIn.ErrorCode);
+                WriteMessageLog(ChargePointStatus?.Id, GetRequestConnectorId(msgOut), msgOut.Action, JoinLogParts(LogPart("Status", resetResponse?.Status), RequestSummary(msgOut)), msgIn.ErrorCode);
 
                 if (msgOut.TaskCompletionSource != null)
                 {
