@@ -13,6 +13,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace OCPP.Core.Management.Controllers
@@ -455,6 +456,197 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogError(ex, "GetLogMessageTypes: Error loading message types for '{ChargePointId}'", chargePointId);
                 return Ok(new { success = false, message = "Error retrieving message types" });
+            }
+        }
+
+        // ── Faulted monitor ──────────────────────────────────────────────────
+
+        /// <summary>Row cap for the faulted monitor — keeps a fault storm from loading an unbounded set.</summary>
+        private const int MaxFaultedRows = 20_000;
+
+        /// <summary>Most recent Faulted notifications returned per chargepoint (the count still covers all of them).</summary>
+        private const int MaxFaultedEventsPerChargePoint = 50;
+
+        private const string StatusLogKeys = "Status|Info|VendorErrorCode|VendorId|Timestamp";
+
+        /// <summary>
+        /// Pulls "Key=Value" parts out of a StatusNotification MessageLog.Result. Handles both the
+        /// original OCPP.Core layout ("Info=… / Status=Faulted / ") and the current one written by
+        /// ControllerOCPP16.StatusNotification.cs ("Status=… / Info=… / VendorErrorCode=… / VendorId=…
+        /// / Timestamp=…"), plus OCPP 2.x's bare "Status=…". A value runs up to the next " / Key=" (or the
+        /// end / a trailing " / "), so a "/" inside the charger's free-text Info doesn't split it.
+        /// </summary>
+        private static readonly Regex StatusLogPartRegex = new Regex(
+            $@"(?:^|\s/\s)(?<key>{StatusLogKeys})=(?<value>.*?)(?=\s/\s(?:{StatusLogKeys})=|\s*/\s*$|$)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static Dictionary<string, string> ParseStatusLog(string result)
+        {
+            var parts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(result))
+                return parts;
+
+            foreach (Match m in StatusLogPartRegex.Matches(result))
+            {
+                string value = m.Groups["value"].Value.Trim();
+                if (value.Length > 0 && !parts.ContainsKey(m.Groups["key"].Value))
+                    parts[m.Groups["key"].Value] = value;
+            }
+            return parts;
+        }
+
+        private static string NullIfBlank(string s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+        /// <summary>
+        /// Overview of every chargepoint that reported Status=Faulted in a StatusNotification during the
+        /// last <paramref name="hours"/> hours (default 48, max 720): how many Faulted notifications reached
+        /// us, on which connectors, the reasons the charger gave (Info / ErrorCode / VendorErrorCode), and
+        /// whether a connector is still Faulted now (ConnectorStatus.LastStatus).
+        ///
+        /// Needs DbMessageLog &gt; 1 on OCPP.Core.Server — at 1, StatusNotifications aren't written to MessageLog.
+        /// </summary>
+        [HttpGet("faulted-summary")]
+        [Authorize]
+        public async Task<IActionResult> GetFaultedSummary([FromQuery] int hours = 48)
+        {
+            if (!IsAdmin())
+                return StatusCode((int)HttpStatusCode.Unauthorized);
+
+            if (hours < 1 || hours > MaxExportHours)
+                return BadRequest(new { success = false, message = $"hours must be between 1 and {MaxExportHours}" });
+
+            try
+            {
+                var nowUtc = DateTime.UtcNow;
+                var sinceUtc = nowUtc.AddHours(-hours);
+
+                // Narrow in SQL with a LIKE, then confirm the parsed Status in memory.
+                var rows = await _dbContext.MessageLogs
+                    .Where(m => m.LogTime >= sinceUtc
+                                && m.Message == "StatusNotification"
+                                && m.Result != null
+                                && m.Result.Contains("Status=Faulted"))
+                    .OrderByDescending(m => m.LogTime)
+                    .Take(MaxFaultedRows + 1)
+                    .Select(m => new { m.ChargePointId, m.ConnectorId, m.LogTime, m.Result, m.ErrorCode })
+                    .ToListAsync();
+
+                bool truncated = rows.Count > MaxFaultedRows;
+                if (truncated)
+                    rows.RemoveAt(rows.Count - 1);
+
+                var events = rows
+                    .Select(r =>
+                    {
+                        var parts = ParseStatusLog(r.Result);
+                        parts.TryGetValue("Status", out var status);
+                        parts.TryGetValue("Info", out var info);
+                        parts.TryGetValue("VendorErrorCode", out var vendorErrorCode);
+                        parts.TryGetValue("VendorId", out var vendorId);
+                        parts.TryGetValue("Timestamp", out var chargerTimestamp);
+                        return new
+                        {
+                            r.ChargePointId,
+                            r.ConnectorId,
+                            r.LogTime,
+                            Status = status,
+                            Info = info,
+                            ErrorCode = NullIfBlank(r.ErrorCode),
+                            VendorErrorCode = vendorErrorCode,
+                            VendorId = vendorId,
+                            ChargerTimestamp = chargerTimestamp,
+                        };
+                    })
+                    .Where(e => string.Equals(e.Status, "Faulted", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                var chargePointIds = events.Select(e => e.ChargePointId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+                var names = (await _dbContext.ChargePoints
+                        .Where(cp => chargePointIds.Contains(cp.ChargePointId))
+                        .Select(cp => new { cp.ChargePointId, cp.Name })
+                        .ToListAsync())
+                    .GroupBy(cp => cp.ChargePointId, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
+
+                // Connectors whose latest reported status is still Faulted right now.
+                var stillFaulted = (await _dbContext.ConnectorStatuses
+                        .Where(c => chargePointIds.Contains(c.ChargePointId) && c.LastStatus == "Faulted")
+                        .Select(c => new { c.ChargePointId, c.ConnectorId })
+                        .ToListAsync())
+                    .GroupBy(c => c.ChargePointId, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Select(c => c.ConnectorId).OrderBy(id => id).ToList(), StringComparer.OrdinalIgnoreCase);
+
+                var chargePoints = events
+                    .GroupBy(e => e.ChargePointId, StringComparer.OrdinalIgnoreCase)
+                    .Select(g =>
+                    {
+                        var ordered = g.OrderByDescending(e => e.LogTime).ToList();
+                        var latest = ordered[0];
+                        stillFaulted.TryGetValue(g.Key, out var faultedNow);
+                        names.TryGetValue(g.Key, out var name);
+
+                        return new
+                        {
+                            chargePointId = latest.ChargePointId,
+                            name,
+                            count = ordered.Count,
+                            firstSeen = ordered[^1].LogTime,
+                            lastSeen = latest.LogTime,
+                            connectorIds = ordered.Where(e => e.ConnectorId.HasValue).Select(e => e.ConnectorId.Value).Distinct().OrderBy(id => id).ToList(),
+                            stillFaultedConnectorIds = faultedNow ?? new List<int>(),
+                            reasons = ordered
+                                .GroupBy(e => new { e.Info, e.ErrorCode, e.VendorErrorCode })
+                                .Select(r => new
+                                {
+                                    info = r.Key.Info,
+                                    errorCode = r.Key.ErrorCode,
+                                    vendorErrorCode = r.Key.VendorErrorCode,
+                                    count = r.Count(),
+                                    lastSeen = r.Max(e => e.LogTime)
+                                })
+                                .OrderByDescending(r => r.count)
+                                .ThenByDescending(r => r.lastSeen)
+                                .ToList(),
+                            events = ordered
+                                .Take(MaxFaultedEventsPerChargePoint)
+                                .Select(e => new
+                                {
+                                    logTime = e.LogTime,
+                                    connectorId = e.ConnectorId,
+                                    info = e.Info,
+                                    errorCode = e.ErrorCode,
+                                    vendorErrorCode = e.VendorErrorCode,
+                                    vendorId = e.VendorId,
+                                    chargerTimestamp = e.ChargerTimestamp
+                                })
+                                .ToList()
+                        };
+                    })
+                    .OrderByDescending(cp => cp.stillFaultedConnectorIds.Count > 0)
+                    .ThenByDescending(cp => cp.count)
+                    .ThenByDescending(cp => cp.lastSeen)
+                    .ToList();
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        hours,
+                        since = sinceUtc,
+                        totalEvents = events.Count,
+                        chargePointCount = chargePoints.Count,
+                        stillFaultedCount = chargePoints.Count(cp => cp.stillFaultedConnectorIds.Count > 0),
+                        truncated,
+                        chargePoints
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "GetFaultedSummary: Error building faulted summary for last {Hours}h", hours);
+                return Ok(new { success = false, message = "Error retrieving faulted chargepoints" });
             }
         }
 
