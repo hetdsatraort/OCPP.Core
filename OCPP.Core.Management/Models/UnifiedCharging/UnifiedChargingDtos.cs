@@ -147,8 +147,24 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string ConnectorName { get; set; }
         /// <summary>OCPP charge point identity of the station; Local only.</summary>
         public string ChargePointId { get; set; }
-        /// <summary>OCPP connector number on the charge point (1, 2, …); Local only.</summary>
+        /// <summary>
+        /// Human-friendly connector number (1, 2, …). Local: the OCPP connector number. Partner: the
+        /// same number the location listing shows for that connector (UnifiedConnectorDto.ConnectorNumber).
+        /// </summary>
         public string ConnectorNumber { get; set; }
+
+        /// <summary>
+        /// Current output power in kW while the session is active (session-details only); null when
+        /// unknown or the session has ended. See <see cref="PowerSource"/> for where it came from.
+        /// </summary>
+        public double? CurrentPowerKw { get; set; }
+        /// <summary>
+        /// "Charger": live OCPP MeterValues power (reported by the charger, or derived by the OCPP
+        /// server from its meter samples). "Calculated": derived from successive energy readings.
+        /// "Average": energy delivered ÷ elapsed time, used until a rate can be calculated.
+        /// Null when CurrentPowerKw is null.
+        /// </summary>
+        public string PowerSource { get; set; }
         /// <summary>Why the session ended (SessionStopReasonDto shape); null while active.</summary>
         public object StopReason { get; set; }
 

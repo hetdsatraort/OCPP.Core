@@ -9,6 +9,7 @@ using OCPP.Core.Management.Models.Auth;
 using OCPP.Core.Management.Models.ChargingHub;
 using OCPP.Core.Management.Models.ChargingSession;
 using OCPP.Core.Management.Models.UnifiedCharging;
+using OCPP.Core.Management.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -669,7 +670,7 @@ namespace OCPP.Core.Management.Controllers
                     var (_, value) = ExtractResult(result);
                     var json = ToJsonElement(value);
 
-                    if(!string.IsNullOrEmpty(GetString(json, "authorizationRefernce")))
+                    if(!string.IsNullOrEmpty(GetString(json, "authorizationReference")))
                     {
                         var valueNode = JsonNode.Parse(json.GetRawText());
                         valueNode["authorizationReference"] = UnifiedId.Encode(ProviderType.Partner, GetString(json, "authorizationReference")); //$"P:{valueNode["authorizationReference"]}";
@@ -840,11 +841,14 @@ namespace OCPP.Core.Management.Controllers
                     if (respDto?.Success != true)
                         return Ok(new UnifiedChargingResponseDto { Success = false, Message = respDto?.Message ?? "Session not found" });
 
+                    var localSession = MapLocalDetailsToUnified(respDto.Data, nativeId);
+                    await ApplyCurrentPowerAsync(localSession);
+
                     return Ok(new UnifiedChargingResponseDto
                     {
                         Success = true,
                         Message = respDto.Message,
-                        Data = MapLocalDetailsToUnified(respDto.Data, nativeId)
+                        Data = localSession
                     });
                 }
                 else
@@ -866,11 +870,15 @@ namespace OCPP.Core.Management.Controllers
                     if (match.ValueKind != JsonValueKind.Object)
                         return Ok(new UnifiedChargingResponseDto { Success = false, Message = "Session not found" });
 
+                    var partnerSession = MapPartnerListItemToUnified(match);
+                    await ApplyPartnerConnectorNumbersAsync(new[] { partnerSession });
+                    await ApplyCurrentPowerAsync(partnerSession);
+
                     return Ok(new UnifiedChargingResponseDto
                     {
                         Success = true,
                         Message = "Partner session details retrieved successfully",
-                        Data = MapPartnerListItemToUnified(match)
+                        Data = partnerSession
                     });
                 }
             }
@@ -917,6 +925,7 @@ namespace OCPP.Core.Management.Controllers
                 var sorted = merged.OrderByDescending(s => s.StartTime).ToList();
                 var totalCount = sorted.Count;
                 var paged = sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+                await ApplyPartnerConnectorNumbersAsync(paged.Where(s => s.ProviderType == ProviderType.Partner));
 
                 return Ok(new UnifiedSessionListResponseDto
                 {
@@ -1259,6 +1268,161 @@ namespace OCPP.Core.Management.Controllers
             {
                 _logger.LogWarning(ex, "UnifiedChargingController: connection status check failed for {ChargePointId}", chargePointId);
                 return true;
+            }
+        }
+
+        // ── Session enrichment — live power & connector numbers ──────────────
+
+        /// <summary>
+        /// Fills CurrentPowerKw/PowerSource on an active session, trying in order:
+        /// 1. Local only: the OCPP server's in-memory ChargeRateKW from the latest MeterValues
+        ///    (charger-reported Power.Active.Import, or derived by the server from meter deltas).
+        /// 2. A rate calculated from successive energy readings (<see cref="SessionPowerTracker"/>).
+        ///    For partner sessions this is the only "live" option, since OCPI only gives a running kWh total.
+        /// 3. Average power over the session so far, until the first rate can be calculated.
+        /// </summary>
+        private async Task ApplyCurrentPowerAsync(UnifiedSessionDto session)
+        {
+            if (session == null)
+                return;
+
+            if (!session.IsActive)
+            {
+                SessionPowerTracker.Forget(session.Id);
+                return;
+            }
+
+            double? kw = null;
+            string source = null;
+
+            if (session.ProviderType == ProviderType.Local)
+            {
+                kw = await GetLiveChargeRateKwAsync(session.ChargePointId, session.ConnectorNumber);
+                if (kw.HasValue) source = "Charger";
+            }
+
+            if (!kw.HasValue)
+            {
+                // Partner: use the CPO's own last_updated as the reading time; CPOs push every few
+                // minutes, so allow a longer gap before treating the last rate as stale.
+                var sampleTime = DateTime.UtcNow;
+                var staleAfter = TimeSpan.FromMinutes(5);
+                if (session.ProviderType == ProviderType.Partner)
+                {
+                    staleAfter = TimeSpan.FromMinutes(15);
+                    if (UnifiedId.TryParse(session.Id, out _, out var nativeSessionId))
+                    {
+                        var lastUpdated = await _dbContext.OcpiPartnerSessions
+                            .Where(p => p.SessionId == nativeSessionId)
+                            .Select(p => (DateTime?)p.LastUpdated)
+                            .FirstOrDefaultAsync();
+                        if (lastUpdated.HasValue) sampleTime = lastUpdated.Value;
+                    }
+                }
+
+                kw = SessionPowerTracker.Observe(session.Id, session.EnergyDelivered, sampleTime, staleAfter);
+                if (kw.HasValue) source = "Calculated";
+            }
+
+            if (!kw.HasValue && session.DurationMinutes >= 2 && session.EnergyDelivered > 0)
+            {
+                kw = session.EnergyDelivered / (session.DurationMinutes / 60.0);
+                source = "Average";
+            }
+
+            session.CurrentPowerKw = kw.HasValue ? Math.Round(Math.Max(0, kw.Value), 2) : (double?)null;
+            session.PowerSource = kw.HasValue ? source : null;
+        }
+
+        /// <summary>
+        /// The OCPP server's current ChargeRateKW for one connector (from its /Status listing of
+        /// connected charge points). Null when the charger is offline, hasn't sent MeterValues with
+        /// power yet, or the server can't be reached.
+        /// </summary>
+        private async Task<double?> GetLiveChargeRateKwAsync(string chargePointId, string connectorNumber)
+        {
+            string serverApiUrl = _config.GetValue<string>("ServerApiUrl");
+            if (string.IsNullOrEmpty(serverApiUrl) || string.IsNullOrEmpty(chargePointId) ||
+                !int.TryParse(connectorNumber, out int connectorId))
+                return null;
+
+            try
+            {
+                if (!serverApiUrl.EndsWith('/'))
+                    serverApiUrl += "/";
+
+                using var client = _httpClientFactory.CreateClient("GunStatus");
+                client.Timeout = TimeSpan.FromSeconds(4);
+
+                string apiKey = _config.GetValue<string>("ApiKey");
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                    client.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
+
+                var response = await client.GetAsync(new Uri(new Uri(serverApiUrl), "Status"));
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                // Same Newtonsoft model HomeController uses to read this endpoint
+                var statusList = Newtonsoft.Json.JsonConvert.DeserializeObject<OCPP.Core.Management.Models.ChargePointStatus[]>(
+                    await response.Content.ReadAsStringAsync());
+
+                var chargePoint = statusList?.FirstOrDefault(cp =>
+                    string.Equals(cp.Id, chargePointId, StringComparison.OrdinalIgnoreCase));
+                if (chargePoint?.OnlineConnectors == null ||
+                    !chargePoint.OnlineConnectors.TryGetValue(connectorId, out var connector))
+                    return null;
+
+                return connector.ChargeRateKW.HasValue && connector.ChargeRateKW >= 0 ? connector.ChargeRateKW : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "UnifiedChargingController: live charge rate lookup failed for {ChargePointId}/{ConnectorId}", chargePointId, connectorNumber);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Gives partner sessions the same ConnectorNumber the location listing shows for their
+        /// connector, so a session card's "Connector N" matches the gun the user picked rather than the
+        /// CPO's raw (often GUID) connector id. Numbers come from <see cref="NumberConnectors"/> over
+        /// each EVSE's connectors in DB-id order, which is exactly how MapPartnerStationJsonToUnified
+        /// numbers them.
+        /// </summary>
+        private async Task ApplyPartnerConnectorNumbersAsync(IEnumerable<UnifiedSessionDto> sessions)
+        {
+            var targets = sessions?.Where(s => s != null && !string.IsNullOrEmpty(s.ConnectorId) && !string.IsNullOrEmpty(s.StationId)).ToList();
+            if (targets == null || targets.Count == 0)
+                return;
+
+            var evseIds = targets
+                .Select(s => UnifiedId.TryParse(s.StationId, out _, out var native) && int.TryParse(native, out var id) ? id : (int?)null)
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .Distinct()
+                .ToList();
+            if (evseIds.Count == 0)
+                return;
+
+            var connectors = await _dbContext.OcpiPartnerConnectors
+                .Where(c => evseIds.Contains(c.PartnerEvseId))
+                .Select(c => new { c.Id, c.PartnerEvseId, c.ConnectorId })
+                .ToListAsync();
+
+            var numberById = connectors
+                .GroupBy(c => c.PartnerEvseId)
+                .SelectMany(g => NumberConnectors(g
+                    .OrderBy(c => c.Id)
+                    .Select(c => new UnifiedConnectorDto
+                    {
+                        Id = UnifiedId.Encode(ProviderType.Partner, c.Id.ToString()),
+                        ConnectorId = c.ConnectorId
+                    })))
+                .ToDictionary(c => c.Id, c => c.ConnectorNumber);
+
+            foreach (var session in targets)
+            {
+                if (numberById.TryGetValue(session.ConnectorId, out var number))
+                    session.ConnectorNumber = number.ToString();
             }
         }
 
