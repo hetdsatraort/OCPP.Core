@@ -436,7 +436,16 @@ namespace OCPP.Core.Management.Controllers
                 _dbContext.ChargingSessions.Add(session);
                 await _dbContext.SaveChangesAsync();
                 var socResult = await GetCachedSoC(ocppTransaction.ChargePointId, request.ConnectorId, maxAgeMinutes: 2);
-                if (socResult.Success && socResult.SoC.HasValue)
+                // A reading tagged with a different (previous) transaction is the last car's final SoC, not ours.
+                // Readings with no transaction (pre-start MeterValues) are fine to use.
+                bool socFromOtherTransaction = socResult.TransactionId.HasValue && socResult.TransactionId.Value > 0 &&
+                                               socResult.TransactionId.Value != transactionId;
+                if (socFromOtherTransaction)
+                {
+                    _logger.LogWarning("StartChargingSession => Ignoring cached SoC {0}% from previous TransactionId={1} (new TransactionId={2})",
+                        socResult.SoC, socResult.TransactionId, transactionId);
+                }
+                if (socResult.Success && socResult.SoC.HasValue && !socFromOtherTransaction)
                 {
                     session.SoCStart = socResult.SoC.Value;
                     session.SoCLastUpdate = socResult.Timestamp;
@@ -3308,7 +3317,7 @@ namespace OCPP.Core.Management.Controllers
 
                     if (!string.IsNullOrEmpty(apiKey))
                     {
-                        httpClient.DefaultRequestHeaders.Add("API-Key", apiKey);
+                        httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
                     }
 
                     var requestBody = new
@@ -3322,7 +3331,9 @@ namespace OCPP.Core.Management.Controllers
                         System.Text.Encoding.UTF8,
                         "application/json");
 
-                    HttpResponseMessage response = await httpClient.PostAsync("API/SoC/ClearSoC", content);
+                    // ServerApiUrl already ends in ".../API/" (same as GetCachedSoC) - "API/SoC/ClearSoC" used to
+                    // resolve to /API/API/SoC/ClearSoC => 404, so the cache was never cleared after a session.
+                    HttpResponseMessage response = await httpClient.PostAsync("SoC/ClearSoC", content);
                     string jsonResponse = await response.Content.ReadAsStringAsync();
 
                     if (response.IsSuccessStatusCode)

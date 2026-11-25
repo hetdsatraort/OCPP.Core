@@ -268,10 +268,12 @@ namespace OCPP.Core.Management.Controllers
                             Id = UnifiedId.Encode(ProviderType.Local, st.RecId),
                             ProviderType = ProviderType.Local,
                             Name = st.ChargePointName ?? st.ChargingPointId,
+                            ChargePointId = st.ChargingPointId,
+                            ImageId = st.ChargingStationImage,
                             TotalConnectors = chargers.Count,
                             AvailableConnectors = chargers.Count(c =>
                                 string.Equals(c.LastStatus ?? c.ChargerStatus, "Available", StringComparison.OrdinalIgnoreCase)),
-                            Connectors = chargers.Select(MapLocalChargerToUnified).ToList()
+                            Connectors = MapLocalChargersToUnified(chargers)
                         });
                     }
 
@@ -291,6 +293,10 @@ namespace OCPP.Core.Management.Controllers
                             Latitude = dto.Hub.Latitude,
                             Longitude = dto.Hub.Longitude,
                             AverageRating = dto.AverageRating,
+                            ImageId = dto.Hub.ChargingHubImage,
+                            OpeningTime = dto.Hub.OpeningTime.ToString("HH:mm"),
+                            ClosingTime = dto.Hub.ClosingTime.ToString("HH:mm"),
+                            Amenities = dto.Hub.Amenities,
                             TotalStations = stations.Count,
                             AvailableStations = stations.Count(s => s.AvailableConnectors > 0),
                             TotalConnectors = stations.Sum(s => s.TotalConnectors),
@@ -1258,13 +1264,45 @@ namespace OCPP.Core.Management.Controllers
 
         // ── Mapping helpers — Local ───────────────────────────────────────────
 
+        /// <summary>
+        /// Fills ConnectorNumber/DisplayName for one station's connectors, which must arrive in a
+        /// stable order. If every native ConnectorId is a distinct positive integer (the normal
+        /// OCPP case) that number is used and the list is sorted by it; otherwise (e.g. OCPI
+        /// connector ids that are GUIDs) connectors are numbered 1..n in the given order, so users
+        /// always see "Connector 1", "Connector 2"… rather than an opaque id.
+        /// </summary>
+        private static List<UnifiedConnectorDto> NumberConnectors(IEnumerable<UnifiedConnectorDto> source)
+        {
+            var connectors = source?.ToList() ?? new List<UnifiedConnectorDto>();
+            var parsed = connectors
+                .Select(c => int.TryParse(c.ConnectorId, out var n) && n > 0 ? n : (int?)null)
+                .ToList();
+            bool useNative = parsed.All(n => n.HasValue) && parsed.Distinct().Count() == parsed.Count;
+
+            for (int i = 0; i < connectors.Count; i++)
+            {
+                connectors[i].ConnectorNumber = useNative ? parsed[i].Value : i + 1;
+                connectors[i].DisplayName = $"Connector {connectors[i].ConnectorNumber}";
+            }
+
+            return useNative ? connectors.OrderBy(c => c.ConnectorNumber).ToList() : connectors;
+        }
+
+        /// <summary>Local chargers → numbered unified connectors, ordered by creation for a stable fallback numbering.</summary>
+        private static List<UnifiedConnectorDto> MapLocalChargersToUnified(IEnumerable<ChargerDto> chargers) =>
+            NumberConnectors((chargers ?? Enumerable.Empty<ChargerDto>())
+                .OrderBy(c => c.CreatedOn).ThenBy(c => c.RecId)
+                .Select(MapLocalChargerToUnified));
+
         private static UnifiedConnectorDto MapLocalChargerToUnified(ChargerDto c) => new UnifiedConnectorDto
         {
             Id = UnifiedId.Encode(ProviderType.Local, c.RecId),
             ProviderType = ProviderType.Local,
             ConnectorId = c.ConnectorId,
+            ConnectorName = c.ConnectorName,
             ChargerTypeName = c.ChargerTypeName,
             PowerOutput = c.PowerOutput,
+            LastMeter = c.LastMeter,
             Tariff = c.ChargerTariff,
             Status = c.LastStatus ?? c.ChargerStatus,
             LastUpdated = c.LastStatusTime ?? c.UpdatedOn
@@ -1276,9 +1314,10 @@ namespace OCPP.Core.Management.Controllers
             ProviderType = ProviderType.Local,
             Name = st.ChargePointName ?? st.ChargingPointId,
             ChargePointId = st.ChargingPointId,
+            ImageId = st.ChargingStationImage,
             TotalConnectors = st.TotalChargers,
             AvailableConnectors = st.AvailableChargers,
-            Connectors = st.Chargers?.Select(MapLocalChargerToUnified).ToList() ?? new List<UnifiedConnectorDto>()
+            Connectors = MapLocalChargersToUnified(st.Chargers)
         };
 
         private static UnifiedLocationDto MapLocalHubWithStationsToUnified(ChargingHubWithStationsDto hub) => new UnifiedLocationDto
@@ -1299,6 +1338,10 @@ namespace OCPP.Core.Management.Controllers
             AvailableStations = hub.Stations?.Count(s => s.AvailableChargers > 0) ?? 0,
             TotalConnectors = hub.TotalChargers,
             AvailableConnectors = hub.AvailableChargers,
+            ImageId = hub.ChargingHubImage,
+            OpeningTime = hub.OpeningTime,
+            ClosingTime = hub.ClosingTime,
+            Amenities = hub.Amenities,
             Stations = hub.Stations?.Select(MapLocalStationWithChargersToUnified).ToList() ?? new List<UnifiedStationDto>()
         };
 
@@ -1564,9 +1607,13 @@ namespace OCPP.Core.Management.Controllers
                 Id = UnifiedId.Encode(ProviderType.Partner, GetInt(st, "id")?.ToString()),
                 ProviderType = ProviderType.Partner,
                 Name = GetString(st, "chargePointName") ?? GetString(st, "chargingPointId"),
+                Status = GetString(st, "status"),
                 TotalConnectors = gunCount,
                 AvailableConnectors = available ? gunCount : 0,
-                Connectors = GetArray(st, "chargers").Select(MapPartnerConnectorJsonToUnified).ToList()
+                // Order by our DB id so the 1..n fallback numbering (OCPI ids are often GUIDs) is stable
+                Connectors = NumberConnectors(GetArray(st, "chargers")
+                    .OrderBy(c => GetInt(c, "id") ?? int.MaxValue)
+                    .Select(MapPartnerConnectorJsonToUnified))
             };
         }
 

@@ -14,9 +14,26 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
     {
         public string Id { get; set; }
         public ProviderType ProviderType { get; set; }
+        /// <summary>
+        /// Raw native connector id — the OCPP connector number for Local, the CPO-assigned OCPI
+        /// connector id for Partner (free text, often a GUID). Not meant for display; use
+        /// <see cref="ConnectorNumber"/> / <see cref="DisplayName"/>.
+        /// </summary>
         public string ConnectorId { get; set; }
+        /// <summary>
+        /// Human-friendly 1-based number within the connector's station. Equals ConnectorId when
+        /// every connector on the station has a distinct positive-integer id; otherwise the
+        /// connectors are numbered 1..n in a stable order.
+        /// </summary>
+        public int ConnectorNumber { get; set; }
+        /// <summary>"Connector {ConnectorNumber}" — what to show users.</summary>
+        public string DisplayName { get; set; }
+        /// <summary>Optional admin-set connector name from OCPP ConnectorStatus; Local only.</summary>
+        public string ConnectorName { get; set; }
         public string ChargerTypeName { get; set; }
         public string PowerOutput { get; set; }
+        /// <summary>Last meter reading in kWh; Local only.</summary>
+        public double? LastMeter { get; set; }
         /// <summary>
         /// For Partner connectors, the partner CPO's own energy price resolved from their locally
         /// cached OCPI tariff (see OcpiPartnerHubController.BuildConnectorTariffLookupAsync); null
@@ -34,6 +51,10 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public string Name { get; set; }
         /// <summary>OCPP charge point identity the charger connects with; Local only.</summary>
         public string ChargePointId { get; set; }
+        /// <summary>Station image file id; Local only.</summary>
+        public string ImageId { get; set; }
+        /// <summary>Last-synced OCPI EVSE status; Partner only.</summary>
+        public string Status { get; set; }
         public int TotalConnectors { get; set; }
         public int AvailableConnectors { get; set; }
         public List<UnifiedConnectorDto> Connectors { get; set; } = new List<UnifiedConnectorDto>();
@@ -60,6 +81,14 @@ namespace OCPP.Core.Management.Models.UnifiedCharging
         public int AvailableConnectors { get; set; }
         /// <summary>Null for Local hubs.</summary>
         public string PartnerName { get; set; }
+        /// <summary>Hub image file id; Local only.</summary>
+        public string ImageId { get; set; }
+        /// <summary>"HH:mm"; Local only.</summary>
+        public string OpeningTime { get; set; }
+        /// <summary>"HH:mm"; Local only.</summary>
+        public string ClosingTime { get; set; }
+        /// <summary>Local only.</summary>
+        public string Amenities { get; set; }
         public List<UnifiedStationDto> Stations { get; set; } = new List<UnifiedStationDto>();
     }
 

@@ -75,6 +75,9 @@ namespace OCPP.Core.Server
 
                         // Return DB-ID as transaction ID
                         startTransactionResponse.TransactionId = transaction.TransactionId;
+
+                        // Previous session's final SoC must not leak into this one as its start SoC
+                        SoCCache.ClearIfOtherTransaction(ChargePointStatus?.Id, startTransactionRequest.ConnectorId, transaction.TransactionId);
                     }
                     catch (Exception exp)
                     {

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace OCPP.Core.Server
 {
@@ -45,6 +46,23 @@ namespace OCPP.Core.Server
         {
             string key = GetKey(chargePointId, connectorId);
             _cache.TryRemove(key, out _);
+        }
+
+        /// <summary>
+        /// Called when a new transaction starts: drop a cached value that belongs to a different (previous)
+        /// transaction so it can't be picked up as the new session's start SoC.
+        /// Values without a transaction (pre-start MeterValues, TransactionId 0/null) are kept.
+        /// </summary>
+        public static void ClearIfOtherTransaction(string chargePointId, int connectorId, int newTransactionId)
+        {
+            string key = GetKey(chargePointId, connectorId);
+            if (_cache.TryGetValue(key, out var data) &&
+                data.TransactionId.HasValue && data.TransactionId.Value > 0 &&
+                data.TransactionId.Value != newTransactionId)
+            {
+                // Only remove the exact entry we inspected (a newer MeterValue may have replaced it meanwhile)
+                ((ICollection<KeyValuePair<string, SoCData>>)_cache).Remove(new KeyValuePair<string, SoCData>(key, data));
+            }
         }
 
         /// <summary>
