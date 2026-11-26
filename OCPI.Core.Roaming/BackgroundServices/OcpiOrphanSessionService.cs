@@ -43,6 +43,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private readonly ILogger<OcpiOrphanSessionService> _logger;
         private readonly IConfiguration _configuration;
         private readonly IOcpiEndpointCache _endpointCache;
+        private readonly OcpiPartnerThrottle _throttle;
         private readonly TimeSpan _checkInterval;
         private readonly TimeSpan _orphanTimeout;
         private readonly TimeSpan _disconnectedSessionTimeout;
@@ -76,12 +77,14 @@ namespace OCPI.Core.Roaming.BackgroundServices
             IServiceScopeFactory scopeFactory,
             ILogger<OcpiOrphanSessionService> logger,
             IConfiguration configuration,
-            IOcpiEndpointCache endpointCache)
+            IOcpiEndpointCache endpointCache,
+            OcpiPartnerThrottle throttle)
         {
             _scopeFactory = scopeFactory;
             _logger = new PausableLogger<OcpiOrphanSessionService>(logger, configuration, "OCPI:PauseOrphanSessionLogging");
             _configuration = configuration;
             _endpointCache = endpointCache;
+            _throttle = throttle;
             _realTimePartnerPushEnabled = configuration.GetValue<bool>("OCPI:RealTimePartnerPushEnabled", false);
 
             var intervalSeconds = configuration.GetValue<int>("OCPI:OrphanCheckIntervalSeconds", 10);
@@ -1247,6 +1250,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
             int completedCount = 0;
             int limitStoppedCount = 0;
             int stopRetriedCount = 0;
+            int stopHeldCount = 0;
             int orphanInvalidated = 0;
             int billedCount = 0;
 
@@ -1292,11 +1296,25 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 // Covers both limit auto-stops and manual stops (OcpiAdminController.EmspStopSession
                 // records LastStopAttemptAt too). A partner may reject, lose or simply be slow to
                 // act on the command; without this the user keeps charging indefinitely.
+                // While the partner is rate-limiting us the retry is held (in memory, no request,
+                // no attempt used up) and goes out on the first cycle after the pause ends, so a
+                // long pause can't exhaust PartnerStopMaxAttempts with stops that were never sent.
                 if (session.LastStopAttemptAt.HasValue)
                 {
                     if (session.StopAttempts < _partnerStopMaxAttempts
                         && DateTime.UtcNow - session.LastStopAttemptAt.Value >= _partnerStopRetryInterval)
                     {
+                        var pause = GetPartnerPause(session, partners);
+                        if (pause > TimeSpan.Zero)
+                        {
+                            stopHeldCount++;
+                            _logger.LogDebug(
+                                "OcpiOrphanSessionService: partner session {SessionId} still ACTIVE after STOP_SESSION — " +
+                                "retry held, partner is rate-limiting us for another {Pause}",
+                                session.SessionId, pause);
+                            continue;
+                        }
+
                         _logger.LogWarning(
                             "OcpiOrphanSessionService: partner session {SessionId} still ACTIVE {Elapsed:F0}s after " +
                             "STOP_SESSION — re-sending (attempt {Attempt}/{Max})",
@@ -1411,14 +1429,35 @@ namespace OCPI.Core.Roaming.BackgroundServices
             _logger.LogInformation(
                 "OcpiOrphanSessionService: partner session cycle done — " +
                 "completed: {Completed}, limit-stopped: {LimitStopped}, stop-retried: {StopRetried}, " +
-                "invalidated: {Invalidated}, billed: {Billed}",
-                completedCount, limitStoppedCount, stopRetriedCount, orphanInvalidated, billedCount);
+                "stop-held (partner rate-limiting): {StopHeld}, invalidated: {Invalidated}, billed: {Billed}",
+                completedCount, limitStoppedCount, stopRetriedCount, stopHeldCount, orphanInvalidated, billedCount);
         }
+
+        /// <summary>Outcome of one STOP_SESSION send.</summary>
+        private enum StopSendResult
+        {
+            Accepted,
+            NotAccepted,
+            /// <summary>Not sent: the partner's host is paused after a 429.</summary>
+            Paused
+        }
+
+        /// <summary>Remaining rate-limit pause on the session's partner (versions host); zero when not paused or unknown.</summary>
+        private TimeSpan GetPartnerPause(OcpiPartnerSession session, Dictionary<int, OcpiPartnerCredential> partners) =>
+            session.PartnerCredentialId.HasValue && partners.TryGetValue(session.PartnerCredentialId.Value, out var partner)
+                ? _throttle.GetRemainingCooldownForUrl(partner.Url)
+                : TimeSpan.Zero;
 
         /// <summary>
         /// Sends STOP_SESSION to the session's partner CPO and records the attempt
         /// (<see cref="OcpiPartnerSession.LastStopAttemptAt"/> / <see cref="OcpiPartnerSession.StopAttempts"/>)
         /// whether or not it succeeds, so step C retries it until the partner ends the session.
+        ///
+        /// The session's first STOP (a limit auto-stop) is sent even while the partner is
+        /// rate-limiting us, via <see cref="OcpiPartnerThrottle.BypassBreaker"/>: one request into a
+        /// block costs far less than a driver charging past their limit. Retries respect the pause.
+        /// One that is held back by it isn't counted as an attempt, so retries resume once the
+        /// partner accepts requests rather than running out during a long pause.
         /// </summary>
         private async Task SendStopToPartnerAsync(
             OcpiPartnerSession session,
@@ -1426,6 +1465,8 @@ namespace OCPI.Core.Roaming.BackgroundServices
             IHttpClientFactory httpFactory,
             CancellationToken ct)
         {
+            bool firstAttempt = session.StopAttempts == 0;
+
             // LastUpdated is deliberately left alone: it drives the stale-session live refresh, and
             // right after a stop is exactly when we want fresh data from the partner.
             session.LastStopAttemptAt = DateTime.UtcNow;
@@ -1435,13 +1476,29 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 partners.TryGetValue(session.PartnerCredentialId.Value, out var partner) &&
                 !string.IsNullOrEmpty(partner.OutboundToken))
             {
-                bool stopped = await IssueStopSessionToPartnerAsync(
-                    session, partner, httpFactory, ct);
+                StopSendResult result;
+                using (firstAttempt ? OcpiPartnerThrottle.BypassBreaker() : null)
+                {
+                    result = await IssueStopSessionToPartnerAsync(session, partner, httpFactory, ct);
+                }
+
+                if (result == StopSendResult.Paused)
+                {
+                    // Nothing reached the partner, so don't use up an attempt
+                    session.StopAttempts--;
+                    _logger.LogWarning(
+                        "OcpiOrphanSessionService: STOP_SESSION to partner {PartnerId} for session {SessionId} held back — " +
+                        "partner is rate-limiting us; will send once the pause ends",
+                        partner.Id, session.SessionId);
+                    return;
+                }
 
                 _logger.LogInformation(
                     "OcpiOrphanSessionService: STOP_SESSION to partner {PartnerId} for session {SessionId} " +
-                    "(attempt {Attempt}): {Result}",
-                    partner.Id, session.SessionId, session.StopAttempts, stopped ? "ACCEPTED" : "not accepted / failed");
+                    "(attempt {Attempt}{Bypass}): {Result}",
+                    partner.Id, session.SessionId, session.StopAttempts,
+                    firstAttempt ? ", sent past any rate-limit pause" : "",
+                    result == StopSendResult.Accepted ? "ACCEPTED" : "not accepted / failed");
             }
             else
             {
@@ -1455,9 +1512,12 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
         /// <summary>
         /// Discovers the partner CPO's commands endpoint and POSTs a STOP_SESSION body.
-        /// Returns true if the partner responded ACCEPTED; false on any failure.
+        /// Returns <see cref="StopSendResult.Accepted"/> if the partner responded ACCEPTED,
+        /// <see cref="StopSendResult.Paused"/> if nothing was sent because the partner's host is
+        /// paused after a 429 (outside a <see cref="OcpiPartnerThrottle.BypassBreaker"/> scope), and
+        /// <see cref="StopSendResult.NotAccepted"/> on any other failure, including a real 429.
         /// </summary>
-        private async Task<bool> IssueStopSessionToPartnerAsync(
+        private async Task<StopSendResult> IssueStopSessionToPartnerAsync(
             OcpiPartnerSession session,
             OcpiPartnerCredential partner,
             IHttpClientFactory httpFactory,
@@ -1475,10 +1535,15 @@ namespace OCPI.Core.Roaming.BackgroundServices
 
                 if (commandsUrl == null)
                 {
+                    // Discovery fails fast (nothing sent) while the partner's host is paused
+                    if (!OcpiPartnerThrottle.IsBypassingBreaker &&
+                        _throttle.GetRemainingCooldownForUrl(partner.Url) > TimeSpan.Zero)
+                        return StopSendResult.Paused;
+
                     _logger.LogWarning(
                         "OcpiOrphanSessionService: commands endpoint not found for partner {PartnerId} — " +
                         "cannot stop session {SessionId}", partner.Id, session.SessionId);
-                    return false;
+                    return StopSendResult.NotAccepted;
                 }
 
                 var ourBaseUrl = _configuration.GetValue<string>("Ocpi:OurBaseUrl") ?? "https://localhost";
@@ -1491,6 +1556,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 var resp = await http.PostAsJsonAsync(
                     $"{commandsUrl.TrimEnd('/')}/STOP_SESSION", commandBody, ct);
 
+                if (OcpiPartnerThrottle.IsCircuitOpen(resp))
+                    return StopSendResult.Paused;
+
                 var body = await resp.Content.ReadAsStringAsync(ct);
                 string cmdResult = "UNKNOWN";
                 try
@@ -1502,14 +1570,16 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 }
                 catch { /* ignore JSON parse errors */ }
 
-                return string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase);
+                return string.Equals(cmdResult, "ACCEPTED", StringComparison.OrdinalIgnoreCase)
+                    ? StopSendResult.Accepted
+                    : StopSendResult.NotAccepted;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
                     "OcpiOrphanSessionService: error issuing STOP_SESSION to partner {PartnerId} " +
                     "for session {SessionId}", partner.Id, session.SessionId);
-                return false;
+                return StopSendResult.NotAccepted;
             }
         }
 

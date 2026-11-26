@@ -6,7 +6,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
 {
     /// <summary>
     /// Per-host proactive pacing + circuit breaker shared by every outbound call to an OCPI
-    /// partner.
+    /// partner — background pushes/pulls and admin/driver-initiated calls alike.
     ///
     /// An earlier version of this retried a 429 in-process with backoff honouring Retry-After.
     /// Against at least one partner (Numocity) that didn't help — the 429 comes back in
@@ -16,14 +16,28 @@ namespace OCPI.Core.Roaming.BackgroundServices
     /// around it.
     ///
     /// So this trips a breaker per host instead: on any 429, every subsequent call to that host —
-    /// from either background service, any partner sharing the host — fails FAST (no network call,
-    /// no blocking wait) until the cooldown passes, and the calling background service's normal
-    /// "log + move on, try again next cycle" handling takes it from there.
+    /// from either background service or a controller, any partner sharing the host — fails FAST
+    /// (no network call, no blocking wait) until the cooldown passes. Callers see a 429 carrying
+    /// <see cref="CircuitOpenHeader"/> (test with <see cref="IsCircuitOpen"/>) and handle it as
+    /// "partner unavailable for now": background services log and try again next cycle,
+    /// controllers return a rate-limited message.
+    ///
+    /// A few calls cost more to drop than one extra request into a block — a driver's own Stop,
+    /// the first STOP_SESSION of a limit auto-stop, onboarding. Those run inside
+    /// <see cref="BypassBreaker"/>: still paced, still able to trip/extend the breaker on a real
+    /// 429, but sent even while it is open.
+    ///
     /// Registered as a singleton so this state is shared across every transient
-    /// <see cref="OcpiPartnerRateLimitHandler"/> instance HttpClientFactory creates.
+    /// <see cref="OcpiPartnerRateLimitHandler"/> instance HttpClientFactory creates. The state is
+    /// in memory only, so a process restart clears it (the partner's own block is unaffected).
     /// </summary>
     public sealed class OcpiPartnerThrottle
     {
+        /// <summary>Response header the handler adds to its own fail-fast 429 (breaker open, nothing sent).</summary>
+        public const string CircuitOpenHeader = "X-HyCharge-Circuit-Open";
+
+        private static readonly AsyncLocal<bool> _bypassBreaker = new();
+
         private sealed class HostState
         {
             public readonly SemaphoreSlim Gate = new(1, 1);
@@ -31,8 +45,59 @@ namespace OCPI.Core.Roaming.BackgroundServices
             public DateTime CooldownUntilUtc = DateTime.MinValue;
         }
 
+        private sealed class BypassScope : IDisposable
+        {
+            private readonly bool _previous;
+            private bool _disposed;
+
+            public BypassScope(bool previous) => _previous = previous;
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                _bypassBreaker.Value = _previous;
+            }
+        }
+
         private readonly ConcurrentDictionary<string, HostState> _hosts = new(StringComparer.OrdinalIgnoreCase);
         private readonly TimeSpan _minInterval;
+
+        /// <summary>
+        /// Lets partner calls made inside the returned scope through an open breaker. They are still
+        /// paced, and a real 429 still trips/extends the breaker. Reserve it for calls where not
+        /// sending costs more than one request into an active block (see the class summary).
+        /// Open it with <c>using</c> in the async method that makes the calls: the flag is an
+        /// <see cref="AsyncLocal{T}"/>, so it flows into the handler and is restored on dispose.
+        /// </summary>
+        public static IDisposable BypassBreaker()
+        {
+            var previous = _bypassBreaker.Value;
+            _bypassBreaker.Value = true;
+            return new BypassScope(previous);
+        }
+
+        /// <summary>True inside a <see cref="BypassBreaker"/> scope.</summary>
+        public static bool IsBypassingBreaker => _bypassBreaker.Value;
+
+        /// <summary>True when <paramref name="response"/> is the handler's own fail-fast 429, i.e. no request reached the partner.</summary>
+        public static bool IsCircuitOpen(HttpResponseMessage response) =>
+            response.StatusCode == HttpStatusCode.TooManyRequests && response.Headers.Contains(CircuitOpenHeader);
+
+        /// <summary>Short human-readable wait for messages, e.g. "about 3 h 20 min" or "about 45 s".</summary>
+        public static string DescribeWait(TimeSpan wait)
+        {
+            if (wait <= TimeSpan.Zero) return "a moment";
+            if (wait < TimeSpan.FromMinutes(1)) return $"about {Math.Ceiling(wait.TotalSeconds)} s";
+            if (wait < TimeSpan.FromHours(1)) return $"about {Math.Ceiling(wait.TotalMinutes)} min";
+
+            var hours = (int)wait.TotalHours;
+            return wait.Minutes == 0 ? $"about {hours} h" : $"about {hours} h {wait.Minutes} min";
+        }
+
+        /// <summary>Remaining cooldown for the host of <paramref name="url"/>; zero when the breaker isn't tripped or the url isn't absolute.</summary>
+        public TimeSpan GetRemainingCooldownForUrl(string? url) =>
+            Uri.TryCreate(url, UriKind.Absolute, out var uri) ? GetRemainingCooldown(uri.Host) : TimeSpan.Zero;
 
         public OcpiPartnerThrottle(IConfiguration configuration)
         {
@@ -86,10 +151,13 @@ namespace OCPI.Core.Roaming.BackgroundServices
     }
 
     /// <summary>
-    /// DelegatingHandler installed on the named "OcpiPartner" HttpClient used for every outbound
-    /// call to an OCPI partner platform (both directions, both background services). See
-    /// <see cref="OcpiPartnerThrottle"/> for why this is a fail-fast circuit breaker rather than a
-    /// retry-with-backoff loop.
+    /// DelegatingHandler installed on the named "OcpiPartner" HttpClient. Every outbound call to an
+    /// OCPI partner platform must use that client: both background services, and the admin/eMSP
+    /// controller calls (Test Connection, onboarding, START/STOP_SESSION, tariff and live-status
+    /// lookups, endpoint discovery). The plain default HttpClient is only for our own services.
+    /// See <see cref="OcpiPartnerThrottle"/> for why this is a fail-fast circuit breaker rather
+    /// than a retry-with-backoff loop, and for the <see cref="OcpiPartnerThrottle.BypassBreaker"/>
+    /// exception.
     /// </summary>
     public sealed class OcpiPartnerRateLimitHandler : DelegatingHandler
     {
@@ -126,11 +194,19 @@ namespace OCPI.Core.Roaming.BackgroundServices
             var remaining = _throttle.GetRemainingCooldown(host);
             if (remaining > TimeSpan.Zero)
             {
+                if (!OcpiPartnerThrottle.IsBypassingBreaker)
+                {
+                    _logger.LogWarning(
+                        "OCPI partner host {Host} circuit breaker open for another {Remaining} " +
+                        "(tripped by an earlier 429) — skipping {Method} {Url} without hitting the network",
+                        host, remaining, request.Method, request.RequestUri);
+                    return SyntheticTooManyRequests(request, remaining);
+                }
+
                 _logger.LogWarning(
-                    "OCPI partner host {Host} circuit breaker open for another {Remaining} " +
-                    "(tripped by an earlier 429) — skipping {Method} {Url} without hitting the network",
+                    "OCPI partner host {Host} circuit breaker open for another {Remaining}, but sending " +
+                    "priority call {Method} {Url} anyway (breaker bypass)",
                     host, remaining, request.Method, request.RequestUri);
-                return SyntheticTooManyRequests(request, remaining);
             }
 
             await _throttle.WaitTurnAsync(host, ct);
@@ -199,6 +275,7 @@ namespace OCPI.Core.Roaming.BackgroundServices
                 Content = new StringContent(string.Empty)
             };
             resp.Headers.RetryAfter = new RetryConditionHeaderValue(retryAfter);
+            resp.Headers.TryAddWithoutValidation(OcpiPartnerThrottle.CircuitOpenHeader, "true");
             return resp;
         }
     }

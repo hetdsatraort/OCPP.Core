@@ -792,8 +792,9 @@ namespace OCPI.Core.Roaming.BackgroundServices
         private HttpClient CreatePartnerHttpClient(IHttpClientFactory factory, OcpiPartnerCredential partner)
         {
             // "OcpiPartner" carries OcpiPartnerRateLimitHandler — paces requests per partner host
-            // and retries 429s with backoff. Every outbound call to a partner platform must go
-            // through this client rather than the plain default one.
+            // and, after a 429, fails calls to that host fast until the partner's Retry-After has
+            // passed (no retry/backoff). Every outbound call to a partner platform must go through
+            // this client rather than the plain default one.
             var http = factory.CreateClient("OcpiPartner");
             http.DefaultRequestHeaders.Clear();
             var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;

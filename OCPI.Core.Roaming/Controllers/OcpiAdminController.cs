@@ -39,6 +39,7 @@ namespace OCPI.Core.Roaming.Controllers
         private readonly IOcpiCredentialsService _credentialsService;
         private readonly IOcpiTariffService _tariffService;
         private readonly IOcpiEndpointCache _endpointCache;
+        private readonly OcpiPartnerThrottle _throttle;
         private readonly OCPPCoreContext _dbContext;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IConfiguration _configuration;
@@ -50,6 +51,7 @@ namespace OCPI.Core.Roaming.Controllers
             IOcpiCredentialsService credentialsService,
             IOcpiTariffService tariffService,
             IOcpiEndpointCache endpointCache,
+            OcpiPartnerThrottle throttle,
             IHttpClientFactory httpClientFactory,
             IConfiguration configuration,
             OCPPCoreContext dbContext,
@@ -61,6 +63,7 @@ namespace OCPI.Core.Roaming.Controllers
             _credentialsService = credentialsService;
             _tariffService = tariffService;
             _endpointCache = endpointCache;
+            _throttle = throttle;
             _httpClientFactory = httpClientFactory;
             _configuration = configuration;
             _dbContext = dbContext;
@@ -210,7 +213,20 @@ namespace OCPI.Core.Roaming.Controllers
                     partner, "locations", new[] { "SENDER", "CPO" }, http, _logger, ct);
 
                 if (endpoint == null)
+                {
+                    // Discovery fails fast while the partner's host is paused
+                    var discoveryPause = PartnerPause(partner);
+                    if (discoveryPause > TimeSpan.Zero)
+                        return Ok(new
+                        {
+                            success = false,
+                            rateLimited = true,
+                            retryAfterSeconds = (int)Math.Ceiling(discoveryPause.TotalSeconds),
+                            message = "This partner network is rate-limiting HyCharge (HTTP 429), so live status is unavailable " +
+                                      $"for {OcpiPartnerThrottle.DescribeWait(discoveryPause)}. The status shown is the last one synced."
+                        });
                     return Ok(new { success = false, message = "Partner does not expose a locations endpoint" });
+                }
 
                 // Numocity (a real, functional CPO partner) 404s on the spec-shaped
                 // {country_code}/{party_id}/{location_id} path but answers correctly on plain
@@ -222,6 +238,19 @@ namespace OCPI.Core.Roaming.Controllers
 
                 if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
                     return Ok(new { success = false, message = "Location not found at partner" });
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var wait = PartnerPause(partner, url);
+                    return Ok(new
+                    {
+                        success = false,
+                        rateLimited = true,
+                        retryAfterSeconds = (int)Math.Ceiling(wait.TotalSeconds),
+                        message = "This partner network is rate-limiting HyCharge (HTTP 429), so live status is unavailable " +
+                                  $"for {OcpiPartnerThrottle.DescribeWait(wait)}. The status shown is the last one synced."
+                    });
+                }
 
                 if (!resp.IsSuccessStatusCode)
                 {
@@ -413,7 +442,9 @@ namespace OCPI.Core.Roaming.Controllers
 
         /// <summary>
         /// Probe a partner's versions URL to verify connectivity.
-        /// Uses the stored token to authenticate with the partner.
+        /// Uses the stored token to authenticate with the partner. Goes through the rate-limited
+        /// "OcpiPartner" client, so while the partner is rate-limiting us this reports the pause
+        /// without sending anything (repeated clicks would otherwise spend the partner's quota).
         /// </summary>
         [HttpPost("partners/{id:int}/probe")]
         public async Task<IActionResult> ProbePartner([FromRoute] int id)
@@ -424,7 +455,7 @@ namespace OCPI.Core.Roaming.Controllers
             if (partner == null)
                 return NotFound(new { success = false, message = "Partner not found" });
 
-            var httpClient = _httpClientFactory.CreateClient();
+            var httpClient = _httpClientFactory.CreateClient("OcpiPartner");
             var tokenStr = string.IsNullOrEmpty(partner.OutboundToken) ? partner.Token : partner.OutboundToken;
             httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenStr))}");
             httpClient.Timeout = TimeSpan.FromSeconds(10);
@@ -435,6 +466,23 @@ namespace OCPI.Core.Roaming.Controllers
                 var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
                 var resp = await httpClient.GetAsync(partnerURL);
                 sw.Stop();
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var wait = PartnerPause(partner);
+                    var sent = !OcpiPartnerThrottle.IsCircuitOpen(resp);
+                    return Ok(new
+                    {
+                        success    = false,
+                        statusCode = 429,
+                        latencyMs  = sent ? sw.ElapsedMilliseconds : 0,
+                        rateLimited = true,
+                        retryAfterSeconds = (int)Math.Ceiling(wait.TotalSeconds),
+                        message    = sent
+                            ? $"HTTP 429 — the partner is rate-limiting HyCharge. Calls to it are paused for {OcpiPartnerThrottle.DescribeWait(wait)}."
+                            : $"Paused — the partner rate-limited HyCharge earlier. Calls resume in {OcpiPartnerThrottle.DescribeWait(wait)}; no request was sent."
+                    });
+                }
 
                 return Ok(new
                 {
@@ -461,7 +509,11 @@ namespace OCPI.Core.Roaming.Controllers
             if (string.IsNullOrWhiteSpace(request.VersionsUrl) || string.IsNullOrWhiteSpace(request.Token))
                 return BadRequest(new { success = false, message = "VersionsUrl and Token are required" });
 
-            var httpClient = _httpClientFactory.CreateClient();
+            // Paced like every partner call, but sent even if this host's breaker is open: it's a
+            // one-off admin action, and a fresh credential exchange may be what clears a block.
+            using var breakerBypass = OcpiPartnerThrottle.BypassBreaker();
+
+            var httpClient = _httpClientFactory.CreateClient("OcpiPartner");
             httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(request.Token))}");
             httpClient.Timeout = TimeSpan.FromSeconds(15);
 
@@ -585,6 +637,18 @@ namespace OCPI.Core.Roaming.Controllers
 
                 _logger.LogInformation("[Admin] OCPI handshake complete with {Url} ({BusinessName})", request.VersionsUrl, partnerName);
                 return Ok(new { success = true, message = "Partner registered successfully", partnerName });
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                var wait = _throttle.GetRemainingCooldownForUrl(request.VersionsUrl);
+                _logger.LogWarning(ex, "[Admin] OCPI onboard for {Url} rejected with 429", request.VersionsUrl);
+                return StatusCode(200, new
+                {
+                    success = false,
+                    rateLimited = true,
+                    retryAfterSeconds = (int)Math.Ceiling(wait.TotalSeconds),
+                    message = $"The partner is rate-limiting HyCharge (HTTP 429). Try onboarding again in {OcpiPartnerThrottle.DescribeWait(wait)}."
+                });
             }
             catch (HttpRequestException ex)
             {
@@ -981,10 +1045,26 @@ namespace OCPI.Core.Roaming.Controllers
             if (string.IsNullOrEmpty(partner.OutboundToken))
                 return BadRequest(new { success = false, message = "Partner has no outbound token configured" });
 
+            // Don't start while the partner is rate-limiting us: we couldn't get session updates
+            // or deliver a limit auto-stop, so the driver would be charging with no control.
+            var pause = PartnerPause(partner);
+            if (pause > TimeSpan.Zero)
+                return StatusCode(200, RateLimitedStartResult(pause));
+
             // Discover the partner's commands endpoint
             var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
             if (commandsUrl == null)
+            {
+                // Discovery may itself have just been 429'd
+                pause = PartnerPause(partner);
+                if (pause > TimeSpan.Zero)
+                    return StatusCode(200, RateLimitedStartResult(pause));
                 return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
+            }
+
+            pause = PartnerPause(partner, commandsUrl);
+            if (pause > TimeSpan.Zero)
+                return StatusCode(200, RateLimitedStartResult(pause));
 
             // We do NOT assign the session_id — the CPO does. We send authorization_reference
             // so the CPO can echo it back on the Session push and we can correlate it.
@@ -1013,7 +1093,7 @@ namespace OCPI.Core.Roaming.Controllers
                 authorization_reference = authorizationReference
             };
 
-            var http = _httpClientFactory.CreateClient();
+            var http = _httpClientFactory.CreateClient("OcpiPartner");
             http.DefaultRequestHeaders.TryAddWithoutValidation(
                 "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
@@ -1022,6 +1102,17 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 var resp = await http.PostAsJsonAsync(
                     $"{commandsUrl.TrimEnd('/')}/START_SESSION", commandBody);
+
+                // The partner didn't take the command, so there's no session to record
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    _logger.LogWarning(
+                        "[Admin/eMSP] START_SESSION → partner {PartnerId} ({BusinessName}) rate-limited (HTTP 429{Skipped})",
+                        request.PartnerId, partner.BusinessName,
+                        OcpiPartnerThrottle.IsCircuitOpen(resp) ? ", not sent: breaker open" : "");
+                    return StatusCode(200, RateLimitedStartResult(PartnerPause(partner, commandsUrl)));
+                }
+
                 var body = await resp.Content.ReadAsStringAsync();
 
                 string cmdResult = "UNKNOWN";
@@ -1159,6 +1250,11 @@ namespace OCPI.Core.Roaming.Controllers
             if (string.IsNullOrEmpty(partner.OutboundToken))
                 return BadRequest(new { success = false, message = "Partner has no outbound token configured" });
 
+            // A driver's own Stop is sent even while the partner is rate-limiting us (still paced):
+            // one request into a block costs far less than a session that keeps charging.
+            // Discovery and the command both run inside the bypass.
+            using var breakerBypass = OcpiPartnerThrottle.BypassBreaker();
+
             var commandsUrl = await DiscoverPartnerEndpointAsync(partner, "commands");
             if (commandsUrl == null)
                 return StatusCode(200, new { success = false, message = "Could not discover partner commands endpoint" });
@@ -1172,7 +1268,7 @@ namespace OCPI.Core.Roaming.Controllers
                 session_id   = session.SessionId
             };
 
-            var http = _httpClientFactory.CreateClient();
+            var http = _httpClientFactory.CreateClient("OcpiPartner");
             http.DefaultRequestHeaders.TryAddWithoutValidation(
                 "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
             http.Timeout = TimeSpan.FromSeconds(15);
@@ -1192,6 +1288,27 @@ namespace OCPI.Core.Roaming.Controllers
             {
                 var resp = await http.PostAsJsonAsync(
                     $"{commandsUrl.TrimEnd('/')}/STOP_SESSION", commandBody);
+
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var wait = PartnerPause(partner, commandsUrl);
+                    _logger.LogWarning(
+                        "[Admin/eMSP] STOP_SESSION → partner {PartnerId} rejected with 429 for session {SessionId}; " +
+                        "OcpiOrphanSessionService will re-send once the pause ({Wait}) ends",
+                        session.PartnerCredentialId, session.SessionId, wait);
+                    return Ok(new
+                    {
+                        success = false,
+                        result = "RATE_LIMITED",
+                        rateLimited = true,
+                        retryAfterSeconds = (int)Math.Ceiling(wait.TotalSeconds),
+                        sessionId = session.SessionId,
+                        message = "The partner network is temporarily refusing requests from HyCharge, so it didn't accept the stop. " +
+                                  $"HyCharge will send it again as soon as the partner accepts requests (in {OcpiPartnerThrottle.DescribeWait(wait)}). " +
+                                  "If you're at the charger, stop the session there."
+                    });
+                }
+
                 var body = await resp.Content.ReadAsStringAsync();
 
                 string cmdResult = "UNKNOWN";
@@ -1325,13 +1442,17 @@ namespace OCPI.Core.Roaming.Controllers
 
             try
             {
-                var http = _httpClientFactory.CreateClient();
+                var http = _httpClientFactory.CreateClient("OcpiPartner");
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(15);
 
                 var tariffUrl = $"{tariffsUrl.TrimEnd('/')}/{partner.CountryCode}/{partner.PartyId}/{Uri.EscapeDataString(tariffId)}";
                 var tariffResp = await http.GetAsync(tariffUrl);
+                if (tariffResp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    return Ok(UnavailableTariffResult(tariffId,
+                        "Partner is rate-limiting HyCharge (HTTP 429); live tariff lookup skipped for " +
+                        OcpiPartnerThrottle.DescribeWait(PartnerPause(partner, tariffsUrl))));
                 if (!tariffResp.IsSuccessStatusCode)
                     return Ok(UnavailableTariffResult(tariffId, $"Partner tariffs endpoint returned HTTP {(int)tariffResp.StatusCode}"));
 
@@ -1423,7 +1544,7 @@ namespace OCPI.Core.Roaming.Controllers
 
             try
             {
-                var http = _httpClientFactory.CreateClient();
+                var http = _httpClientFactory.CreateClient("OcpiPartner");
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(15);
@@ -1493,8 +1614,38 @@ namespace OCPI.Core.Roaming.Controllers
         // ── eMSP helper ───────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Discovers a specific module endpoint URL for a partner by walking their /versions
-        /// and version-details URLs. Returns the first matching URL or null on failure.
+        /// How long calls to this partner stay paused after a 429: the longer of the remaining
+        /// breaker cooldown on its versions host and, when given, on <paramref name="moduleUrl"/>'s
+        /// host (a module can live on a different host). Zero when not paused.
+        /// </summary>
+        private TimeSpan PartnerPause(OCPP.Core.Database.OCPIDTO.OcpiPartnerCredential partner, string? moduleUrl = null)
+        {
+            var versionsHost = _throttle.GetRemainingCooldownForUrl(partner.Url);
+            var moduleHost = _throttle.GetRemainingCooldownForUrl(moduleUrl);
+            return versionsHost > moduleHost ? versionsHost : moduleHost;
+        }
+
+        /// <summary>Start-session result while the partner is rate-limiting us; the message is shown to the driver as-is.</summary>
+        private static object RateLimitedStartResult(TimeSpan wait) => new
+        {
+            success = false,
+            result = "RATE_LIMITED",
+            rateLimited = true,
+            retryAfterSeconds = (int)Math.Ceiling(wait.TotalSeconds),
+            status = "REJECTED",
+            message = "This partner network is temporarily not accepting requests from HyCharge. " +
+                      $"Try again in {OcpiPartnerThrottle.DescribeWait(wait)}, or choose another charger."
+        };
+
+        /// <summary>
+        /// Resolves a specific module endpoint URL for a partner via the shared
+        /// <see cref="IOcpiEndpointCache"/> (the same cache the background services use), so
+        /// START/STOP_SESSION and tariff lookups don't re-walk /versions → version details — two
+        /// extra partner calls — every time. Discovery goes through the rate-limited "OcpiPartner"
+        /// client; a caller inside <see cref="OcpiPartnerThrottle.BypassBreaker"/> carries that
+        /// bypass into discovery too. Returns null on failure, including while the partner's host
+        /// is paused and nothing is cached (callers check <see cref="PartnerPause"/> to tell the
+        /// two apart).
         /// <paramref name="acceptableRoles"/> defaults to RECEIVER/CPO (the role we need for
         /// modules where WE send data to THEM, e.g. Commands); pass SENDER/CPO for modules where
         /// we instead pull data THEY publish (e.g. Locations, Tariffs).
@@ -1508,60 +1659,14 @@ namespace OCPI.Core.Roaming.Controllers
 
             try
             {
-                var http = _httpClientFactory.CreateClient();
+                var http = _httpClientFactory.CreateClient("OcpiPartner");
                 http.DefaultRequestHeaders.TryAddWithoutValidation(
                     "Authorization", $"Token {Convert.ToBase64String(Encoding.UTF8.GetBytes(partner.OutboundToken))}");
                 http.Timeout = TimeSpan.FromSeconds(10);
 
-                // Step 1: GET /versions
-                var partnerURL = partner.Url.TrimEnd('/').EndsWith("versions") ? partner.Url.TrimEnd('/') : $"{partner.Url.TrimEnd('/')}/versions";
-                var versionsResp = await http.GetAsync(partnerURL);
-                if (!versionsResp.IsSuccessStatusCode) return null;
-
-                using var versionsDoc = JsonDocument.Parse(
-                    await versionsResp.Content.ReadAsStringAsync());
-
-                string? v221Url = null;
-                if (versionsDoc.RootElement.TryGetProperty("data", out var vData) &&
-                    vData.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var v in vData.EnumerateArray())
-                    {
-                        var ver = v.TryGetProperty("version", out var vp) ? vp.GetString() : null;
-                        var url = v.TryGetProperty("url",     out var up) ? up.GetString() : null;
-                        if (ver == "2.2.1") { v221Url = url; break; }
-                        if (ver == "2.2")     v221Url = url;   // keep searching for 2.2.1
-                    }
-                }
-
-                if (v221Url == null) return null;
-
-                // Step 2: GET version details
-                var detailsResp = await http.GetAsync(v221Url);
-                if (!detailsResp.IsSuccessStatusCode) return null;
-
-                using var detailsDoc = JsonDocument.Parse(
-                    await detailsResp.Content.ReadAsStringAsync());
-
-                if (detailsDoc.RootElement.TryGetProperty("data", out var dData) &&
-                    dData.TryGetProperty("endpoints", out var eps) &&
-                    eps.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var ep in eps.EnumerateArray())
-                    {
-                        var id   = ep.TryGetProperty("identifier", out var idProp) ? idProp.GetString() : null;
-                        var role = ep.TryGetProperty("role",       out var roleProp) ? roleProp.GetString() : null;
-                        if (!string.Equals(id, moduleIdentifier, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        bool roleMatch = role == null ||
-                            acceptableRoles.Any(r => string.Equals(role, r, StringComparison.OrdinalIgnoreCase));
-                        if (roleMatch)
-                            return ep.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
-                    }
-                }
-
-                return null;
+                return await _endpointCache.ResolveEndpointAsync(
+                    partner, moduleIdentifier, acceptableRoles, http, _logger,
+                    HttpContext?.RequestAborted ?? CancellationToken.None);
             }
             catch (Exception ex)
             {

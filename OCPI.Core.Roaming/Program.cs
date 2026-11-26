@@ -22,9 +22,10 @@ builder.Services.AddDbContext<OCPPCoreContext>(options =>
 // Register OCPI Services
 builder.Services.AddHttpClient();
 
-// Rate-limited HttpClient for all outbound calls to OCPI partner platforms: paces requests per
-// partner host and retries 429 Too Many Requests honouring Retry-After / exponential backoff.
-// See OcpiPartnerRateLimitHandler / OcpiEndpointCache for why this exists.
+// Rate-limited HttpClient for ALL outbound calls to OCPI partner platforms (background services and
+// controllers alike): paces requests per partner host, and on a 429 Too Many Requests trips a
+// per-host circuit breaker for the partner's Retry-After, so later calls fail fast instead of
+// hitting the partner. No retry/backoff. See OcpiPartnerRateLimitHandler / OcpiEndpointCache.
 builder.Services.AddSingleton<OCPI.Core.Roaming.BackgroundServices.OcpiPartnerThrottle>();
 builder.Services.AddSingleton<OCPI.Core.Roaming.BackgroundServices.IOcpiEndpointCache, OCPI.Core.Roaming.BackgroundServices.OcpiEndpointCache>();
 builder.Services.AddTransient<OCPI.Core.Roaming.BackgroundServices.OcpiPartnerRateLimitHandler>();
